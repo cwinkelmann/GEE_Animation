@@ -10,21 +10,10 @@ class FakeGeometry:
 
 
 def _fake_ee():
-    m = types.SimpleNamespace()
-    m.Geometry = types.SimpleNamespace(
-        Rectangle=lambda coords: FakeGeometry(("rect", tuple(coords))),
-    )
-    # ee.Geometry(...) is also callable to wrap raw geojson:
     def geometry_call(spec):
         return FakeGeometry(("geojson", spec))
-    m.Geometry = types.SimpleNamespace(
-        Rectangle=lambda coords: FakeGeometry(("rect", tuple(coords))),
-    )
-    # make Geometry itself callable
-    callable_geom = geometry_call
-    callable_geom.Rectangle = lambda coords: FakeGeometry(("rect", tuple(coords)))
-    m.Geometry = callable_geom
-    return m
+    geometry_call.Rectangle = lambda coords: FakeGeometry(("rect", tuple(coords)))
+    return types.SimpleNamespace(Geometry=geometry_call)
 
 
 def test_parse_bbox():
@@ -62,3 +51,20 @@ def test_load_geojson_unwraps_feature(tmp_path):
     p.write_text(json.dumps(feat))
     geom = _load_geojson_geometry(str(p))
     assert geom == {"type": "Point", "coordinates": [1, 2]}
+
+
+def test_geojson_takes_precedence_over_bbox(tmp_path):
+    ee = _fake_ee()
+    geom = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}
+    p = tmp_path / "aoi.geojson"
+    p.write_text(json.dumps(geom))
+    result = parse({"bbox": [13.7, 52.8, 13.9, 52.95], "geojson": str(p)}, ee_module=ee)
+    assert result.spec[0] == "geojson"
+    assert result.spec[1]["type"] == "Polygon"
+
+
+def test_load_geojson_returns_bare_geometry(tmp_path):
+    geom = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}
+    p = tmp_path / "g.geojson"
+    p.write_text(json.dumps(geom))
+    assert _load_geojson_geometry(str(p)) == geom
