@@ -15,9 +15,12 @@ def test_ndvi_zero_denominator_is_zero():
     assert out.tolist() == [0.0]
 
 
-def test_ndvi_clipped_to_unit_range():
-    out = ndvi(np.array([1.0]), np.array([-1.0]))  # would exceed 1
-    assert out.max() <= 1.0 and out.min() >= -1.0
+def test_ndvi_clips_out_of_range_values():
+    # non-zero denominator, NDVI magnitude > 1 -> must clip to the bound
+    hi = ndvi(np.array([1.0]), np.array([-0.5]))   # (1.0-(-0.5))/(1.0-0.5)=3.0 -> 1.0
+    lo = ndvi(np.array([-0.5]), np.array([1.0]))   # (-0.5-1.0)/(0.5)= -3.0 -> -1.0
+    assert hi.tolist() == [1.0]
+    assert lo.tolist() == [-1.0]
 
 
 def test_colorize_shape_and_endpoints():
@@ -34,3 +37,21 @@ def test_colorize_clamps_out_of_range():
     rgb = colorize(arr, -0.2, 0.9, ["#000000", "#ffffff"])
     assert rgb[0, 0].tolist() == [0, 0, 0]
     assert rgb[0, 1].tolist() == [255, 255, 255]
+
+
+def test_colorize_interpolates_midpoint():
+    # black->white at the midpoint: 255*0.5 = 127.5 -> rounds to 128
+    rgb = colorize(np.array([[0.5]]), 0.0, 1.0, ["#000000", "#ffffff"])
+    assert rgb[0, 0].tolist() == [128, 128, 128]
+
+
+def test_colorize_three_stop_palette_hits_middle_stop():
+    # K=3: midpoint lands exactly on the middle stop (red)
+    rgb = colorize(np.array([[0.5]]), 0.0, 1.0, ["#000000", "#ff0000", "#ffffff"])
+    assert rgb[0, 0].tolist() == [255, 0, 0]
+
+
+def test_colorize_rejects_vmax_not_greater_than_vmin():
+    import pytest
+    with pytest.raises(ValueError):
+        colorize(np.array([[0.0]]), 1.0, 1.0, ["#000000", "#ffffff"])
