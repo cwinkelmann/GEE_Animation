@@ -23,7 +23,20 @@ Output is written to `out/<name>.mp4` and `out/<name>.gif`.
 
 See `config.example.yaml`. Key fields: `aoi` (bbox or GeoJSON path), `start`/`end`
 (ISO, end exclusive), `max_cloud_percent`, `ndvi` (min/max/palette), `render`
-(fps/scale/dimensions). Default GEE project is `hnee-331218`.
+(fps/scale/dimensions), and optional `out_dir` (output directory, default `out`).
+Default GEE project is `hnee-331218`.
+
+Each frame is a monthly cloud-masked median NDVI composite, colorized with the
+fixed `ndvi` palette/range so colour is comparable across frames, annotated with
+the month label and a shared NDVI colorbar. Cloud/no-data pixels are rendered in
+a neutral grey rather than a vegetation colour.
+
+## Notes / limitations (v1)
+
+- `render.scale` (metres/pixel) is informational; thumbnail size is driven by
+  `render.dimensions`.
+- One sensor (Sentinel-2) and one cadence (monthly) are supported; the config
+  layer is structured so more can be added.
 
 ## Development
 

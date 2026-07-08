@@ -22,5 +22,5 @@ ndvi:
 
 render:
   fps: 4
-  scale: 20                 # metres/pixel for thumbnails
-  dimensions: 768           # max width/height of each frame
+  scale: 20                 # metres/pixel (informational; dimensions drives size)
+  dimensions: 768           # max width/height of each frame (drives thumbnail size)
