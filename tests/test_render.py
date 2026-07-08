@@ -1,7 +1,13 @@
 from pathlib import Path
 import numpy as np
 import types
-from gee_animation.render import annotate, assemble, render
+from gee_animation.render import (
+    add_colorbar,
+    annotate,
+    apply_nodata,
+    assemble,
+    render,
+)
 from gee_animation.compositing import Frame
 
 
@@ -46,9 +52,32 @@ def test_assemble_falls_back_to_gif_when_mp4_fails(tmp_path, monkeypatch):
 
 def test_render_pipeline_with_injected_fetch(tmp_path):
     cfg = _cfg(tmp_path)
-    # fetch returns a tiny NDVI array per frame
+    # fetch returns a tiny (ndvi_array, valid_mask) tuple per frame
     def fake_fetch(image, cfg, geometry=None):
-        return np.array([[0.5, -0.1], [0.9, 0.0]])
+        arr = np.array([[0.5, -0.1], [0.9, 0.0]])
+        valid = np.ones(arr.shape, dtype=bool)
+        return arr, valid
     frames = [Frame("2022-01", object()), Frame("2022-02", object())]
     paths = render(frames, cfg, fetch=fake_fetch, geometry=None)
     assert any(p.suffix == ".gif" and p.exists() for p in paths)
+
+
+def _cfg_ns():
+    return types.SimpleNamespace(
+        ndvi_min=-0.2, ndvi_max=0.9, palette=["#000000", "#ffffff"],
+    )
+
+
+def test_apply_nodata_paints_invalid_pixels():
+    rgb = np.zeros((1, 2, 3), np.uint8)
+    valid = np.array([[True, False]])
+    out = apply_nodata(rgb, valid)
+    assert out[0, 0].tolist() == [0, 0, 0]          # valid untouched
+    assert out[0, 1].tolist() == list((240, 240, 240))  # invalid -> no-data colour
+
+
+def test_add_colorbar_preserves_shape_and_draws():
+    rgb = np.zeros((40, 60, 3), np.uint8)
+    out = add_colorbar(rgb, _cfg_ns())
+    assert out.shape == (40, 60, 3) and out.dtype == np.uint8
+    assert out.sum() > 0
