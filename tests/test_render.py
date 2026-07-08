@@ -1,7 +1,6 @@
 from pathlib import Path
 import numpy as np
 import types
-import pytest
 from gee_animation.render import annotate, assemble, render
 from gee_animation.compositing import Frame
 
@@ -27,8 +26,9 @@ def test_assemble_writes_gif_and_mp4(tmp_path):
     cfg = _cfg(tmp_path)
     frames = [np.zeros((16, 16, 3), np.uint8), np.full((16, 16, 3), 255, np.uint8)]
     paths = assemble(frames, cfg)
-    gifs = [p for p in paths if p.suffix == ".gif"]
-    assert gifs and gifs[0].exists()
+    suffixes = {p.suffix for p in paths}
+    assert suffixes == {".mp4", ".gif"}
+    assert all(p.exists() for p in paths)
 
 
 def test_assemble_falls_back_to_gif_when_mp4_fails(tmp_path, monkeypatch):
@@ -50,5 +50,5 @@ def test_render_pipeline_with_injected_fetch(tmp_path):
     def fake_fetch(image, cfg, geometry=None):
         return np.array([[0.5, -0.1], [0.9, 0.0]])
     frames = [Frame("2022-01", object()), Frame("2022-02", object())]
-    paths = render(frames, cfg, ee_module=None, fetch=fake_fetch, geometry=None)
+    paths = render(frames, cfg, fetch=fake_fetch, geometry=None)
     assert any(p.suffix == ".gif" and p.exists() for p in paths)

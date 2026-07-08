@@ -52,7 +52,7 @@ def _write_gif(path: Path, frames: list[np.ndarray], fps: int) -> None:
     imageio.mimsave(path, frames, duration=1.0 / fps)
 
 
-def assemble(frames_rgb: list[np.ndarray], cfg, ee_module=None) -> list[Path]:
+def assemble(frames_rgb: list[np.ndarray], cfg) -> list[Path]:
     out_dir = Path(cfg.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     gif_path = out_dir / f"{cfg.name}.gif"
@@ -68,7 +68,7 @@ def assemble(frames_rgb: list[np.ndarray], cfg, ee_module=None) -> list[Path]:
     return paths
 
 
-def render(frames, cfg, ee_module=None, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
+def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     rgb_frames: list[np.ndarray] = []
     for frame in frames:
         ndvi_arr = fetch(frame.image, cfg, geometry)
