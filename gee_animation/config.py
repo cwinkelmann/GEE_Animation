@@ -1,7 +1,7 @@
 """Run configuration model: load and validate YAML into a RunConfig."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 

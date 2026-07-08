@@ -87,3 +87,54 @@ def test_requires_aoi_bbox_or_geojson(tmp_path):
     """)
     with pytest.raises(ConfigError, match="aoi"):
         RunConfig.from_yaml(p)
+
+
+def test_rejects_unsupported_cadence(tmp_path):
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi: {bbox: [0, 0, 1, 1]}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: sentinel2
+        cadence: weekly
+        max_cloud_percent: 60
+        ndvi: {min: -0.2, max: 0.9, palette: ["#000000"]}
+        render: {fps: 4, scale: 20, dimensions: 768}
+    """)
+    with pytest.raises(ConfigError, match="cadence"):
+        RunConfig.from_yaml(p)
+
+
+def test_rejects_ndvi_max_not_greater_than_min(tmp_path):
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi: {bbox: [0, 0, 1, 1]}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: sentinel2
+        cadence: monthly
+        max_cloud_percent: 60
+        ndvi: {min: 0.9, max: 0.9, palette: ["#000000"]}
+        render: {fps: 4, scale: 20, dimensions: 768}
+    """)
+    with pytest.raises(ConfigError, match="ndvi.max"):
+        RunConfig.from_yaml(p)
+
+
+def test_rejects_empty_palette(tmp_path):
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi: {bbox: [0, 0, 1, 1]}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: sentinel2
+        cadence: monthly
+        max_cloud_percent: 60
+        ndvi: {min: -0.2, max: 0.9, palette: []}
+        render: {fps: 4, scale: 20, dimensions: 768}
+    """)
+    with pytest.raises(ConfigError, match="palette"):
+        RunConfig.from_yaml(p)
