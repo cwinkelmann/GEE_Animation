@@ -7,7 +7,7 @@ import types
 from pathlib import Path
 
 from . import auth, aoi, collection, compositing, render
-from .config import RunConfig
+from .config import RunConfig, ConfigError
 
 DEFAULT_DEPS = types.SimpleNamespace(
     init=auth.init,
@@ -25,7 +25,7 @@ def run(config_path: str, deps=DEFAULT_DEPS) -> list[Path]:
     coll = deps.build(cfg, geometry)
     frames = deps.monthly_median(coll, cfg)
     if not frames:
-        raise SystemExit(
+        raise RuntimeError(
             "No images found for the given AOI/date range/cloud filter."
         )
     return deps.render(frames, cfg, geometry=geometry)
@@ -35,7 +35,11 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="gee-animation")
     parser.add_argument("--config", required=True, help="path to config.yaml")
     args = parser.parse_args(argv)
-    paths = run(args.config)
+    try:
+        paths = run(args.config)
+    except (ConfigError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     for p in paths:
         print(f"wrote {p}")
     return 0
