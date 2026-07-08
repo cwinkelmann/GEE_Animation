@@ -1,0 +1,26 @@
+# Example run configuration for gee-animation.
+name: barnim_ndvi           # output basename -> out/barnim_ndvi.mp4 / .gif
+project: hnee-331218        # Google Earth Engine project id
+
+aoi:
+  # Either a bbox [minLon, minLat, maxLon, maxLat] ...
+  bbox: [13.7, 52.8, 13.9, 52.95]
+  # ... or a GeoJSON file (takes precedence if set):
+  # geojson: aoi/barnim.geojson
+
+start: "2022-01-01"         # inclusive
+end: "2023-01-01"           # exclusive
+
+sensor: sentinel2           # v1 supports: sentinel2
+cadence: monthly            # v1 supports: monthly
+max_cloud_percent: 60       # scene-level pre-filter before pixel masking
+
+ndvi:
+  min: -0.2
+  max: 0.9
+  palette: ["#a1622f", "#e8d9a0", "#3b7a2a"]  # brown -> tan -> green
+
+render:
+  fps: 4
+  scale: 20                 # metres/pixel for thumbnails
+  dimensions: 768           # max width/height of each frame
