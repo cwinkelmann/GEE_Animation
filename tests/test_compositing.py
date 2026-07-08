@@ -16,8 +16,6 @@ def test_month_starts_excludes_end_month():
 class FakeImage:
     def __init__(self, tag):
         self.tag = tag
-    def set(self, *a, **k):
-        return self
 
 
 class FakeFiltered:
@@ -38,12 +36,7 @@ class FakeCollection:
 
 
 def _fake_ee():
-    m = types.SimpleNamespace()
-    # ee.Date(x).advance(1,'month') -> next month start string via a stub
-    class FakeDate:
-        def __init__(self, s): self.s = s
-    m.Date = FakeDate
-    return m
+    return types.SimpleNamespace()
 
 
 def test_monthly_median_skips_empty_months():
