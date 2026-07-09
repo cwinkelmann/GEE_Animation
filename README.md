@@ -28,6 +28,32 @@ gee-animation --config config.yaml
 
 Output is written to `out/<name>.mp4` and `out/<name>.gif`.
 
+## Generate each index animation
+
+Ready-to-run example configs (WNE AOI) live at the repo root. Each writes
+`out/<name>.mp4` + `.gif`:
+
+| Index | Sensor      | Command                                            | Output basename   |
+|-------|-------------|----------------------------------------------------|-------------------|
+| NDVI  | Sentinel-2  | `gee-animation --config config.example.yaml`       | `wne_ndvi`        |
+| EVI   | Sentinel-2  | `gee-animation --config config.evi.example.yaml`   | `wne_evi`         |
+| NDWI  | Sentinel-2  | `gee-animation --config config.ndwi.example.yaml`  | `wne_ndwi`        |
+| NDMI  | Sentinel-2  | `gee-animation --config config.ndmi.example.yaml`  | `wne_ndmi`        |
+| LST   | Landsat     | `gee-animation --config config.lst.example.yaml`   | `wne_lst`         |
+| NDVI  | MODIS       | `gee-animation --config config.modis.example.yaml` | `wne_modis_ndvi`  |
+
+Generate them all in one go:
+
+```bash
+for c in example evi.example ndwi.example ndmi.example lst.example modis.example; do
+  gee-animation --config "config.$c.yaml"
+done
+```
+
+Any reflectance index (`ndvi`, `evi`, `ndwi`, `ndmi`) runs on any sensor —
+copy a config and change `sensor:` / `index:` (see Configuration). `lst` is
+Landsat-only.
+
 ## Configuration
 
 See `config.example.yaml` (Sentinel-2 NDVI) or `config.lst.example.yaml` (Landsat LST). Key fields:
