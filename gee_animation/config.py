@@ -78,9 +78,9 @@ class RunConfig:
                 f"unsupported cadence {self.cadence!r}; supported: {sorted(SUPPORTED_CADENCES)}"
             )
         for label, a in (("frame", self.frame_aoi), ("region", self.region_aoi)):
-            if not (a.get("bbox") or a.get("geojson")):
+            if not (a.get("bbox") or a.get("geojson") or a.get("shapefile")):
                 raise ConfigError(
-                    f"aoi.{label} must define either 'bbox' or 'geojson'"
+                    f"aoi.{label} must define 'bbox', 'geojson', or 'shapefile'"
                 )
         if not 0 <= self.region_max_cloud_percent <= 100:
             raise ConfigError("region_max_cloud_percent must be between 0 and 100")

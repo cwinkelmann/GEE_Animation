@@ -10,7 +10,7 @@ import imageio.v2 as imageio
 import numpy as np
 from PIL import Image, ImageDraw
 
-from .aoi import _load_geojson_geometry
+from .aoi import _load_geojson_geometry, _read_shapefile_geometry
 from .imaging import colorize
 
 log = logging.getLogger(__name__)
@@ -103,23 +103,30 @@ def _geom_rings(geom: dict) -> list:
     raise ValueError(f"unsupported region geometry type for overlay: {t}")
 
 
+def _aoi_geom_dict(aoi_cfg: dict) -> dict:
+    """GeoJSON geometry (EPSG:4326) for a non-bbox AOI: shapefile or GeoJSON."""
+    if aoi_cfg.get("shapefile"):
+        return _read_shapefile_geometry(aoi_cfg["shapefile"])
+    return _load_geojson_geometry(aoi_cfg["geojson"])
+
+
 def _aoi_bounds(aoi_cfg: dict) -> tuple:
-    """(minLon, minLat, maxLon, maxLat) for an AOI (bbox or GeoJSON), computed locally."""
+    """(minLon, minLat, maxLon, maxLat) for an AOI (bbox, GeoJSON, or shapefile)."""
     if aoi_cfg.get("bbox"):
         b = aoi_cfg["bbox"]
         return (b[0], b[1], b[2], b[3])
-    rings = _geom_rings(_load_geojson_geometry(aoi_cfg["geojson"]))
+    rings = _geom_rings(_aoi_geom_dict(aoi_cfg))
     xs = [x for ring in rings for x, _ in ring]
     ys = [y for ring in rings for _, y in ring]
     return (min(xs), min(ys), max(xs), max(ys))
 
 
 def _region_rings(aoi_cfg: dict) -> list:
-    """Rings (list of (lon, lat)) for a region AOI (bbox rectangle or GeoJSON)."""
+    """Rings (list of (lon, lat)) for a region AOI (bbox rectangle, GeoJSON, or shapefile)."""
     if aoi_cfg.get("bbox"):
         mnx, mny, mxx, mxy = aoi_cfg["bbox"]
         return [[(mnx, mny), (mxx, mny), (mxx, mxy), (mnx, mxy), (mnx, mny)]]
-    return _geom_rings(_load_geojson_geometry(aoi_cfg["geojson"]))
+    return _geom_rings(_aoi_geom_dict(aoi_cfg))
 
 
 def draw_region(rgb: np.ndarray, bounds: tuple, rings: list,

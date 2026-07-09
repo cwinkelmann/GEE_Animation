@@ -38,6 +38,47 @@ def test_parse_geojson_feature(tmp_path):
     assert geom.spec[1]["type"] == "Polygon"
 
 
+def _write_shp(tmp_path, geoms, crs="EPSG:25833", name="aoi"):
+    gpd = pytest.importorskip("geopandas")
+    gdf = gpd.GeoDataFrame({"id": list(range(len(geoms)))}, geometry=geoms, crs=crs)
+    p = tmp_path / f"{name}.shp"
+    gdf.to_file(p)
+    return str(p)
+
+
+def test_read_shapefile_geometry_reprojects_to_lonlat(tmp_path):
+    pytest.importorskip("geopandas")
+    from shapely.geometry import Polygon
+    from gee_animation.aoi import _read_shapefile_geometry
+    # square in UTM 33N (EPSG:25833), Brandenburg -> should come out as lon/lat ~13-14E
+    poly = Polygon([(400000, 5860000), (410000, 5860000),
+                    (410000, 5870000), (400000, 5870000)])
+    geom = _read_shapefile_geometry(_write_shp(tmp_path, [poly]))
+    assert geom["type"] in ("Polygon", "MultiPolygon")
+    xs = [c[0] for ring in geom["coordinates"] for c in ring]
+    assert 12 < min(xs) < 15 and 52 < geom["coordinates"][0][0][1] < 53
+
+
+def test_read_shapefile_unions_multiple_features(tmp_path):
+    pytest.importorskip("geopandas")
+    from shapely.geometry import Polygon
+    from gee_animation.aoi import _read_shapefile_geometry
+    a = Polygon([(400000, 5860000), (405000, 5860000), (405000, 5865000), (400000, 5865000)])
+    b = Polygon([(406000, 5866000), (410000, 5866000), (410000, 5870000), (406000, 5870000)])
+    geom = _read_shapefile_geometry(_write_shp(tmp_path, [a, b]))
+    assert geom["type"] == "MultiPolygon" and len(geom["coordinates"]) == 2
+
+
+def test_parse_shapefile(tmp_path):
+    pytest.importorskip("geopandas")
+    from shapely.geometry import Polygon
+    ee = _fake_ee()
+    poly = Polygon([(400000, 5860000), (410000, 5860000), (410000, 5870000), (400000, 5870000)])
+    geom = parse({"shapefile": _write_shp(tmp_path, [poly])}, ee_module=ee)
+    assert geom.spec[0] == "geojson"
+    assert geom.spec[1]["type"] in ("Polygon", "MultiPolygon")
+
+
 def test_parse_requires_something():
     ee = _fake_ee()
     with pytest.raises(ValueError, match="aoi"):

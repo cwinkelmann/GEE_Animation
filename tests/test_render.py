@@ -42,6 +42,21 @@ def test_aoi_bounds_from_bbox():
     assert _aoi_bounds({"bbox": [13.7, 52.8, 13.9, 52.95]}) == (13.7, 52.8, 13.9, 52.95)
 
 
+def test_region_rings_from_shapefile(tmp_path):
+    import pytest
+    gpd = pytest.importorskip("geopandas")
+    from shapely.geometry import Polygon
+    from gee_animation.render import _region_rings, _aoi_bounds
+    poly = Polygon([(400000, 5860000), (410000, 5860000), (410000, 5870000), (400000, 5870000)])
+    p = tmp_path / "r.shp"
+    gpd.GeoDataFrame({"id": [0]}, geometry=[poly], crs="EPSG:25833").to_file(p)
+    rings = _region_rings({"shapefile": str(p)})
+    assert rings and len(rings[0]) >= 4
+    assert 12 < rings[0][0][0] < 15                 # reprojected to lon/lat
+    minx, miny, maxx, maxy = _aoi_bounds({"shapefile": str(p)})
+    assert 12 < minx < maxx < 15 and 52 < miny < maxy < 53
+
+
 def test_aoi_bounds_from_geojson_polygon():
     from gee_animation.render import _aoi_bounds
     geom = {"type": "Polygon", "coordinates": [[[1, 2], [5, 2], [5, 8], [1, 8], [1, 2]]]}
