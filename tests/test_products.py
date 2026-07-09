@@ -48,6 +48,7 @@ def test_s2_reflectance_selects_aliases_and_scales():
     assert rec["select"][1] == ("blue", "green", "red", "nir", "swir1", "swir2")
     assert rec["select"][0] == ("B2", "B3", "B4", "B8", "B11", "B12")
     assert rec["multiply"] == 0.0001
+    assert "add" not in rec   # S2 scale is purely multiplicative, no offset
 
 
 def test_landsat_reflectance_scales_with_offset():
@@ -104,3 +105,41 @@ def test_landsat_mask_and_cloud_band_use_qa_bits():
     rec.clear()
     assert P.SENSORS["landsat"].cloud_band(FakeImg()) == "cloudband"
     assert rec["bits"] == expected_bits and rec["neq"] == 0 and rec["rename"] == "cloud"
+
+
+def test_s2_mask_and_cloud_band_use_scl_classes():
+    rec = {"neq": [], "and_count": 0}
+
+    class FakeMask:
+        def And(self, other):
+            rec["and_count"] += 1
+            return self
+
+    class FakeSCL:
+        def neq(self, cls):
+            rec["neq"].append(cls)
+            return ("neq", cls)
+        def remap(self, frm, to, default):
+            rec["remap"] = (frm, to, default)
+            return self
+        def rename(self, n):
+            rec["rename"] = n
+            return "cloudband"
+
+    class FakeImg:
+        def select(self, b):
+            rec["select"] = b
+            return FakeSCL()
+        def updateMask(self, m):
+            rec["masked"] = True
+            return "masked"
+
+    ee = types.SimpleNamespace(Image=types.SimpleNamespace(constant=lambda v: FakeMask()))
+    assert P.SENSORS["sentinel2"].mask_clouds(FakeImg(), ee_module=ee) == "masked"
+    assert rec["select"] == "SCL"
+    assert rec["neq"] == [3, 8, 9, 10, 11] and rec["and_count"] == 5 and rec["masked"] is True
+
+    rec.clear()
+    cb = P.SENSORS["sentinel2"].cloud_band(FakeImg())
+    assert rec["remap"][0] == [3, 8, 9, 10, 11] and rec["remap"][2] == 0
+    assert rec["rename"] == "cloud" and cb == "cloudband"
