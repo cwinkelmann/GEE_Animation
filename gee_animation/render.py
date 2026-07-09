@@ -28,8 +28,8 @@ def _thumb_params(cfg, geometry) -> dict:
     """
     # single-int `dimensions` -> EE fits the largest side and preserves aspect ratio
     return {
-        "min": cfg.ndvi_min,
-        "max": cfg.ndvi_max,
+        "min": cfg.viz_min,
+        "max": cfg.viz_max,
         "dimensions": cfg.dimensions,
         "region": geometry,
         "format": "png",
@@ -37,21 +37,21 @@ def _thumb_params(cfg, geometry) -> dict:
 
 
 def _fetch_thumbnail(image, cfg, geometry):
-    """Download the NDVI band via EE getThumbURL.
+    """Download the INDEX band via EE getThumbURL.
 
-    Returns ``(ndvi, valid)`` where ``valid`` is a boolean mask (True where
+    Returns ``(index_arr, valid)`` where ``valid`` is a boolean mask (True where
     EE returned data; masked/cloud pixels are transparent → False).
     """
-    url = image.select("NDVI").getThumbURL(_thumb_params(cfg, geometry))
+    url = image.select("INDEX").getThumbURL(_thumb_params(cfg, geometry))
     with urlopen(url) as resp:  # noqa: S310 (trusted EE URL)
         data = resp.read()
     img = Image.open(io.BytesIO(data)).convert("LA")   # grayscale + alpha
     arr = np.asarray(img, dtype=float)
     gray = arr[..., 0] / 255.0
     valid = arr[..., 1] > 0                              # True where data present
-    # EE scales min..max into 0..255; map back to NDVI units.
-    ndvi = cfg.ndvi_min + gray * (cfg.ndvi_max - cfg.ndvi_min)
-    return ndvi, valid
+    # EE scales min..max into 0..255; map back to INDEX units.
+    index_arr = cfg.viz_min + gray * (cfg.viz_max - cfg.viz_min)
+    return index_arr, valid
 
 
 def apply_nodata(rgb: np.ndarray, valid: np.ndarray, color=NODATA_RGB) -> np.ndarray:
@@ -68,14 +68,14 @@ def add_colorbar(rgb: np.ndarray, cfg) -> np.ndarray:
     bar_h = max(6, h // 20)
     x0, y0 = 4, 4
     ramp = colorize(
-        np.linspace(cfg.ndvi_min, cfg.ndvi_max, bar_w)[None, :],
-        cfg.ndvi_min, cfg.ndvi_max, cfg.palette,
+        np.linspace(cfg.viz_min, cfg.viz_max, bar_w)[None, :],
+        cfg.viz_min, cfg.viz_max, cfg.palette,
     )[0]  # (bar_w, 3)
     for i in range(bar_w):
         c = tuple(int(v) for v in ramp[i])
         draw.line([(x0 + i, y0), (x0 + i, y0 + bar_h)], fill=c)
     draw.rectangle([x0, y0, x0 + bar_w, y0 + bar_h], outline=(255, 255, 255, 255))
-    draw.text((x0, y0 + bar_h + 1), f"NDVI {cfg.ndvi_min:g}..{cfg.ndvi_max:g}",
+    draw.text((x0, y0 + bar_h + 1), f"{cfg.index.upper()} {cfg.viz_min:g}..{cfg.viz_max:g}",
               fill=(255, 255, 255, 255))
     return np.asarray(img)
 
@@ -196,8 +196,8 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         rings = _region_rings(cfg.region_aoi)
     rgb_frames: list[np.ndarray] = []
     for frame in frames:
-        ndvi_arr, valid = fetch(frame.image, cfg, geometry)
-        rgb = colorize(ndvi_arr, cfg.ndvi_min, cfg.ndvi_max, cfg.palette)
+        index_arr, valid = fetch(frame.image, cfg, geometry)
+        rgb = colorize(index_arr, cfg.viz_min, cfg.viz_max, cfg.palette)
         rgb = apply_nodata(rgb, valid)
         rgb = annotate(rgb, frame.label)
         rgb = add_colorbar(rgb, cfg)

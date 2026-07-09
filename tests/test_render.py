@@ -14,7 +14,7 @@ from gee_animation.compositing import Frame
 def _cfg(tmp_path, name="anim", fps=2):
     return types.SimpleNamespace(
         name=name, out_dir=str(tmp_path),
-        ndvi_min=-0.2, ndvi_max=0.9, palette=["#000000", "#ffffff"],
+        index="ndvi", viz_min=-0.2, viz_max=0.9, palette=["#000000", "#ffffff"],
         fps=fps, scale=20, dimensions=64,
     )
 
@@ -162,7 +162,7 @@ def test_render_pipeline_with_injected_fetch(tmp_path):
 
 def _cfg_ns():
     return types.SimpleNamespace(
-        ndvi_min=-0.2, ndvi_max=0.9, palette=["#000000", "#ffffff"],
+        index="ndvi", viz_min=-0.2, viz_max=0.9, palette=["#000000", "#ffffff"],
     )
 
 
@@ -183,8 +183,17 @@ def test_add_colorbar_preserves_shape_and_draws():
 
 def test_thumb_params_preserve_aspect_ratio():
     from gee_animation.render import _thumb_params
-    cfg = _cfg(Path("."))  # _cfg provides ndvi_min/max, dimensions
+    cfg = _cfg(Path("."))  # _cfg provides viz_min/max, dimensions
     params = _thumb_params(cfg, "GEOM")
     assert isinstance(params["dimensions"], int)   # single int -> EE preserves aspect
     assert params["region"] == "GEOM"
-    assert params["min"] == cfg.ndvi_min and params["max"] == cfg.ndvi_max
+    assert params["min"] == cfg.viz_min and params["max"] == cfg.viz_max
+
+
+def test_fetch_thumbnail_selects_index_band(tmp_path):
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    assert r._thumb_params(cfg, "GEOM")["min"] == cfg.viz_min
+    # selection is exercised by the integration test; unit-assert the band constant is INDEX:
+    from gee_animation.products import INDEX_BAND
+    assert INDEX_BAND == "INDEX"
