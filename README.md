@@ -5,10 +5,17 @@ Sentinel-2 imagery, assembled frame-by-frame locally.
 
 ## Install
 
+Use the project's conda environment so the package and its dependencies land in
+the right interpreter (the same one your Jupyter kernel uses):
+
 ```bash
-pip install -e ".[dev]"
-earthengine authenticate      # one-time; or the tool prompts on first run
+conda activate GEE_animation
+pip install -e ".[dev,notebook]"   # package + deps into this env
+earthengine authenticate           # one-time; or the tool prompts on first run
 ```
+
+Run the notebook (`notebooks/ndvi_timelapse.ipynb`) with the `GEE_animation`
+environment selected as the kernel.
 
 ## Usage
 
