@@ -19,12 +19,14 @@ class ConfigError(ValueError):
 class RunConfig:
     name: str
     project: str
-    aoi: dict
+    frame_aoi: dict
+    region_aoi: dict
     start: str
     end: str
     sensor: str
     cadence: str
     max_cloud_percent: float
+    region_max_cloud_percent: float
     ndvi_min: float
     ndvi_max: float
     palette: list[str]
@@ -39,15 +41,18 @@ class RunConfig:
         try:
             ndvi = raw["ndvi"]
             render = raw["render"]
+            aoi = raw["aoi"]
             cfg = cls(
                 name=str(raw["name"]),
                 project=str(raw["project"]),
-                aoi=dict(raw["aoi"] or {}),
+                frame_aoi=dict(aoi["frame"] or {}),
+                region_aoi=dict(aoi["region"] or {}),
                 start=str(raw["start"]),
                 end=str(raw["end"]),
                 sensor=str(raw["sensor"]),
                 cadence=str(raw["cadence"]),
                 max_cloud_percent=float(raw["max_cloud_percent"]),
+                region_max_cloud_percent=float(aoi.get("region_max_cloud_percent", 10)),
                 ndvi_min=float(ndvi["min"]),
                 ndvi_max=float(ndvi["max"]),
                 palette=list(ndvi["palette"]),
@@ -70,8 +75,13 @@ class RunConfig:
             raise ConfigError(
                 f"unsupported cadence {self.cadence!r}; supported: {sorted(SUPPORTED_CADENCES)}"
             )
-        if not (self.aoi.get("bbox") or self.aoi.get("geojson")):
-            raise ConfigError("aoi must define either 'bbox' or 'geojson'")
+        for label, a in (("frame", self.frame_aoi), ("region", self.region_aoi)):
+            if not (a.get("bbox") or a.get("geojson")):
+                raise ConfigError(
+                    f"aoi.{label} must define either 'bbox' or 'geojson'"
+                )
+        if not 0 <= self.region_max_cloud_percent <= 100:
+            raise ConfigError("region_max_cloud_percent must be between 0 and 100")
         try:
             start = date.fromisoformat(self.start)
             end = date.fromisoformat(self.end)
