@@ -1,5 +1,5 @@
-# Example run configuration for gee-animation.
-name: wne_ndvi              # output basename -> out/wne_ndvi.mp4 / .gif
+# Example run configuration for Landsat Land Surface Temperature (LST).
+name: wne_lst               # output basename -> out/wne_lst.mp4 / .gif
 project: hnee-331218        # Google Earth Engine project id
 
 aoi:
@@ -9,18 +9,18 @@ aoi:
     shapefile: docs/aoi/wne/frame_timelaps_wne.shp
   region:                        # polygon -> important region (cloud-filtered + outlined)
     shapefile: docs/aoi/wne/wne.shp    # Grumsin world-heritage beech forest polygon
-  region_max_cloud_percent: 10   # keep scenes only if cloud over the region < 10%
+  region_max_cloud_percent: 20   # LST requires relaxed threshold; fewer Landsat scenes available
 
 start: "2022-05-01"         # inclusive
-end: "2022-08-01"           # exclusive
+end: "2022-09-01"           # exclusive (widened window for Landsat scene availability)
 
-sensor: sentinel2           # v1 supports: sentinel2, landsat
-index: ndvi                 # v1 supports: ndvi (sentinel2/landsat), lst (landsat)
+sensor: landsat             # Landsat collection
+index: lst                  # Land Surface Temperature (Landsat-only)
 cadence: monthly            # v1 supports: monthly
 max_cloud_percent: 60       # scene-level pre-filter before pixel masking
 draw_region: true           # overlay the region polygon outline on each frame
 
 render:
   fps: 4
-  scale: 20                 # metres/pixel (informational; dimensions drives size)
+  scale: 30                 # metres/pixel (informational; dimensions drives size)
   dimensions: 768           # max width/height of each frame (drives thumbnail size)

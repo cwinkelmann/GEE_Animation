@@ -1,4 +1,4 @@
-"""Render NDVI frames to annotated PNGs and assemble MP4 + GIF."""
+"""Render index frames to annotated PNGs and assemble MP4 + GIF."""
 from __future__ import annotations
 
 import io
@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 
 
 NODATA_RGB = (240, 240, 240)
-REGION_OUTLINE_RGB = (255, 235, 59)   # amber — high contrast over the NDVI palette
+REGION_OUTLINE_RGB = (255, 235, 59)   # amber — high contrast over the index palette
 
 
 def _thumb_params(cfg, geometry) -> dict:

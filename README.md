@@ -1,7 +1,7 @@
 # Satellite Imagery Animation Generation
 
-Generate annotated NDVI forest timelapses (MP4 + GIF) from Google Earth Engine
-Sentinel-2 imagery, assembled frame-by-frame locally.
+Generate annotated satellite index timelapses (MP4 + GIF) from Google Earth Engine
+imagery (Sentinel-2 or Landsat), assembled frame-by-frame locally.
 
 ## Install
 
@@ -30,7 +30,7 @@ Output is written to `out/<name>.mp4` and `out/<name>.gif`.
 
 ## Configuration
 
-See `config.example.yaml`. Key fields:
+See `config.example.yaml` (Sentinel-2 NDVI) or `config.lst.example.yaml` (Landsat LST). Key fields:
 
 - **`aoi`** (area of interest) defines two geometries, each given as a `bbox`
   `[minLon, minLat, maxLon, maxLat]`, `geojson` (inline dict or file path), or
@@ -39,28 +39,36 @@ See `config.example.yaml`. Key fields:
   - **`frame`**: the animation extent (rectangle); aspect ratio is preserved when rendering.
   - **`region`**: the important region (polygon); only scenes where cloud coverage over this region is less than `region_max_cloud_percent` (default: 10%) are included, and its outline is drawn on each frame when `draw_region` is set.
 - **`start`/`end`**: ISO dates (end exclusive).
+- **`sensor`**: `sentinel2` or `landsat`.
+- **`index`**: vegetation or thermal index — `ndvi` (both sensors) or `lst` (Landsat only).
 - **`max_cloud_percent`**: scene-level pre-filter threshold before pixel masking.
 - **`region_max_cloud_percent`**: region-level cloud filter (kept only if cloud over region < threshold).
-- **`ndvi`** (min/max/palette): fixed range for colorization so colour is comparable across frames.
+- **`viz`** (optional; min/max/palette): fixed range for colorization so colour is comparable across frames. If omitted, per-index defaults apply (NDVI: −0.2 to 0.9, green palette; LST: 0 to 40°C, thermal palette).
 - **`render`** (fps/scale/dimensions): rendering parameters.
 - **`out_dir`**: output directory (default `out`).
 
 Default GEE project is `hnee-331218`.
 
-Each frame is a monthly cloud-masked median NDVI composite, colorized with the
-fixed `ndvi` palette/range so colour is comparable across frames, annotated with
-the month label and a shared NDVI colorbar. Cloud/no-data pixels are rendered in
-a neutral grey rather than a vegetation colour.
+Each frame is a monthly cloud-masked median index composite, colorized with the
+fixed `viz` range (or per-index default) so colour is comparable across frames, annotated with
+the month label and a shared index colorbar. Cloud/no-data pixels are rendered in
+a neutral grey rather than an index colour.
+
+**Adding new sensors/indices:** register them in `gee_animation/products.py` (define a `Sensor` subclass and an `Index` function, then add both to the registry).
 
 ## Notes / limitations (v1)
 
 - `render.scale` (metres/pixel) is informational; thumbnail size is driven by
   `render.dimensions`.
-- One sensor (Sentinel-2) and one cadence (monthly) are supported; the config
-  layer is structured so more can be added.
+- Sensors: Sentinel-2 and Landsat. One cadence (monthly) is supported; config
+  is structured to add more.
+- Indices: NDVI (both sensors), LST (Landsat only). Adding new indices/sensors
+  requires registry changes in `products.py`.
 - The region cloud filter averages only over the pixels a scene actually covers.
   A scene that clips a small clear corner of the region can still pass the
   `region_max_cloud_percent` threshold; use a region well inside the frame extent.
+- Landsat LST has fewer scenes than Sentinel-2 NDVI; relax `region_max_cloud_percent`
+  and widen the date window if "No images found" is reported.
 
 ## Development
 
