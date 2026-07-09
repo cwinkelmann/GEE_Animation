@@ -93,3 +93,12 @@ def test_add_colorbar_preserves_shape_and_draws():
     out = add_colorbar(rgb, _cfg_ns())
     assert out.shape == (40, 60, 3) and out.dtype == np.uint8
     assert out.sum() > 0
+
+
+def test_thumb_params_preserve_aspect_ratio():
+    from gee_animation.render import _thumb_params
+    cfg = _cfg(Path("."))  # _cfg provides ndvi_min/max, dimensions
+    params = _thumb_params(cfg, "GEOM")
+    assert isinstance(params["dimensions"], int)   # single int -> EE preserves aspect
+    assert params["region"] == "GEOM"
+    assert params["min"] == cfg.ndvi_min and params["max"] == cfg.ndvi_max

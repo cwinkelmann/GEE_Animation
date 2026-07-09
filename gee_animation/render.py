@@ -18,21 +18,29 @@ log = logging.getLogger(__name__)
 NODATA_RGB = (240, 240, 240)
 
 
+def _thumb_params(cfg, geometry) -> dict:
+    """Build getThumbURL parameters with single-int dimensions to preserve aspect ratio.
+
+    EE fits the largest side to `dimensions` and scales the other proportionally,
+    preserving the frame's aspect ratio.
+    """
+    # single-int `dimensions` -> EE fits the largest side and preserves aspect ratio
+    return {
+        "min": cfg.ndvi_min,
+        "max": cfg.ndvi_max,
+        "dimensions": cfg.dimensions,
+        "region": geometry,
+        "format": "png",
+    }
+
+
 def _fetch_thumbnail(image, cfg, geometry):
     """Download the NDVI band via EE getThumbURL.
 
     Returns ``(ndvi, valid)`` where ``valid`` is a boolean mask (True where
     EE returned data; masked/cloud pixels are transparent → False).
     """
-    url = image.select("NDVI").getThumbURL(
-        {
-            "min": cfg.ndvi_min,
-            "max": cfg.ndvi_max,
-            "dimensions": cfg.dimensions,
-            "region": geometry,
-            "format": "png",
-        }
-    )
+    url = image.select("NDVI").getThumbURL(_thumb_params(cfg, geometry))
     with urlopen(url) as resp:  # noqa: S310 (trusted EE URL)
         data = resp.read()
     img = Image.open(io.BytesIO(data)).convert("LA")   # grayscale + alpha
