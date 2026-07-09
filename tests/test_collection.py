@@ -18,6 +18,9 @@ def test_add_region_cloud_fraction_uses_cloud_band_and_reduces():
     assert rec["cloud_band_called"] and rec["reduce"]["geometry"] == "REGION"
     assert rec["reduce"]["scale"] == 20 and rec["get"] == "cloud"
     assert rec["set"] == ("region_cloud_fraction", "FRAC") and out == "img+frac"
+    assert rec["reduce"]["reducer"] == "MEAN"
+    assert rec["reduce"]["bestEffort"] is True
+    assert rec["reduce"]["maxPixels"] == int(1e9)
 
 
 def test_build_pipeline_order_and_uses_sensor(monkeypatch):
