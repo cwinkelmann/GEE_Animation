@@ -68,6 +68,17 @@ def _lst(sensor, image, ee_module=ee):
             .set("system:time_start", image.get("system:time_start")))
 
 
+def _evi(sensor, image, ee_module=ee):
+    # EVI = G·(nir − red) / (nir + C1·red − C2·blue + L), standard MODIS coefficients
+    # (G=2.5, C1=6, C2=7.5, L=1). Computed on scaled reflectance (the offset matters).
+    refl = sensor.reflectance(image, ee_module)
+    evi = refl.expression(
+        "2.5 * (nir - red) / (nir + 6 * red - 7.5 * blue + 1)",
+        {"nir": refl.select("nir"), "red": refl.select("red"), "blue": refl.select("blue")},
+    ).rename(INDEX_BAND)
+    return evi.set("system:time_start", image.get("system:time_start"))
+
+
 @dataclass(frozen=True)
 class Sensor:
     name: str
@@ -109,6 +120,8 @@ INDICES = {
     "lst": Index("lst", frozenset({"landsat"}),
                  (0.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
                  _lst),
+    "evi": Index("evi", frozenset({"sentinel2", "landsat"}),
+                 (0.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _evi),
 }
 
 

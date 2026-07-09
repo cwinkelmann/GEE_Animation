@@ -40,10 +40,10 @@ See `config.example.yaml` (Sentinel-2 NDVI) or `config.lst.example.yaml` (Landsa
   - **`region`**: the important region (polygon); only scenes where cloud coverage over this region is less than `region_max_cloud_percent` (default: 10%) are included, and its outline is drawn on each frame when `draw_region` is set.
 - **`start`/`end`**: ISO dates (end exclusive).
 - **`sensor`**: `sentinel2` or `landsat`.
-- **`index`**: vegetation or thermal index — `ndvi` (both sensors) or `lst` (Landsat only).
+- **`index`**: `ndvi` or `evi` (both sensors) or `lst` (Landsat only).
 - **`max_cloud_percent`**: scene-level pre-filter threshold before pixel masking.
 - **`region_max_cloud_percent`**: region-level cloud filter (kept only if cloud over region < threshold).
-- **`viz`** (optional; min/max/palette): fixed range for colorization so colour is comparable across frames. If omitted, per-index defaults apply (NDVI: −0.2 to 0.9, green palette; LST: 0 to 40°C, thermal palette).
+- **`viz`** (optional; min/max/palette): fixed range for colorization so colour is comparable across frames. If omitted, per-index defaults apply (NDVI: −0.2 to 0.9, green palette; EVI: 0 to 1, green palette; LST: 0 to 40°C, thermal palette).
 - **`render`** (fps/scale/dimensions): rendering parameters.
 - **`out_dir`**: output directory (default `out`).
 
@@ -62,8 +62,8 @@ a neutral grey rather than an index colour.
   `render.dimensions`.
 - Sensors: Sentinel-2 and Landsat. One cadence (monthly) is supported; config
   is structured to add more.
-- Indices: NDVI (both sensors), LST (Landsat only). Adding new indices/sensors
-  requires registry changes in `products.py`.
+- Indices: NDVI and EVI (both sensors), LST (Landsat only). Adding new
+  indices/sensors requires registry changes in `products.py`.
 - The region cloud filter averages only over the pixels a scene actually covers.
   A scene that clips a small clear corner of the region can still pass the
   `region_max_cloud_percent` threshold; use a region well inside the frame extent.

@@ -318,7 +318,7 @@ def test_rejects_unknown_index_cleanly(tmp_path):
         start: "2022-01-01"
         end: "2023-01-01"
         sensor: sentinel2
-        index: evi
+        index: ndwi
         cadence: monthly
         max_cloud_percent: 60
         render: {fps: 4, scale: 20, dimensions: 768}

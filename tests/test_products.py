@@ -5,13 +5,14 @@ from gee_animation import products as P
 
 def test_registry_contents():
     assert set(P.SENSORS) == {"sentinel2", "landsat"}
-    assert set(P.INDICES) == {"ndvi", "lst"}
+    assert set(P.INDICES) == {"ndvi", "lst", "evi"}
     assert P.SENSORS["sentinel2"].scene_cloud_property == "CLOUDY_PIXEL_PERCENTAGE"
     assert P.SENSORS["landsat"].scene_cloud_property == "CLOUD_COVER"
     assert P.SENSORS["landsat"].collection_ids == (
         "LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2")
     assert P.INDICES["lst"].sensors == frozenset({"landsat"})
     assert P.INDICES["ndvi"].sensors == frozenset({"sentinel2", "landsat"})
+    assert P.INDICES["evi"].sensors == frozenset({"sentinel2", "landsat"})
 
 
 def test_get_product_ok():
@@ -23,9 +24,30 @@ def test_get_product_rejects_unknown_and_unsupported_pair():
     with pytest.raises(ValueError, match="sensor"):
         P.get_product("modis", "ndvi")
     with pytest.raises(ValueError, match="index"):
-        P.get_product("landsat", "evi")
+        P.get_product("landsat", "ndwi")    # ndwi not registered yet
     with pytest.raises(ValueError, match="not available"):
         P.get_product("sentinel2", "lst")   # LST is Landsat-only
+
+
+def test_evi_uses_expression_on_scaled_reflectance_and_keeps_time():
+    rec = {}
+    class FakeResult:
+        def set(self, k, v): rec["set"] = (k, v); return "evi_band"
+    class FakeRefl:
+        def select(self, b): rec.setdefault("selected", []).append(b); return ("band", b)
+        def expression(self, expr, bands):
+            rec["expr"] = expr; rec["bands"] = tuple(sorted(bands)); return self
+        def rename(self, n): rec["rename"] = n; return FakeResult()
+    class FakeSensor:
+        def reflectance(self, image, ee_module=None): rec["refl"] = True; return FakeRefl()
+    class FakeImg:
+        def get(self, k): rec["get"] = k; return "TS"
+    out = P.INDICES["evi"].compute(FakeSensor(), FakeImg(), ee_module=None)
+    assert rec["refl"] and rec["rename"] == "INDEX"
+    # standard EVI coefficients present, computed on the aliased nir/red/blue bands
+    assert "2.5" in rec["expr"] and "6" in rec["expr"] and "7.5" in rec["expr"]
+    assert rec["bands"] == ("blue", "nir", "red")
+    assert rec["set"] == ("system:time_start", "TS") and out == "evi_band"
 
 
 def test_collection_merges_landsat(ee_recorder=None):
