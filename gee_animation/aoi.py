@@ -7,8 +7,8 @@ from pathlib import Path
 import ee
 
 
-def _load_geojson_geometry(path: str) -> dict:
-    obj = json.loads(Path(path).read_text())
+def _load_geojson_geometry(src) -> dict:
+    obj = src if isinstance(src, dict) else json.loads(Path(src).read_text())
     t = obj.get("type")
     if t == "FeatureCollection":
         return obj["features"][0]["geometry"]

@@ -68,3 +68,16 @@ def test_load_geojson_returns_bare_geometry(tmp_path):
     p = tmp_path / "g.geojson"
     p.write_text(json.dumps(geom))
     assert _load_geojson_geometry(str(p)) == geom
+
+
+def test_parse_inline_geojson_dict():
+    ee = _fake_ee()
+    geom = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}
+    result = parse({"geojson": geom}, ee_module=ee)
+    assert result.spec == ("geojson", geom)
+
+
+def test_load_geojson_accepts_inline_feature_dict():
+    feat = {"type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [1, 2]}}
+    assert _load_geojson_geometry(feat) == {"type": "Point", "coordinates": [1, 2]}
