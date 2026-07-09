@@ -28,9 +28,18 @@ Output is written to `out/<name>.mp4` and `out/<name>.gif`.
 
 ## Configuration
 
-See `config.example.yaml`. Key fields: `aoi` (bbox or GeoJSON path), `start`/`end`
-(ISO, end exclusive), `max_cloud_percent`, `ndvi` (min/max/palette), `render`
-(fps/scale/dimensions), and optional `out_dir` (output directory, default `out`).
+See `config.example.yaml`. Key fields:
+
+- **`aoi`** (area of interest) defines two geometries:
+  - **`frame`**: a bounding box (rectangle) that defines the animation extent; aspect ratio is preserved when rendering.
+  - **`region`**: a polygon (GeoJSON, inline or file path) that defines an important region; only scenes where cloud coverage over this region is less than `region_max_cloud_percent` (default: 10%) are included.
+- **`start`/`end`**: ISO dates (end exclusive).
+- **`max_cloud_percent`**: scene-level pre-filter threshold before pixel masking.
+- **`region_max_cloud_percent`**: region-level cloud filter (kept only if cloud over region < threshold).
+- **`ndvi`** (min/max/palette): fixed range for colorization so colour is comparable across frames.
+- **`render`** (fps/scale/dimensions): rendering parameters.
+- **`out_dir`**: output directory (default `out`).
+
 Default GEE project is `hnee-331218`.
 
 Each frame is a monthly cloud-masked median NDVI composite, colorized with the

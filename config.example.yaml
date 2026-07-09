@@ -3,13 +3,16 @@ name: barnim_ndvi           # output basename -> out/barnim_ndvi.mp4 / .gif
 project: hnee-331218        # Google Earth Engine project id
 
 aoi:
-  # Either a bbox [minLon, minLat, maxLon, maxLat] ...
-  bbox: [13.7, 52.8, 13.9, 52.95]
-  # ... or a GeoJSON file (takes precedence if set):
-  # geojson: aoi/barnim.geojson
+  frame:                         # rectangle -> animation extent (aspect ratio preserved)
+    bbox: [13.7, 52.8, 13.9, 52.95]   # [minLon, minLat, maxLon, maxLat]
+  region:                        # polygon -> important region (cloud-filtered)
+    geojson:                     # inline GeoJSON (or a file path string)
+      type: Polygon
+      coordinates: [[[13.75, 52.83], [13.85, 52.83], [13.85, 52.90], [13.75, 52.90], [13.75, 52.83]]]
+  region_max_cloud_percent: 10   # keep scenes only if cloud over the region < 10%
 
-start: "2022-01-01"         # inclusive
-end: "2023-01-01"           # exclusive
+start: "2022-05-01"         # inclusive
+end: "2022-08-01"           # exclusive
 
 sensor: sentinel2           # v1 supports: sentinel2
 cadence: monthly            # v1 supports: monthly

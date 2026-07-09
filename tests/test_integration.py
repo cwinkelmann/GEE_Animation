@@ -15,16 +15,19 @@ def test_tiny_three_frame_render(tmp_path):
 
     cfg = RunConfig(
         name="itest", project=os.environ.get("GEE_PROJECT", "hnee-331218"),
-        aoi={"bbox": [13.80, 52.85, 13.83, 52.87]},
+        frame_aoi={"bbox": [13.80, 52.85, 13.83, 52.87]},
+        region_aoi={"bbox": [13.805, 52.855, 13.825, 52.865]},
+        region_max_cloud_percent=80,     # relaxed so the tiny test reliably finds scenes
         start="2022-06-01", end="2022-09-01",
         sensor="sentinel2", cadence="monthly", max_cloud_percent=80,
         ndvi_min=-0.2, ndvi_max=0.9, palette=["#a1622f", "#3b7a2a"],
         fps=2, scale=20, dimensions=256, out_dir=str(tmp_path),
     )
     auth.init(cfg.project)
-    geom = aoi.parse(cfg.aoi)
-    coll = collection.build(cfg, geom)
+    frame = aoi.parse(cfg.frame_aoi)
+    region = aoi.parse(cfg.region_aoi)
+    coll = collection.build(cfg, frame, region)
     frames = compositing.monthly_median(coll, cfg)
     assert frames, "expected at least one monthly frame"
-    paths = render.render(frames, cfg, geometry=geom)
+    paths = render.render(frames, cfg, geometry=frame)
     assert any(Path(p).exists() for p in paths)
