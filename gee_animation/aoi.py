@@ -1,4 +1,4 @@
-"""Turn an AOI config (bbox or GeoJSON file) into an ee.Geometry."""
+"""Turn an AOI config (bbox, or GeoJSON as an inline dict or file path) into an ee.Geometry."""
 from __future__ import annotations
 
 import json

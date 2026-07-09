@@ -9,6 +9,24 @@ def _write(tmp_path, body: str):
     return p
 
 
+def test_rejects_null_aoi_with_clean_error(tmp_path):
+    # A present-but-null `aoi:` must raise ConfigError, not a raw TypeError.
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi:
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: sentinel2
+        cadence: monthly
+        max_cloud_percent: 60
+        ndvi: {min: -0.2, max: 0.9, palette: ["#000000"]}
+        render: {fps: 4, scale: 20, dimensions: 768}
+    """)
+    with pytest.raises(ConfigError):
+        RunConfig.from_yaml(p)
+
+
 def test_from_yaml_loads_valid_config(tmp_path):
     p = _write(tmp_path, """
         name: test

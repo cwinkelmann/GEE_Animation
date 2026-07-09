@@ -53,6 +53,9 @@ a neutral grey rather than a vegetation colour.
   `render.dimensions`.
 - One sensor (Sentinel-2) and one cadence (monthly) are supported; the config
   layer is structured so more can be added.
+- The region cloud filter averages only over the pixels a scene actually covers.
+  A scene that clips a small clear corner of the region can still pass the
+  `region_max_cloud_percent` threshold; use a region well inside the frame extent.
 
 ## Development
 

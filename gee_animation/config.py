@@ -41,7 +41,7 @@ class RunConfig:
         try:
             ndvi = raw["ndvi"]
             render = raw["render"]
-            aoi = raw["aoi"]
+            aoi = raw["aoi"] or {}
             cfg = cls(
                 name=str(raw["name"]),
                 project=str(raw["project"]),
