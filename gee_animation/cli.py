@@ -21,14 +21,15 @@ DEFAULT_DEPS = types.SimpleNamespace(
 def run(config_path: str, deps=DEFAULT_DEPS) -> list[Path]:
     cfg = RunConfig.from_yaml(config_path)
     deps.init(cfg.project)
-    geometry = deps.parse(cfg.aoi)
-    coll = deps.build(cfg, geometry)
+    frame_geom = deps.parse(cfg.frame_aoi)
+    region_geom = deps.parse(cfg.region_aoi)
+    coll = deps.build(cfg, frame_geom, region_geom)
     frames = deps.monthly_median(coll, cfg)
     if not frames:
         raise RuntimeError(
             "No images found for the given AOI/date range/cloud filter."
         )
-    return deps.render(frames, cfg, geometry=geometry)
+    return deps.render(frames, cfg, geometry=frame_geom)
 
 
 def main(argv=None) -> int:
