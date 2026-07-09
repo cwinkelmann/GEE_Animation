@@ -52,15 +52,20 @@ def _landsat_reflectance(image, ee_module=ee):
 
 
 # --- Index computations -----------------------------------------------------
+# NOTE: deriving a new image (select/band-math/rename) drops the source metadata,
+# so `system:time_start` must be copied forward or monthly compositing's
+# filterDate grouping finds no images.
 def _ndvi(sensor, image, ee_module=ee):
     refl = sensor.reflectance(image, ee_module)
-    return refl.normalizedDifference(["nir", "red"]).rename(INDEX_BAND)
+    return (refl.normalizedDifference(["nir", "red"]).rename(INDEX_BAND)
+            .set("system:time_start", image.get("system:time_start")))
 
 
 def _lst(sensor, image, ee_module=ee):
     return (image.select("ST_B10")
             .multiply(0.00341802).add(149.0).subtract(273.15)
-            .rename(INDEX_BAND))
+            .rename(INDEX_BAND)
+            .set("system:time_start", image.get("system:time_start")))
 
 
 @dataclass(frozen=True)

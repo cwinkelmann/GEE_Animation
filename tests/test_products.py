@@ -62,31 +62,40 @@ def test_landsat_reflectance_scales_with_offset():
     assert rec["multiply"] == 0.0000275 and rec["add"] == -0.2
 
 
-def test_ndvi_uses_scaled_reflectance():
+def test_ndvi_uses_scaled_reflectance_and_keeps_time():
     rec = {}
+    class FakeResult:
+        def set(self, k, v): rec["set"] = (k, v); return "ndvi_band"
     class FakeRefl:
         def normalizedDifference(self, bands): rec["nd"] = tuple(bands); return self
-        def rename(self, n): rec["rename"] = n; return "ndvi_band"
+        def rename(self, n): rec["rename"] = n; return FakeResult()
     class FakeSensor:
         def reflectance(self, image, ee_module=None): rec["refl"] = True; return FakeRefl()
-    out = P.INDICES["ndvi"].compute(FakeSensor(), object(), ee_module=None)
+    class FakeImg:
+        def get(self, k): rec["get"] = k; return "TS"
+    out = P.INDICES["ndvi"].compute(FakeSensor(), FakeImg(), ee_module=None)
     assert rec["refl"] and rec["nd"] == ("nir", "red") and rec["rename"] == "INDEX"
+    assert rec["set"] == ("system:time_start", "TS") and rec["get"] == "system:time_start"
     assert out == "ndvi_band"
 
 
-def test_lst_applies_scale_offset_kelvin_to_celsius():
+def test_lst_applies_scale_offset_kelvin_to_celsius_and_keeps_time():
     rec = {}
+    class FakeResult:
+        def set(self, k, v): rec["set"] = (k, v); return "lst_band"
     class FakeBand:
         def multiply(self, v): rec["multiply"] = v; return self
         def add(self, v): rec["add"] = v; return self
         def subtract(self, v): rec["subtract"] = v; return self
-        def rename(self, n): rec["rename"] = n; return "lst_band"
+        def rename(self, n): rec["rename"] = n; return FakeResult()
     class FakeImg:
         def select(self, b): rec["select"] = b; return FakeBand()
+        def get(self, k): rec["get"] = k; return "TS"
     out = P.INDICES["lst"].compute(object(), FakeImg(), ee_module=None)
     assert rec["select"] == "ST_B10"
     assert rec["multiply"] == 0.00341802 and rec["add"] == 149.0 and rec["subtract"] == 273.15
-    assert rec["rename"] == "INDEX" and out == "lst_band"
+    assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
+    assert out == "lst_band"
 
 
 def test_landsat_mask_and_cloud_band_use_qa_bits():
