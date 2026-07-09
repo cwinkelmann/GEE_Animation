@@ -10,8 +10,10 @@ the right interpreter (the same one your Jupyter kernel uses):
 
 ```bash
 conda activate GEE_animation
-pip install -e ".[dev,notebook]"   # package + deps into this env
-earthengine authenticate           # one-time; or the tool prompts on first run
+pip install -e ".[dev,notebook]"              # package + deps into this env
+# add `shapefile` if you point AOIs at .shp files (pulls geopandas):
+# pip install -e ".[dev,notebook,shapefile]"
+earthengine authenticate                      # one-time; or the tool prompts on first run
 ```
 
 Run the notebook (`notebooks/ndvi_timelapse.ipynb`) with the `GEE_animation`
@@ -30,9 +32,12 @@ Output is written to `out/<name>.mp4` and `out/<name>.gif`.
 
 See `config.example.yaml`. Key fields:
 
-- **`aoi`** (area of interest) defines two geometries:
-  - **`frame`**: a bounding box (rectangle) that defines the animation extent; aspect ratio is preserved when rendering.
-  - **`region`**: a polygon (GeoJSON, inline or file path) that defines an important region; only scenes where cloud coverage over this region is less than `region_max_cloud_percent` (default: 10%) are included.
+- **`aoi`** (area of interest) defines two geometries, each given as a `bbox`
+  `[minLon, minLat, maxLon, maxLat]`, `geojson` (inline dict or file path), or
+  `shapefile` (path to a `.shp`; auto-reprojected to EPSG:4326 — needs the
+  `shapefile` extra, multiple features are dissolved into one):
+  - **`frame`**: the animation extent (rectangle); aspect ratio is preserved when rendering.
+  - **`region`**: the important region (polygon); only scenes where cloud coverage over this region is less than `region_max_cloud_percent` (default: 10%) are included, and its outline is drawn on each frame when `draw_region` is set.
 - **`start`/`end`**: ISO dates (end exclusive).
 - **`max_cloud_percent`**: scene-level pre-filter threshold before pixel masking.
 - **`region_max_cloud_percent`**: region-level cloud filter (kept only if cloud over region < threshold).
