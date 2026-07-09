@@ -1,0 +1,26 @@
+# Example run configuration for gee-animation.
+name: wne_ndvi              # output basename -> out/wne_ndvi.mp4 / .gif
+project: hnee-331218        # Google Earth Engine project id
+
+aoi:
+  # AOIs accept bbox, geojson (inline dict or path), or shapefile (auto-reprojected
+  # to EPSG:4326; needs the `shapefile` extra: pip install -e ".[shapefile]").
+  frame:                         # rectangle -> animation extent (aspect ratio preserved)
+    shapefile: docs/aoi/wne/frame_timelaps_wne.shp
+  region:                        # polygon -> important region (cloud-filtered + outlined)
+    shapefile: docs/aoi/wne/wne.shp    # Grumsin world-heritage beech forest polygon
+  region_max_cloud_percent: 10   # keep scenes only if cloud over the region < 10%
+
+start: "2022-05-01"         # inclusive
+end: "2022-08-01"           # exclusive
+
+sensor: sentinel2           # v1 supports: sentinel2, landsat
+index: ndvi                 # v1 supports: ndvi (sentinel2/landsat), lst (landsat)
+cadence: monthly            # v1 supports: monthly
+max_cloud_percent: 60       # scene-level pre-filter before pixel masking
+draw_region: true           # overlay the region polygon outline on each frame
+
+render:
+  fps: 4
+  scale: 20                 # metres/pixel (informational; dimensions drives size)
+  dimensions: 768           # max width/height of each frame (drives thumbnail size)

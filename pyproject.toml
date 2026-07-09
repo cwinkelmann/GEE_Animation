@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gee_animation"
+version = "0.1.0"
+description = "Google Earth Engine NDVI forest timelapse generator"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "earthengine-api>=0.1.380",
+    "Pillow>=10.0",
+    "imageio>=2.31",
+    "imageio-ffmpeg>=0.4.9",
+    "PyYAML>=6.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+notebook = ["jupyter>=1.0", "ipykernel>=6.0", "nbformat>=5.9"]
+shapefile = ["geopandas>=0.14"]
+
+[project.scripts]
+gee-animation = "gee_animation.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["gee_animation*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: hits live Google Earth Engine; skipped without credentials",
+]
