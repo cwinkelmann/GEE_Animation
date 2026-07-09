@@ -291,3 +291,37 @@ def test_rejects_region_cloud_percent_out_of_range(tmp_path):
     """)
     with pytest.raises(ConfigError, match="region_max_cloud_percent"):
         RunConfig.from_yaml(p)
+
+
+def test_rejects_unknown_sensor(tmp_path):
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi: {frame: {bbox: [0,0,1,1]}, region: {bbox: [0,0,1,1]}}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: modis
+        index: ndvi
+        cadence: monthly
+        max_cloud_percent: 60
+        render: {fps: 4, scale: 20, dimensions: 768}
+    """)
+    with pytest.raises(ConfigError, match="sensor"):
+        RunConfig.from_yaml(p)
+
+
+def test_rejects_unknown_index_cleanly(tmp_path):
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi: {frame: {bbox: [0,0,1,1]}, region: {bbox: [0,0,1,1]}}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: sentinel2
+        index: evi
+        cadence: monthly
+        max_cloud_percent: 60
+        render: {fps: 4, scale: 20, dimensions: 768}
+    """)
+    with pytest.raises(ConfigError, match="index"):
+        RunConfig.from_yaml(p)
