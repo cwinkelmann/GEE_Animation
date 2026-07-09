@@ -24,7 +24,15 @@ def build(cfg, frame_geom, region_geom, ee_module=ee):
         sensor.collection(ee_module)
         .filterDate(cfg.start, cfg.end)
         .filterBounds(frame_geom)
-        .filter(ee_module.Filter.lte(sensor.scene_cloud_property, cfg.max_cloud_percent))
+    )
+    # Coarse scene-level cloud pre-filter — only sensors that carry a per-scene
+    # cloud metadata property (S2, Landsat); MODIS has none, so skip it and rely
+    # on the in-region QA cloud-fraction filter below.
+    if sensor.scene_cloud_property is not None:
+        coll = coll.filter(
+            ee_module.Filter.lte(sensor.scene_cloud_property, cfg.max_cloud_percent))
+    coll = (
+        coll
         .map(lambda img: add_region_cloud_fraction(
             img, region_geom, cfg.scale, sensor.cloud_band, ee_module))
         .filter(ee_module.Filter.lt("region_cloud_fraction", cfg.region_max_cloud_percent / 100.0))

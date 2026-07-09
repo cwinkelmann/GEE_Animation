@@ -55,3 +55,33 @@ def test_build_pipeline_order_and_uses_sensor(monkeypatch):
     idx_maps = [i for i, c in enumerate(calls) if c == ("map",)]
     # map order: region-fraction, mask, index -> fraction filter before the mask map
     assert idx_maps[0] < idx_lt < idx_maps[1] < idx_maps[2]
+
+
+def test_build_skips_coarse_filter_when_no_scene_cloud_property(monkeypatch):
+    # MODIS has no per-scene cloud metadata (scene_cloud_property is None):
+    # the coarse Filter.lte must be skipped; the region fraction filter still runs.
+    calls = []
+    class FakeColl:
+        def filterDate(self, s, e): calls.append(("filterDate",)); return self
+        def filterBounds(self, g): calls.append(("filterBounds",)); return self
+        def filter(self, f): calls.append(("filter", f)); return self
+        def map(self, fn): calls.append(("map",)); return self
+    class FakeSensor:
+        name = "modis"; scene_cloud_property = None
+        def collection(self, ee_module=None): return FakeColl()
+        def cloud_band(self, image, ee_module=None): return image
+        def mask_clouds(self, image, ee_module=None): return image
+    class FakeIndex:
+        def compute(self, sensor, image, ee_module=None): return image
+    monkeypatch.setattr(C, "get_product", lambda s, i: (FakeSensor(), FakeIndex()))
+    ee = types.SimpleNamespace(
+        Filter=types.SimpleNamespace(
+            lte=lambda name, val: ("lte", name, val),
+            lt=lambda name, val: ("lt", name, val)))
+    cfg = types.SimpleNamespace(sensor="modis", index="ndmi",
+                                start="2022-01-01", end="2022-02-01",
+                                max_cloud_percent=60, region_max_cloud_percent=10, scale=500)
+    C.build(cfg, "FRAME", "REGION", ee_module=ee)
+    filters = [c for c in calls if c[0] == "filter"]
+    # only the region-fraction lt filter — no coarse lte filter
+    assert filters == [("filter", ("lt", "region_cloud_fraction", 0.1))]

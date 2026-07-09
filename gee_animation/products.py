@@ -51,6 +51,33 @@ def _landsat_reflectance(image, ee_module=ee):
     return image.select(list(_L_ALIASES[0]), list(_L_ALIASES[1])).multiply(0.0000275).add(-0.2)
 
 
+# --- MODIS (MOD09A1 8-day surface reflectance, 500 m) -----------------------
+_MODIS_ALIASES = (("sur_refl_b03", "sur_refl_b04", "sur_refl_b01",
+                   "sur_refl_b02", "sur_refl_b06", "sur_refl_b07"),
+                  ("blue", "green", "red", "nir", "swir1", "swir2"))
+
+
+def _modis_clear(image, ee_module=ee):
+    # StateQA (MOD09A1 state flags): bits 0-1 cloud state (0=clear),
+    # bit 2 cloud shadow, bit 10 internal cloud flag.
+    state = image.select("StateQA")
+    return (state.bitwiseAnd(3).eq(0)
+            .And(state.bitwiseAnd(1 << 2).eq(0))
+            .And(state.bitwiseAnd(1 << 10).eq(0)))
+
+
+def _modis_mask_clouds(image, ee_module=ee):
+    return image.updateMask(_modis_clear(image, ee_module))
+
+
+def _modis_cloud_band(image, ee_module=ee):
+    return _modis_clear(image, ee_module).Not().rename("cloud")
+
+
+def _modis_reflectance(image, ee_module=ee):
+    return image.select(list(_MODIS_ALIASES[0]), list(_MODIS_ALIASES[1])).multiply(0.0001)
+
+
 # --- Index computations -----------------------------------------------------
 # NOTE: deriving a new image (select/band-math/rename) drops the source metadata,
 # so `system:time_start` must be copied forward or monthly compositing's
@@ -77,6 +104,20 @@ def _evi(sensor, image, ee_module=ee):
         {"nir": refl.select("nir"), "red": refl.select("red"), "blue": refl.select("blue")},
     ).rename(INDEX_BAND)
     return evi.set("system:time_start", image.get("system:time_start"))
+
+
+def _ndwi(sensor, image, ee_module=ee):
+    # NDWI (McFeeters) = (green − nir)/(green + nir) — open water.
+    refl = sensor.reflectance(image, ee_module)
+    return (refl.normalizedDifference(["green", "nir"]).rename(INDEX_BAND)
+            .set("system:time_start", image.get("system:time_start")))
+
+
+def _ndmi(sensor, image, ee_module=ee):
+    # NDMI = (nir − swir1)/(nir + swir1) — canopy/soil moisture.
+    refl = sensor.reflectance(image, ee_module)
+    return (refl.normalizedDifference(["nir", "swir1"]).rename(INDEX_BAND)
+            .set("system:time_start", image.get("system:time_start")))
 
 
 @dataclass(frozen=True)
@@ -112,16 +153,25 @@ SENSORS = {
                       ("LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2"),
                       "CLOUD_COVER",
                       _landsat_mask_clouds, _landsat_cloud_band, _landsat_reflectance),
+    "modis": Sensor("modis", ("MODIS/061/MOD09A1",), None,
+                    _modis_mask_clouds, _modis_cloud_band, _modis_reflectance),
 }
 
+# Reflectance-based indices work on any sensor that exposes the band aliases.
+_REFL = frozenset({"sentinel2", "landsat", "modis"})
+
 INDICES = {
-    "ndvi": Index("ndvi", frozenset({"sentinel2", "landsat"}),
+    "ndvi": Index("ndvi", _REFL,
                   (-0.2, 0.9, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _ndvi),
     "lst": Index("lst", frozenset({"landsat"}),
                  (0.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
                  _lst),
-    "evi": Index("evi", frozenset({"sentinel2", "landsat"}),
+    "evi": Index("evi", _REFL,
                  (0.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _evi),
+    "ndwi": Index("ndwi", _REFL,
+                  (-0.3, 0.6, ["#a1622f", "#f6e8c3", "#2166ac"]), _ndwi),
+    "ndmi": Index("ndmi", _REFL,
+                  (-0.5, 0.8, ["#8c510a", "#f6e8c3", "#01665e"]), _ndmi),
 }
 
 

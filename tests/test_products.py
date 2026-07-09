@@ -3,30 +3,35 @@ import pytest
 from gee_animation import products as P
 
 
+_REFL_INDICES = frozenset({"sentinel2", "landsat", "modis"})
+
+
 def test_registry_contents():
-    assert set(P.SENSORS) == {"sentinel2", "landsat"}
-    assert set(P.INDICES) == {"ndvi", "lst", "evi"}
+    assert set(P.SENSORS) == {"sentinel2", "landsat", "modis"}
+    assert set(P.INDICES) == {"ndvi", "lst", "evi", "ndwi", "ndmi"}
     assert P.SENSORS["sentinel2"].scene_cloud_property == "CLOUDY_PIXEL_PERCENTAGE"
     assert P.SENSORS["landsat"].scene_cloud_property == "CLOUD_COVER"
+    assert P.SENSORS["modis"].scene_cloud_property is None   # no per-scene cloud metadata
+    assert P.SENSORS["modis"].collection_ids == ("MODIS/061/MOD09A1",)
     assert P.SENSORS["landsat"].collection_ids == (
         "LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2")
     assert P.INDICES["lst"].sensors == frozenset({"landsat"})
-    assert P.INDICES["ndvi"].sensors == frozenset({"sentinel2", "landsat"})
-    assert P.INDICES["evi"].sensors == frozenset({"sentinel2", "landsat"})
+    for name in ("ndvi", "evi", "ndwi", "ndmi"):
+        assert P.INDICES[name].sensors == _REFL_INDICES
 
 
 def test_get_product_ok():
-    sensor, index = P.get_product("landsat", "lst")
-    assert sensor.name == "landsat" and index.name == "lst"
+    sensor, index = P.get_product("modis", "ndmi")
+    assert sensor.name == "modis" and index.name == "ndmi"
 
 
 def test_get_product_rejects_unknown_and_unsupported_pair():
     with pytest.raises(ValueError, match="sensor"):
-        P.get_product("modis", "ndvi")
+        P.get_product("viirs", "ndvi")      # viirs not registered
     with pytest.raises(ValueError, match="index"):
-        P.get_product("landsat", "ndwi")    # ndwi not registered yet
+        P.get_product("landsat", "savi")    # savi not registered
     with pytest.raises(ValueError, match="not available"):
-        P.get_product("sentinel2", "lst")   # LST is Landsat-only
+        P.get_product("modis", "lst")       # LST is Landsat-only
 
 
 def test_evi_uses_expression_on_scaled_reflectance_and_keeps_time():
@@ -48,6 +53,69 @@ def test_evi_uses_expression_on_scaled_reflectance_and_keeps_time():
     assert "2.5" in rec["expr"] and "6" in rec["expr"] and "7.5" in rec["expr"]
     assert rec["bands"] == ("blue", "nir", "red")
     assert rec["set"] == ("system:time_start", "TS") and out == "evi_band"
+
+
+def _normdiff_recorder():
+    rec = {}
+    class FakeResult:
+        def set(self, k, v): rec["set"] = (k, v); return "band"
+    class FakeRefl:
+        def normalizedDifference(self, bands): rec["nd"] = tuple(bands); return self
+        def rename(self, n): rec["rename"] = n; return FakeResult()
+    class FakeSensor:
+        def reflectance(self, image, ee_module=None): rec["refl"] = True; return FakeRefl()
+    class FakeImg:
+        def get(self, k): return "TS"
+    return rec, FakeSensor(), FakeImg()
+
+
+def test_ndwi_is_green_nir_normalized_difference():
+    rec, sensor, img = _normdiff_recorder()
+    out = P.INDICES["ndwi"].compute(sensor, img, ee_module=None)
+    assert rec["refl"] and rec["nd"] == ("green", "nir")   # McFeeters open-water NDWI
+    assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
+    assert out == "band"
+
+
+def test_ndmi_is_nir_swir1_normalized_difference():
+    rec, sensor, img = _normdiff_recorder()
+    out = P.INDICES["ndmi"].compute(sensor, img, ee_module=None)
+    assert rec["nd"] == ("nir", "swir1")                   # moisture index
+    assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
+
+
+def test_modis_reflectance_maps_bands_and_scales():
+    rec = {}
+    class FakeImg:
+        def select(self, bands, names): rec["select"] = (tuple(bands), tuple(names)); return self
+        def multiply(self, v): rec["multiply"] = v; return self
+    P.SENSORS["modis"].reflectance(FakeImg())
+    assert rec["select"][1] == ("blue", "green", "red", "nir", "swir1", "swir2")
+    assert rec["select"][0] == (
+        "sur_refl_b03", "sur_refl_b04", "sur_refl_b01", "sur_refl_b02",
+        "sur_refl_b06", "sur_refl_b07")
+    assert rec["multiply"] == 0.0001
+    assert "add" not in rec   # MOD09 scale is purely multiplicative
+
+
+def test_modis_mask_and_cloud_band_use_state_bits():
+    rec = {"and": 0}
+    class FakeState:
+        def bitwiseAnd(self, bits): rec.setdefault("bits", []).append(bits); return self
+        def eq(self, v): rec.setdefault("eq", []).append(v); return self
+        def And(self, other): rec["and"] += 1; return self
+        def Not(self): rec["not"] = True; return self
+        def rename(self, n): rec["rename"] = n; return "cloudband"
+    class FakeImg:
+        def select(self, b): rec["select"] = b; return FakeState()
+        def updateMask(self, m): rec["masked"] = True; return "masked"
+    assert P.SENSORS["modis"].mask_clouds(FakeImg()) == "masked"
+    assert rec["select"] == "StateQA"
+    assert 3 in rec["bits"] and (1 << 2) in rec["bits"] and (1 << 10) in rec["bits"]
+    assert rec["masked"] is True
+    rec2 = {"and": 0}
+    cb = P.SENSORS["modis"].cloud_band(FakeImg())
+    assert cb == "cloudband" and rec["rename"] == "cloud"
 
 
 def test_collection_merges_landsat(ee_recorder=None):

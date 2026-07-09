@@ -300,7 +300,7 @@ def test_rejects_unknown_sensor(tmp_path):
         aoi: {frame: {bbox: [0,0,1,1]}, region: {bbox: [0,0,1,1]}}
         start: "2022-01-01"
         end: "2023-01-01"
-        sensor: modis
+        sensor: viirs
         index: ndvi
         cadence: monthly
         max_cloud_percent: 60
@@ -318,7 +318,7 @@ def test_rejects_unknown_index_cleanly(tmp_path):
         start: "2022-01-01"
         end: "2023-01-01"
         sensor: sentinel2
-        index: ndwi
+        index: savi
         cadence: monthly
         max_cloud_percent: 60
         render: {fps: 4, scale: 20, dimensions: 768}

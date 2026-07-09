@@ -39,11 +39,11 @@ See `config.example.yaml` (Sentinel-2 NDVI) or `config.lst.example.yaml` (Landsa
   - **`frame`**: the animation extent (rectangle); aspect ratio is preserved when rendering.
   - **`region`**: the important region (polygon); only scenes where cloud coverage over this region is less than `region_max_cloud_percent` (default: 10%) are included, and its outline is drawn on each frame when `draw_region` is set.
 - **`start`/`end`**: ISO dates (end exclusive).
-- **`sensor`**: `sentinel2` or `landsat`.
-- **`index`**: `ndvi` or `evi` (both sensors) or `lst` (Landsat only).
-- **`max_cloud_percent`**: scene-level pre-filter threshold before pixel masking.
+- **`sensor`**: `sentinel2`, `landsat`, or `modis` (MOD09A1, 8-day 500 m).
+- **`index`**: `ndvi`, `evi`, `ndwi` (McFeeters, open water), `ndmi` (moisture) — all sensors; or `lst` (Landsat only).
+- **`max_cloud_percent`**: scene-level pre-filter threshold (Sentinel-2/Landsat only; MODIS has no per-scene cloud metadata, so this is ignored and only the region filter applies).
 - **`region_max_cloud_percent`**: region-level cloud filter (kept only if cloud over region < threshold).
-- **`viz`** (optional; min/max/palette): fixed range for colorization so colour is comparable across frames. If omitted, per-index defaults apply (NDVI: −0.2 to 0.9, green palette; EVI: 0 to 1, green palette; LST: 0 to 40°C, thermal palette).
+- **`viz`** (optional; min/max/palette): fixed range for colorization so colour is comparable across frames. If omitted, per-index defaults apply (NDVI −0.2..0.9 green; EVI 0..1 green; NDWI −0.3..0.6 brown→blue; NDMI −0.5..0.8 brown→teal; LST 0..40°C thermal).
 - **`render`** (fps/scale/dimensions): rendering parameters.
 - **`out_dir`**: output directory (default `out`).
 
@@ -62,8 +62,9 @@ a neutral grey rather than an index colour.
   `render.dimensions`.
 - Sensors: Sentinel-2 and Landsat. One cadence (monthly) is supported; config
   is structured to add more.
-- Indices: NDVI and EVI (both sensors), LST (Landsat only). Adding new
-  indices/sensors requires registry changes in `products.py`.
+- Sensors: Sentinel-2, Landsat, MODIS. Indices: NDVI, EVI, NDWI, NDMI (all
+  sensors), LST (Landsat only). Adding new indices/sensors requires registry
+  changes in `products.py`.
 - The region cloud filter averages only over the pixels a scene actually covers.
   A scene that clips a small clear corner of the region can still pass the
   `region_max_cloud_percent` threshold; use a region well inside the frame extent.
