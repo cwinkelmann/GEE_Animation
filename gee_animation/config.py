@@ -34,6 +34,7 @@ class RunConfig:
     scale: float
     dimensions: int
     out_dir: str = "out"
+    draw_region: bool = True
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RunConfig":
@@ -60,6 +61,7 @@ class RunConfig:
                 scale=float(render["scale"]),
                 dimensions=int(render["dimensions"]),
                 out_dir=str(raw.get("out_dir", "out")),
+                draw_region=bool(raw.get("draw_region", True)),
             )
         except KeyError as exc:
             raise ConfigError(f"missing required config key: {exc}") from exc

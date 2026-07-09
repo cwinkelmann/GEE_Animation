@@ -37,6 +37,77 @@ def test_assemble_writes_gif_and_mp4(tmp_path):
     assert all(p.exists() for p in paths)
 
 
+def test_aoi_bounds_from_bbox():
+    from gee_animation.render import _aoi_bounds
+    assert _aoi_bounds({"bbox": [13.7, 52.8, 13.9, 52.95]}) == (13.7, 52.8, 13.9, 52.95)
+
+
+def test_aoi_bounds_from_geojson_polygon():
+    from gee_animation.render import _aoi_bounds
+    geom = {"type": "Polygon", "coordinates": [[[1, 2], [5, 2], [5, 8], [1, 8], [1, 2]]]}
+    assert _aoi_bounds({"geojson": geom}) == (1, 2, 5, 8)
+
+
+def test_region_rings_from_bbox():
+    from gee_animation.render import _region_rings
+    assert _region_rings({"bbox": [0, 0, 2, 2]}) == [
+        [(0, 0), (2, 0), (2, 2), (0, 2), (0, 0)]
+    ]
+
+
+def test_region_rings_from_geojson_polygon():
+    from gee_animation.render import _region_rings
+    geom = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}
+    assert _region_rings({"geojson": geom}) == [[(0, 0), (1, 0), (1, 1), (0, 0)]]
+
+
+def test_draw_region_maps_coords_and_draws_outline():
+    from gee_animation.render import draw_region
+    rgb = np.zeros((100, 100, 3), np.uint8)
+    bounds = (0.0, 0.0, 10.0, 10.0)                    # 10 deg over 100 px
+    rings = [[(2, 2), (8, 2), (8, 8), (2, 8), (2, 2)]]  # -> pixel square (20,80)-(80,20)
+    out = draw_region(rgb, bounds, rings, color=(255, 0, 0), width=1)
+    assert out.shape == (100, 100, 3) and out.dtype == np.uint8
+    assert out[..., 0].max() == 255            # outline drawn (red)
+    assert out[50, 50].tolist() == [0, 0, 0]   # interior untouched (outline only)
+
+
+def test_render_applies_region_overlay_when_enabled(tmp_path, monkeypatch):
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.draw_region = True
+    cfg.frame_aoi = {"bbox": [0.0, 0.0, 1.0, 1.0]}
+    cfg.region_aoi = {"bbox": [0.25, 0.25, 0.75, 0.75]}
+    calls = []
+    monkeypatch.setattr(r, "draw_region", lambda rgb, bounds, rings, **kw: (calls.append((bounds, rings)) or rgb))
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
+
+    render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+    assert len(calls) == 1
+    assert calls[0][0] == (0.0, 0.0, 1.0, 1.0)
+    assert calls[0][1] == [[(0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.25, 0.75), (0.25, 0.25)]]
+
+
+def test_render_skips_region_overlay_when_disabled(tmp_path, monkeypatch):
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.draw_region = False
+    cfg.frame_aoi = {"bbox": [0, 0, 1, 1]}
+    cfg.region_aoi = {"bbox": [0, 0, 1, 1]}
+
+    def boom(*a, **k):
+        raise AssertionError("draw_region should not be called when disabled")
+
+    monkeypatch.setattr(r, "draw_region", boom)
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
+
+    render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)  # must not raise
+
+
 def test_assemble_encodes_mp4_for_odd_dimension_frames(tmp_path):
     # libx264 requires even width AND height; frames from arbitrary AOIs are
     # often odd (e.g. 768x577). The MP4 must still be produced, not dropped.

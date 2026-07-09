@@ -10,12 +10,14 @@ import imageio.v2 as imageio
 import numpy as np
 from PIL import Image, ImageDraw
 
+from .aoi import _load_geojson_geometry
 from .imaging import colorize
 
 log = logging.getLogger(__name__)
 
 
 NODATA_RGB = (240, 240, 240)
+REGION_OUTLINE_RGB = (255, 235, 59)   # amber — high contrast over the NDVI palette
 
 
 def _thumb_params(cfg, geometry) -> dict:
@@ -88,6 +90,59 @@ def annotate(rgb: np.ndarray, label: str) -> np.ndarray:
     return np.asarray(img)
 
 
+def _geom_rings(geom: dict) -> list:
+    """Rings (each a list of (lon, lat)) for a GeoJSON Polygon/MultiPolygon/LineString."""
+    t = geom["type"]
+    if t == "Polygon":
+        return [[(x, y) for x, y in ring] for ring in geom["coordinates"]]
+    if t == "MultiPolygon":
+        return [[(x, y) for x, y in ring]
+                for poly in geom["coordinates"] for ring in poly]
+    if t == "LineString":
+        return [[(x, y) for x, y in geom["coordinates"]]]
+    raise ValueError(f"unsupported region geometry type for overlay: {t}")
+
+
+def _aoi_bounds(aoi_cfg: dict) -> tuple:
+    """(minLon, minLat, maxLon, maxLat) for an AOI (bbox or GeoJSON), computed locally."""
+    if aoi_cfg.get("bbox"):
+        b = aoi_cfg["bbox"]
+        return (b[0], b[1], b[2], b[3])
+    rings = _geom_rings(_load_geojson_geometry(aoi_cfg["geojson"]))
+    xs = [x for ring in rings for x, _ in ring]
+    ys = [y for ring in rings for _, y in ring]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _region_rings(aoi_cfg: dict) -> list:
+    """Rings (list of (lon, lat)) for a region AOI (bbox rectangle or GeoJSON)."""
+    if aoi_cfg.get("bbox"):
+        mnx, mny, mxx, mxy = aoi_cfg["bbox"]
+        return [[(mnx, mny), (mxx, mny), (mxx, mxy), (mnx, mxy), (mnx, mny)]]
+    return _geom_rings(_load_geojson_geometry(aoi_cfg["geojson"]))
+
+
+def draw_region(rgb: np.ndarray, bounds: tuple, rings: list,
+                color=REGION_OUTLINE_RGB, width: int = 2) -> np.ndarray:
+    """Draw region polygon outlines onto an RGB frame.
+
+    `bounds` is the frame extent (minLon, minLat, maxLon, maxLat); the EE thumbnail
+    is rendered in linear EPSG:4326 over this extent, so lon/lat map to pixels
+    linearly (top row = maxLat).
+    """
+    img = Image.fromarray(rgb.astype(np.uint8), "RGB")
+    draw = ImageDraw.Draw(img)
+    h, w = rgb.shape[:2]
+    minx, miny, maxx, maxy = bounds
+    dx = (maxx - minx) or 1.0
+    dy = (maxy - miny) or 1.0
+    for ring in rings:
+        pts = [((lon - minx) / dx * w, (maxy - lat) / dy * h) for lon, lat in ring]
+        if len(pts) >= 2:
+            draw.line(pts, fill=color, width=width)
+    return np.asarray(img)
+
+
 def _pad_to_even(frame: np.ndarray) -> np.ndarray:
     """Pad a frame's width/height up to the next even number (edge-replicated).
 
@@ -128,6 +183,10 @@ def assemble(frames_rgb: list[np.ndarray], cfg) -> list[Path]:
 
 
 def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
+    draw_overlay = getattr(cfg, "draw_region", False) and getattr(cfg, "region_aoi", None)
+    if draw_overlay:
+        bounds = _aoi_bounds(cfg.frame_aoi)
+        rings = _region_rings(cfg.region_aoi)
     rgb_frames: list[np.ndarray] = []
     for frame in frames:
         ndvi_arr, valid = fetch(frame.image, cfg, geometry)
@@ -135,5 +194,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         rgb = apply_nodata(rgb, valid)
         rgb = annotate(rgb, frame.label)
         rgb = add_colorbar(rgb, cfg)
+        if draw_overlay:
+            rgb = draw_region(rgb, bounds, rings)
         rgb_frames.append(rgb)
     return assemble(rgb_frames, cfg)
