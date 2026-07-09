@@ -19,9 +19,9 @@ def test_accepts_shapefile_aois(tmp_path):
         start: "2022-01-01"
         end: "2023-01-01"
         sensor: sentinel2
+        index: ndvi
         cadence: monthly
         max_cloud_percent: 60
-        ndvi: {min: -0.2, max: 0.9, palette: ["#000000"]}
         render: {fps: 4, scale: 20, dimensions: 768}
     """)
     cfg = RunConfig.from_yaml(p)
@@ -38,9 +38,9 @@ def test_rejects_null_aoi_with_clean_error(tmp_path):
         start: "2022-01-01"
         end: "2023-01-01"
         sensor: sentinel2
+        index: ndvi
         cadence: monthly
         max_cloud_percent: 60
-        ndvi: {min: -0.2, max: 0.9, palette: ["#000000"]}
         render: {fps: 4, scale: 20, dimensions: 768}
     """)
     with pytest.raises(ConfigError):
@@ -59,12 +59,9 @@ def test_from_yaml_loads_valid_config(tmp_path):
         start: "2022-01-01"
         end: "2023-01-01"
         sensor: sentinel2
+        index: ndvi
         cadence: monthly
         max_cloud_percent: 60
-        ndvi:
-          min: -0.2
-          max: 0.9
-          palette: ["#a1622f", "#3b7a2a"]
         render:
           fps: 4
           scale: 20
@@ -75,9 +72,64 @@ def test_from_yaml_loads_valid_config(tmp_path):
     assert cfg.project == "hnee-331218"
     assert cfg.frame_aoi == {"bbox": [13.7, 52.8, 13.9, 52.95]}
     assert cfg.region_aoi == {"bbox": [13.7, 52.8, 13.9, 52.95]}
-    assert cfg.ndvi_min == -0.2 and cfg.ndvi_max == 0.9
+    assert cfg.viz_min == -0.2 and cfg.viz_max == 0.9
+    assert cfg.palette == ["#a1622f", "#e8d9a0", "#3b7a2a"]
     assert cfg.fps == 4 and cfg.dimensions == 768
     assert cfg.out_dir == "out"
+
+
+def test_index_viz_defaults_from_index(tmp_path):
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi: {frame: {bbox: [0,0,1,1]}, region: {bbox: [0,0,1,1]}}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: sentinel2
+        index: ndvi
+        cadence: monthly
+        max_cloud_percent: 60
+        render: {fps: 4, scale: 20, dimensions: 768}
+    """)
+    cfg = RunConfig.from_yaml(p)
+    assert cfg.index == "ndvi"
+    assert cfg.viz_min == -0.2 and cfg.viz_max == 0.9
+    assert cfg.palette == ["#a1622f", "#e8d9a0", "#3b7a2a"]
+
+
+def test_viz_block_overrides_defaults(tmp_path):
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi: {frame: {bbox: [0,0,1,1]}, region: {bbox: [0,0,1,1]}}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: landsat
+        index: lst
+        cadence: monthly
+        max_cloud_percent: 60
+        viz: {min: 5, max: 35, palette: ["#000000", "#ffffff"]}
+        render: {fps: 4, scale: 20, dimensions: 768}
+    """)
+    cfg = RunConfig.from_yaml(p)
+    assert cfg.viz_min == 5 and cfg.viz_max == 35 and cfg.palette == ["#000000", "#ffffff"]
+
+
+def test_rejects_unsupported_sensor_index_pair(tmp_path):
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi: {frame: {bbox: [0,0,1,1]}, region: {bbox: [0,0,1,1]}}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: sentinel2
+        index: lst
+        cadence: monthly
+        max_cloud_percent: 60
+        render: {fps: 4, scale: 20, dimensions: 768}
+    """)
+    with pytest.raises(ConfigError, match="not available"):
+        RunConfig.from_yaml(p)
 
 
 def test_rejects_end_before_start(tmp_path):
@@ -90,31 +142,12 @@ def test_rejects_end_before_start(tmp_path):
         start: "2023-01-01"
         end: "2022-01-01"
         sensor: sentinel2
+        index: ndvi
         cadence: monthly
         max_cloud_percent: 60
-        ndvi: {min: -0.2, max: 0.9, palette: ["#000000"]}
         render: {fps: 4, scale: 20, dimensions: 768}
     """)
     with pytest.raises(ConfigError, match="end.*after.*start"):
-        RunConfig.from_yaml(p)
-
-
-def test_rejects_unsupported_sensor(tmp_path):
-    p = _write(tmp_path, """
-        name: t
-        project: p
-        aoi:
-          frame: {bbox: [0, 0, 1, 1]}
-          region: {bbox: [0, 0, 1, 1]}
-        start: "2022-01-01"
-        end: "2023-01-01"
-        sensor: modis
-        cadence: monthly
-        max_cloud_percent: 60
-        ndvi: {min: -0.2, max: 0.9, palette: ["#000000"]}
-        render: {fps: 4, scale: 20, dimensions: 768}
-    """)
-    with pytest.raises(ConfigError, match="sensor"):
         RunConfig.from_yaml(p)
 
 
@@ -128,16 +161,16 @@ def test_rejects_unsupported_cadence(tmp_path):
         start: "2022-01-01"
         end: "2023-01-01"
         sensor: sentinel2
+        index: ndvi
         cadence: weekly
         max_cloud_percent: 60
-        ndvi: {min: -0.2, max: 0.9, palette: ["#000000"]}
         render: {fps: 4, scale: 20, dimensions: 768}
     """)
     with pytest.raises(ConfigError, match="cadence"):
         RunConfig.from_yaml(p)
 
 
-def test_rejects_ndvi_max_not_greater_than_min(tmp_path):
+def test_rejects_viz_max_not_greater_than_min(tmp_path):
     p = _write(tmp_path, """
         name: t
         project: p
@@ -147,12 +180,13 @@ def test_rejects_ndvi_max_not_greater_than_min(tmp_path):
         start: "2022-01-01"
         end: "2023-01-01"
         sensor: sentinel2
+        index: ndvi
         cadence: monthly
         max_cloud_percent: 60
-        ndvi: {min: 0.9, max: 0.9, palette: ["#000000"]}
+        viz: {min: 0.9, max: 0.9, palette: ["#000000"]}
         render: {fps: 4, scale: 20, dimensions: 768}
     """)
-    with pytest.raises(ConfigError, match="ndvi.max"):
+    with pytest.raises(ConfigError, match="viz.max"):
         RunConfig.from_yaml(p)
 
 
@@ -166,9 +200,10 @@ def test_rejects_empty_palette(tmp_path):
         start: "2022-01-01"
         end: "2023-01-01"
         sensor: sentinel2
+        index: ndvi
         cadence: monthly
         max_cloud_percent: 60
-        ndvi: {min: -0.2, max: 0.9, palette: []}
+        viz: {min: -0.2, max: 0.9, palette: []}
         render: {fps: 4, scale: 20, dimensions: 768}
     """)
     with pytest.raises(ConfigError, match="palette"):
@@ -190,9 +225,9 @@ def test_from_yaml_loads_two_aois(tmp_path):
         start: "2022-01-01"
         end: "2023-01-01"
         sensor: sentinel2
+        index: ndvi
         cadence: monthly
         max_cloud_percent: 60
-        ndvi: {min: -0.2, max: 0.9, palette: ["#000000", "#ffffff"]}
         render: {fps: 4, scale: 20, dimensions: 768}
     """)
     cfg = RunConfig.from_yaml(p)
@@ -211,9 +246,9 @@ def test_region_max_cloud_percent_defaults_to_10(tmp_path):
         start: "2022-01-01"
         end: "2023-01-01"
         sensor: sentinel2
+        index: ndvi
         cadence: monthly
         max_cloud_percent: 60
-        ndvi: {min: -0.2, max: 0.9, palette: ["#000000"]}
         render: {fps: 4, scale: 20, dimensions: 768}
     """)
     assert RunConfig.from_yaml(p).region_max_cloud_percent == 10
@@ -229,9 +264,9 @@ def test_rejects_missing_frame_or_region(tmp_path):
         start: "2022-01-01"
         end: "2023-01-01"
         sensor: sentinel2
+        index: ndvi
         cadence: monthly
         max_cloud_percent: 60
-        ndvi: {min: -0.2, max: 0.9, palette: ["#000000"]}
         render: {fps: 4, scale: 20, dimensions: 768}
     """)
     with pytest.raises(ConfigError, match="frame"):
@@ -249,9 +284,9 @@ def test_rejects_region_cloud_percent_out_of_range(tmp_path):
         start: "2022-01-01"
         end: "2023-01-01"
         sensor: sentinel2
+        index: ndvi
         cadence: monthly
         max_cloud_percent: 60
-        ndvi: {min: -0.2, max: 0.9, palette: ["#000000"]}
         render: {fps: 4, scale: 20, dimensions: 768}
     """)
     with pytest.raises(ConfigError, match="region_max_cloud_percent"):

@@ -7,7 +7,8 @@ from pathlib import Path
 
 import yaml
 
-SUPPORTED_SENSORS = {"sentinel2"}
+from .products import INDICES, get_product
+
 SUPPORTED_CADENCES = {"monthly"}
 
 
@@ -24,11 +25,12 @@ class RunConfig:
     start: str
     end: str
     sensor: str
+    index: str
     cadence: str
     max_cloud_percent: float
     region_max_cloud_percent: float
-    ndvi_min: float
-    ndvi_max: float
+    viz_min: float
+    viz_max: float
     palette: list[str]
     fps: int
     scale: float
@@ -40,9 +42,13 @@ class RunConfig:
     def from_yaml(cls, path: str | Path) -> "RunConfig":
         raw = yaml.safe_load(Path(path).read_text()) or {}
         try:
-            ndvi = raw["ndvi"]
             render = raw["render"]
             aoi = raw["aoi"] or {}
+            sensor = str(raw["sensor"])
+            index = str(raw.get("index", "ndvi"))
+            viz = dict(raw.get("viz") or {})
+            spec = INDICES.get(index)
+            d_min, d_max, d_pal = spec.default_viz if spec else (0.0, 1.0, ["#000000", "#ffffff"])
             cfg = cls(
                 name=str(raw["name"]),
                 project=str(raw["project"]),
@@ -50,13 +56,14 @@ class RunConfig:
                 region_aoi=dict(aoi["region"] or {}),
                 start=str(raw["start"]),
                 end=str(raw["end"]),
-                sensor=str(raw["sensor"]),
+                sensor=sensor,
+                index=index,
                 cadence=str(raw["cadence"]),
                 max_cloud_percent=float(raw["max_cloud_percent"]),
                 region_max_cloud_percent=float(aoi.get("region_max_cloud_percent", 10)),
-                ndvi_min=float(ndvi["min"]),
-                ndvi_max=float(ndvi["max"]),
-                palette=list(ndvi["palette"]),
+                viz_min=float(viz.get("min", d_min)),
+                viz_max=float(viz.get("max", d_max)),
+                palette=list(viz.get("palette", d_pal)),
                 fps=int(render["fps"]),
                 scale=float(render["scale"]),
                 dimensions=int(render["dimensions"]),
@@ -69,10 +76,10 @@ class RunConfig:
         return cfg
 
     def validate(self) -> None:
-        if self.sensor not in SUPPORTED_SENSORS:
-            raise ConfigError(
-                f"unsupported sensor {self.sensor!r}; supported: {sorted(SUPPORTED_SENSORS)}"
-            )
+        try:
+            get_product(self.sensor, self.index)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
         if self.cadence not in SUPPORTED_CADENCES:
             raise ConfigError(
                 f"unsupported cadence {self.cadence!r}; supported: {sorted(SUPPORTED_CADENCES)}"
@@ -91,7 +98,7 @@ class RunConfig:
             raise ConfigError(f"start/end must be ISO dates: {exc}") from exc
         if end <= start:
             raise ConfigError(f"end ({self.end}) must be after start ({self.start})")
-        if self.ndvi_max <= self.ndvi_min:
-            raise ConfigError("ndvi.max must be greater than ndvi.min")
+        if self.viz_max <= self.viz_min:
+            raise ConfigError("viz.max must be greater than viz.min")
         if not self.palette:
-            raise ConfigError("ndvi.palette must be non-empty")
+            raise ConfigError("viz.palette must be non-empty")
