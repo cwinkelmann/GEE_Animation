@@ -37,6 +37,18 @@ def test_assemble_writes_gif_and_mp4(tmp_path):
     assert all(p.exists() for p in paths)
 
 
+def test_assemble_encodes_mp4_for_odd_dimension_frames(tmp_path):
+    # libx264 requires even width AND height; frames from arbitrary AOIs are
+    # often odd (e.g. 768x577). The MP4 must still be produced, not dropped.
+    cfg = _cfg(tmp_path)
+    frames = [np.zeros((15, 16, 3), np.uint8), np.full((15, 16, 3), 200, np.uint8)]
+    paths = assemble(frames, cfg)
+    suffixes = {p.suffix for p in paths}
+    assert ".mp4" in suffixes, "MP4 should be produced for odd-dimension frames"
+    mp4 = next(p for p in paths if p.suffix == ".mp4")
+    assert mp4.exists() and mp4.stat().st_size > 0
+
+
 def test_assemble_falls_back_to_gif_when_mp4_fails(tmp_path, monkeypatch):
     import gee_animation.render as r
     cfg = _cfg(tmp_path)

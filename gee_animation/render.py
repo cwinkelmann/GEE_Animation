@@ -80,8 +80,22 @@ def annotate(rgb: np.ndarray, label: str) -> np.ndarray:
     return np.asarray(img)
 
 
+def _pad_to_even(frame: np.ndarray) -> np.ndarray:
+    """Pad a frame's width/height up to the next even number (edge-replicated).
+
+    libx264 requires both dimensions to be even; AOIs frequently yield an odd
+    width or height (e.g. 768x577). Padding by at most 1px avoids rescaling the
+    whole frame (and imageio's resize warning).
+    """
+    h, w = frame.shape[:2]
+    if h % 2 or w % 2:
+        frame = np.pad(frame, ((0, h % 2), (0, w % 2), (0, 0)), mode="edge")
+    return frame
+
+
 def _write_mp4(path: Path, frames: list[np.ndarray], fps: int) -> None:
-    imageio.mimsave(path, frames, fps=fps, macro_block_size=None)
+    even = [_pad_to_even(f) for f in frames]
+    imageio.mimsave(path, even, fps=fps, macro_block_size=1)
 
 
 def _write_gif(path: Path, frames: list[np.ndarray], fps: int) -> None:
