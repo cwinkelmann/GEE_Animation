@@ -73,27 +73,63 @@ def test_add_ndvi_adds_named_ndvi_band():
     assert result == "image_with_ndvi"
 
 
-def test_build_applies_collection_id_filters_and_two_maps_in_order():
+def test_add_region_cloud_fraction_sets_property():
+    rec = {"selected": None, "remap": None, "reduce": None, "prop": None}
+
+    class FakeReduced:
+        def get(self, k): rec["reduce_get"] = k; return "FRAC"
+
+    class FakeCloud:
+        def rename(self, n): return self
+        def reduceRegion(self, **kw): rec["reduce"] = kw; return FakeReduced()
+
+    class FakeSCL:
+        def remap(self, frm, to, default):
+            rec["remap"] = (frm, to, default); return FakeCloud()
+
+    class FakeImg:
+        def select(self, n): rec["selected"] = n; return FakeSCL()
+        def set(self, k, v): rec["prop"] = (k, v); return "img+frac"
+
+    ee_fake = types.SimpleNamespace(Reducer=types.SimpleNamespace(mean=lambda: "MEAN"))
+    out = C.add_region_cloud_fraction(FakeImg(), "REGION", 20, ee_module=ee_fake)
+    assert rec["selected"] == "SCL"
+    assert rec["remap"][0] == [3, 8, 9, 10, 11] and rec["remap"][2] == 0
+    assert rec["reduce"]["geometry"] == "REGION" and rec["reduce"]["scale"] == 20
+    assert rec["prop"] == ("region_cloud_fraction", "FRAC")
+    assert out == "img+frac"
+
+
+def test_build_filters_region_cloud_before_masking():
     calls = []
 
     class FakeColl:
-        def filterDate(self, s, e):
-            calls.append(("filterDate", s, e)); return self
-        def filterBounds(self, g):
-            calls.append(("filterBounds", g)); return self
-        def filter(self, f):
-            calls.append(("filter", f)); return self
-        def map(self, fn):
-            calls.append(("map",)); return self
+        def filterDate(self, s, e): calls.append(("filterDate", s, e)); return self
+        def filterBounds(self, g): calls.append(("filterBounds", g)); return self
+        def filter(self, f): calls.append(("filter", f)); return self
+        def map(self, fn): calls.append(("map",)); return self
 
-    ee = types.SimpleNamespace(
+    ee_fake = types.SimpleNamespace(
         ImageCollection=lambda cid: (calls.append(("ImageCollection", cid)) or FakeColl()),
-        Filter=types.SimpleNamespace(lte=lambda name, val: ("lte", name, val)),
+        Filter=types.SimpleNamespace(
+            lte=lambda name, val: ("lte", name, val),
+            lt=lambda name, val: ("lt", name, val),
+        ),
     )
-    cfg = types.SimpleNamespace(start="2022-01-01", end="2022-02-01", max_cloud_percent=60)
-    C.build(cfg, "GEOM", ee_module=ee)
+    cfg = types.SimpleNamespace(
+        start="2022-01-01", end="2022-02-01",
+        max_cloud_percent=60, region_max_cloud_percent=10, scale=20,
+    )
+    C.build(cfg, "FRAME", "REGION", ee_module=ee_fake)
+    names = [c[0] for c in calls]
+    # ImageCollection, filterDate, filterBounds, filter(lte), map(frac), filter(lt), map(mask), map(ndvi)
     assert calls[0] == ("ImageCollection", "COPERNICUS/S2_SR_HARMONIZED")
-    assert ("filterDate", "2022-01-01", "2022-02-01") in calls
-    assert ("filterBounds", "GEOM") in calls
+    assert ("filterBounds", "FRAME") in calls
     assert ("filter", ("lte", "CLOUDY_PIXEL_PERCENTAGE", 60)) in calls
-    assert [c for c in calls if c[0] == "map"] == [("map",), ("map",)]
+    assert ("filter", ("lt", "region_cloud_fraction", 0.1)) in calls
+    # region-fraction filter (lt) must come before the mask map:
+    assert names.count("map") == 3
+    # order: the lt filter precedes the 2nd map (mask)
+    idx_lt = next(i for i, c in enumerate(calls) if c == ("filter", ("lt", "region_cloud_fraction", 0.1)))
+    idx_maps = [i for i, c in enumerate(calls) if c == ("map",)]
+    assert idx_maps[0] < idx_lt < idx_maps[1] < idx_maps[2]

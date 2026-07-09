@@ -21,12 +21,27 @@ def add_ndvi(image, ee_module=ee):
     return image.addBands(ndvi)
 
 
-def build(cfg, geometry, ee_module=ee):
+def add_region_cloud_fraction(image, region, scale, ee_module=ee):
+    scl = image.select("SCL")
+    cloud = scl.remap(_SCL_MASK_CLASSES, [1] * len(_SCL_MASK_CLASSES), 0).rename("cloud")
+    frac = cloud.reduceRegion(
+        reducer=ee_module.Reducer.mean(),
+        geometry=region,
+        scale=scale,
+        bestEffort=True,
+        maxPixels=int(1e9),
+    ).get("cloud")
+    return image.set("region_cloud_fraction", frac)
+
+
+def build(cfg, frame_geom, region_geom, ee_module=ee):
     coll = (
         ee_module.ImageCollection(S2_COLLECTION)
         .filterDate(cfg.start, cfg.end)
-        .filterBounds(geometry)
+        .filterBounds(frame_geom)
         .filter(ee_module.Filter.lte("CLOUDY_PIXEL_PERCENTAGE", cfg.max_cloud_percent))
+        .map(lambda img: add_region_cloud_fraction(img, region_geom, cfg.scale, ee_module))
+        .filter(ee_module.Filter.lt("region_cloud_fraction", cfg.region_max_cloud_percent / 100.0))
         .map(lambda img: mask_s2_clouds(img, ee_module))
         .map(lambda img: add_ndvi(img, ee_module))
     )
