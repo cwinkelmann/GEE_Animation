@@ -3,12 +3,12 @@ name: wne_ndvi              # output basename -> out/wne_ndvi.mp4 / .gif
 project: hnee-331218        # Google Earth Engine project id
 
 aoi:
+  # AOIs accept bbox, geojson (inline dict or path), or shapefile (auto-reprojected
+  # to EPSG:4326; needs the `shapefile` extra: pip install -e ".[shapefile]").
   frame:                         # rectangle -> animation extent (aspect ratio preserved)
-    # WNE frame extent (from docs/aoi/wne/frame_timelaps_wne.shp, reprojected to EPSG:4326)
-    bbox: [13.82875, 52.94633, 13.96356, 53.02769]   # [minLon, minLat, maxLon, maxLat]
+    shapefile: docs/aoi/wne/frame_timelaps_wne.shp
   region:                        # polygon -> important region (cloud-filtered + outlined)
-    # Grumsin world-heritage beech forest polygon (docs/aoi/wne/wne.shp reprojected to EPSG:4326)
-    geojson: docs/aoi/wne/wne.geojson   # file path (or inline GeoJSON)
+    shapefile: docs/aoi/wne/wne.shp    # Grumsin world-heritage beech forest polygon
   region_max_cloud_percent: 10   # keep scenes only if cloud over the region < 10%
 
 start: "2022-05-01"         # inclusive
