@@ -57,6 +57,22 @@ Any reflectance index (`ndvi`, `evi`, `ndwi`, `ndmi`) runs on any sensor —
 copy a config and change `sensor:` / `index:` (see Configuration). `lst` is
 Landsat-only.
 
+## GUI (Gradio)
+
+A simple web UI over the same pipeline — no config file needed:
+
+```bash
+pip install -e ".[gui,shapefile]"    # gradio (+ geopandas for shapefile uploads)
+earthengine authenticate             # one-time
+gee-animation-gui                     # or: python -m gee_animation.gui
+```
+
+Then in the browser: **upload an AOI** (GeoJSON or a zipped shapefile — this is
+the cloud-filtered region), set a **frame buffer in metres** (the animation
+extent is the AOI's bounding box expanded by this), pick a **sensor** and
+**index** (choices update per sensor), a **date range** and cloud threshold, and
+click *Generate*. The MP4 plays inline with a GIF download.
+
 ## Configuration
 
 See `config.example.yaml` (Sentinel-2 NDVI) or `config.lst.example.yaml` (Landsat LST). Key fields:
