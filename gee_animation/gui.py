@@ -25,8 +25,13 @@ DEFAULT_DEPS = types.SimpleNamespace(
     build=collection.build,
     monthly_median=compositing.monthly_median,
     render=render.render,
-    timeseries=charts.region_timeseries,
+    timeseries=charts.inside_outside_timeseries,
 )
+
+
+def _mean(values):
+    vals = [v for v in values if v is not None]
+    return sum(vals) / len(vals) if vals else None
 
 # MODIS is 500 m; the optical/thermal sensors are 30 m — pick the thumbnail scale.
 _SCALE = {"modis": 500}
@@ -106,7 +111,8 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
     paths = deps.render(frames, cfg, geometry=frame_geom)
     mp4 = next((str(p) for p in paths if str(p).endswith(".mp4")), None)
     gif = next((str(p) for p in paths if str(p).endswith(".gif")), None)
-    series = deps.timeseries(frames, region_geom, cfg.scale)   # [(month, value)] over the region
+    # [(month, inside, outside)] — index mean inside the AOI vs the surrounding frame
+    series = deps.timeseries(frames, region_geom, frame_geom, cfg.scale)
     n_months = len(month_starts(str(start), str(end)))
     dropped = n_months - len(frames)
     status = (f"Rendered {len(frames)} of {n_months} months as {sensor} {index.upper()} "
@@ -115,6 +121,11 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
         status += (f" {dropped} month(s) had no scene under the "
                    f"{float(region_max_cloud_percent):g}% region-cloud filter — "
                    f"raise it for more frames.")
+    inside_mean = _mean(row[1] for row in series)
+    outside_mean = _mean(row[2] for row in series)
+    if inside_mean is not None and outside_mean is not None:
+        status += (f" Mean {index.upper()} — inside AOI {inside_mean:.3f}, "
+                   f"outside {outside_mean:.3f} (Δ {inside_mean - outside_mean:+.3f}).")
     return mp4, gif, status, series
 
 
@@ -156,9 +167,9 @@ def build_app():
             with gr.Column():
                 video = gr.Video(label="Animation (MP4)")
                 gif = gr.File(label="Animation (GIF, download)")
-                chart = gr.LinePlot(x="month", y="value", x_title="Month",
-                                    y_title="Index (region mean)",
-                                    title="Region time-series", height=260)
+                chart = gr.LinePlot(x="month", y="value", color="area", x_title="Month",
+                                    y_title="Index (mean)",
+                                    title="Inside vs outside the AOI", height=280)
                 status = gr.Markdown()
 
         # Keep the index choices in sync with the selected sensor.
@@ -176,8 +187,13 @@ def build_app():
                     aoi_path=aoi_file, buffer_m=buffer_m, sensor=sensor, index=index,
                     start=start, end=end, region_max_cloud_percent=region_cloud,
                     fps=fps, dimensions=dims, project=project)
-                df = pd.DataFrame([(m, v) for m, v in series if v is not None],
-                                  columns=["month", "value"])
+                rows = []
+                for month, inside, outside in series:
+                    if inside is not None:
+                        rows.append((month, inside, "inside AOI"))
+                    if outside is not None:
+                        rows.append((month, outside, "outside AOI"))
+                df = pd.DataFrame(rows, columns=["month", "value", "area"])
                 progress(1.0, desc="Done")
                 return mp4, gif_path, msg, df
             except Exception as exc:   # surface a friendly message in the UI

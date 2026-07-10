@@ -1,10 +1,16 @@
 import types
 
-from gee_animation.charts import region_timeseries
+from gee_animation.charts import inside_outside_timeseries
 
 
-def test_region_timeseries_reduces_index_band_per_frame():
-    rec = []
+def _fake_ee():
+    return types.SimpleNamespace(
+        Reducer=types.SimpleNamespace(mean=lambda: "MEAN", median=lambda: "MED"))
+
+
+def _frames(values_by_geom):
+    """Frames whose INDEX band returns a value keyed by the reduce geometry."""
+    calls = []
 
     class FakeReduced:
         def __init__(self, v): self.v = v
@@ -13,34 +19,36 @@ def test_region_timeseries_reduces_index_band_per_frame():
             return types.SimpleNamespace(getInfo=lambda: self.v)
 
     class FakeBand:
-        def __init__(self, v): self.v = v
-        def reduceRegion(self, **kw): rec.append(kw); return FakeReduced(self.v)
+        def reduceRegion(self, **kw):
+            calls.append(kw)
+            return FakeReduced(values_by_geom.get(kw["geometry"]))
 
     class FakeImg:
-        def __init__(self, v): self.v = v
-        def select(self, band): assert band == "INDEX"; return FakeBand(self.v)
+        def select(self, band): assert band == "INDEX"; return FakeBand()
 
-    frames = [types.SimpleNamespace(label="2022-05", image=FakeImg(0.5)),
-              types.SimpleNamespace(label="2022-06", image=FakeImg(0.7))]
-    ee = types.SimpleNamespace(
-        Reducer=types.SimpleNamespace(mean=lambda: "MEAN", median=lambda: "MED"))
-
-    out = region_timeseries(frames, "REGION", 30, reducer="mean", ee_module=ee)
-    assert out == [("2022-05", 0.5), ("2022-06", 0.7)]
-    assert rec[0]["reducer"] == "MEAN" and rec[0]["geometry"] == "REGION"
-    assert rec[0]["scale"] == 30 and rec[0]["bestEffort"] is True
+    return FakeImg(), calls
 
 
-def test_region_timeseries_median_reducer_and_none_value():
-    class FakeReduced:
-        def get(self, band): return types.SimpleNamespace(getInfo=lambda: None)
-    class FakeBand:
-        def reduceRegion(self, **kw): FakeBand.kw = kw; return FakeReduced()
-    class FakeImg:
-        def select(self, band): return FakeBand()
-    frames = [types.SimpleNamespace(label="2022-05", image=FakeImg())]
-    ee = types.SimpleNamespace(
-        Reducer=types.SimpleNamespace(mean=lambda: "MEAN", median=lambda: "MED"))
-    out = region_timeseries(frames, "REGION", 30, reducer="median", ee_module=ee)
-    assert out == [("2022-05", None)]          # empty region -> None value
-    assert FakeBand.kw["reducer"] == "MED"
+def test_inside_outside_reduces_region_and_frame_minus_region():
+    class FrameGeom:
+        def difference(self, region): FrameGeom.diff = region; return "OUTSIDE"
+    frame_geom = FrameGeom()
+    img, calls = _frames({"REGION": 0.8, "OUTSIDE": 0.55})
+    frames = [types.SimpleNamespace(label="2022-05", image=img)]
+    out = inside_outside_timeseries(frames, "REGION", frame_geom, 30, ee_module=_fake_ee())
+    assert out == [("2022-05", 0.8, 0.55)]              # inside > outside (forest vs surroundings)
+    assert FrameGeom.diff == "REGION"                    # outside = frame.difference(region)
+    assert calls[0]["reducer"] == "MEAN" and calls[0]["scale"] == 30
+    geoms = [c["geometry"] for c in calls]
+    assert geoms == ["REGION", "OUTSIDE"]                # inside then outside, per frame
+
+
+def test_inside_outside_median_and_none_values():
+    class FrameGeom:
+        def difference(self, region): return "OUTSIDE"
+    img, calls = _frames({"REGION": None, "OUTSIDE": 0.3})
+    frames = [types.SimpleNamespace(label="2022-06", image=img)]
+    out = inside_outside_timeseries(frames, "REGION", FrameGeom(), 30,
+                                    reducer="median", ee_module=_fake_ee())
+    assert out == [("2022-06", None, 0.3)]
+    assert calls[0]["reducer"] == "MED"

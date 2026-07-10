@@ -28,7 +28,7 @@ def _fake_deps(tmp_path, captured, frames=None):
         build=lambda cfg, f, r: (captured.update(cfg=cfg, frame=f, region=r) or "COLL"),
         monthly_median=lambda coll, cfg: frames,
         render=lambda frames_, cfg, geometry=None: [tmp_path / "o.mp4", tmp_path / "o.gif"],
-        timeseries=lambda frames_, region, scale: [(f.label, 0.5) for f in frames_],
+        timeseries=lambda frames_, region, frame, scale: [(f.label, 0.8, 0.5) for f in frames_],
     )
 
 
@@ -84,7 +84,9 @@ def test_run_animation_builds_config_and_threads_geometry(tmp_path):
     assert cfg.scale == 30 and cfg.region_max_cloud_percent == 15
     assert mp4.endswith("o.mp4") and gif.endswith("o.gif")
     assert "Rendered 2 of 2 months" in status                 # May + June both rendered
-    assert series == [("2022-05", 0.5), ("2022-06", 0.5)]     # region time-series
+    assert series == [("2022-05", 0.8, 0.5), ("2022-06", 0.8, 0.5)]   # (month, inside, outside)
+    # inside/outside summary appended to the status
+    assert "inside AOI 0.800" in status and "outside 0.500" in status and "+0.300" in status
 
 
 def test_run_animation_status_reports_dropped_months(tmp_path):
