@@ -31,38 +31,48 @@ per month (`out/<name>_<YYYY-MM>.png`) so single frames can be reused on their o
 
 ## Generate each index animation
 
-Ready-to-run example configs (WNE AOI) live at the repo root. Each writes
-`out/<name>.mp4` + `.gif`:
+Ready-to-run example configs (WNE AOI) live at the repo root. Run each with
+`gee-animation --config <file>`; each writes `out/<basename>.mp4`, `.gif`, and one
+PNG per month. Bands below are canonical roles (NIR/Red/Green/Blue/SWIR1/Thermal)
+— each sensor maps them to its own bands (e.g. Sentinel-2 NIR = B8, Red = B4).
 
-| Index | Sensor      | Command                                            | Output basename   |
-|-------|-------------|----------------------------------------------------|-------------------|
-| NDVI  | Sentinel-2  | `gee-animation --config config.example.yaml`       | `wne_ndvi`        |
-| EVI   | Sentinel-2  | `gee-animation --config config.evi.example.yaml`   | `wne_evi`         |
-| NDWI  | Sentinel-2  | `gee-animation --config config.ndwi.example.yaml`  | `wne_ndwi`        |
-| NDMI  | Sentinel-2  | `gee-animation --config config.ndmi.example.yaml`  | `wne_ndmi`        |
-| LST   | Landsat     | `gee-animation --config config.lst.example.yaml`   | `wne_lst`         |
-| LST (SMW) | Landsat | `gee-animation --config config.lst_smw.example.yaml` | `wne_lst_smw`   |
-| ECOSTRESS | Landsat | `gee-animation --config config.ecostress.example.yaml` | `wne_ecostress` |
-| NDVI  | MODIS       | `gee-animation --config config.modis.example.yaml` | `wne_modis_ndvi`  |
+| Index | Sensor | How the value is calculated | Config (basename) |
+|-------|--------|-----------------------------|-------------------|
+| NDVI  | Sentinel-2 | `(NIR − Red) / (NIR + Red)` — vegetation greenness | `config.example.yaml` (`wne_ndvi`) |
+| EVI   | Sentinel-2 | `2.5·(NIR − Red) / (NIR + 6·Red − 7.5·Blue + 1)` — enhanced vegetation | `config.evi.example.yaml` (`wne_evi`) |
+| NDWI  | Sentinel-2 | `(Green − NIR) / (Green + NIR)` — open water (McFeeters) | `config.ndwi.example.yaml` (`wne_ndwi`) |
+| NDMI  | Sentinel-2 | `(NIR − SWIR1) / (NIR + SWIR1)` — canopy/soil moisture | `config.ndmi.example.yaml` (`wne_ndmi`) |
+| RGB   | any | true colour composite: R=Red, G=Green, B=Blue | `config.rgb.example.yaml` (`wne_rgb`) |
+| CIR   | any | false-colour infrared: R←NIR, G←Red, B←Green (vegetation reads red) | `config.cir.example.yaml` (`wne_cir`) |
+| LST   | Landsat | `ST_B × 0.00341802 + 149.0 − 273.15` °C — USGS C2 L2 ST band | `config.lst.example.yaml` (`wne_lst`) |
+| LST (SMW) | Landsat | `A·Tb/ε + B/ε + C` — Ermida (2020) Statistical Mono-Window from TOA brightness temp, ASTER-GED emissivity ε, NCEP water vapour | `config.lst_smw.example.yaml` (`wne_lst_smw`) |
+| ECOSTRESS | Landsat | `LST − 16·(NDVI − NDVI₁₀₀ₘ)` — NDVI-sharpened LST (approximation) | `config.ecostress.example.yaml` (`wne_ecostress`) |
+| NDVI  | MODIS | `(NIR − Red) / (NIR + Red)` on MOD09A1 (500 m) | `config.modis.example.yaml` (`wne_modis_ndvi`) |
 
 Two Landsat LST methods are available: `lst` = the USGS Collection-2 Level-2
 Surface Temperature product (the pre-computed `ST_B*` band); `lst_smw` = the
-Statistical Mono-Window algorithm of **Ermida et al. (2020)**, derived from TOA
-brightness temperature + ASTER-GED emissivity + NCEP water vapour. Both output °C
-and typically agree within ~1–3 K. (`ecostress` = NDVI-sharpened Landsat LST — an
+Statistical Mono-Window algorithm of **Ermida et al. (2020)**. Both output °C and
+typically agree within ~1–3 K. (`ecostress` = NDVI-sharpened Landsat LST — an
 approximation, since real ECOSTRESS data isn't in Earth Engine.)
+
+Every frame is annotated: an info bar (top) with the formula and bands used, a
+value colorbar (indices only), the region outline, a ground-distance scale bar,
+and the month.
+
+![Example NDVI frame over the WNE / Grumsin beech-forest AOI](docs/images/example_ndvi.png)
 
 Generate them all in one go:
 
 ```bash
-for c in example evi.example ndwi.example ndmi.example lst.example ecostress.example modis.example; do
+for c in example evi.example ndwi.example ndmi.example rgb.example cir.example \
+         lst.example lst_smw.example ecostress.example modis.example; do
   gee-animation --config "config.$c.yaml"
 done
 ```
 
-Any reflectance index (`ndvi`, `evi`, `ndwi`, `ndmi`) runs on any sensor —
-copy a config and change `sensor:` / `index:` (see Configuration). `lst` is
-Landsat-only.
+Any reflectance product (`ndvi`, `evi`, `ndwi`, `ndmi`, `rgb`, `cir`) runs on any
+sensor — copy a config and change `sensor:` / `index:` (see Configuration). `lst`,
+`lst_smw` and `ecostress` are Landsat-only.
 
 ## GUI (Gradio)
 
