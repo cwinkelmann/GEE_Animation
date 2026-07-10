@@ -76,8 +76,20 @@ def test_run_animation_builds_config_and_threads_geometry(tmp_path):
     assert cfg.viz_min == -0.2 and cfg.viz_max == 0.9          # NDVI default viz
     assert cfg.scale == 30 and cfg.region_max_cloud_percent == 15
     assert mp4.endswith("o.mp4") and gif.endswith("o.gif")
-    assert "Rendered 2 monthly" in status
+    assert "Rendered 2 of 2 months" in status                 # May + June both rendered
     assert series == [("2022-05", 0.5), ("2022-06", 0.5)]     # region time-series
+
+
+def test_run_animation_status_reports_dropped_months(tmp_path):
+    # 4-month range but only 2 frames -> status flags the 2 dropped (cloud-filtered) months
+    aoi = _write_geojson(tmp_path)
+    frames = [types.SimpleNamespace(label="2022-05"), types.SimpleNamespace(label="2022-08")]
+    _, _, status, _ = gui.run_animation(
+        aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
+        start="2022-05-01", end="2022-09-01", region_max_cloud_percent=10,
+        out_dir=str(tmp_path), deps=_fake_deps(tmp_path, {}, frames=frames))
+    assert "Rendered 2 of 4 months" in status
+    assert "2 month(s) had no scene" in status and "10%" in status
 
 
 def test_run_animation_uses_500m_scale_for_modis(tmp_path):

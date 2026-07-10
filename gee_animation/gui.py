@@ -6,12 +6,14 @@ tests) load without the optional `gui` extra.
 """
 from __future__ import annotations
 
+import os
 import tempfile
 import types
 import zipfile
 from pathlib import Path
 
 from . import auth, aoi, charts, collection, compositing, render
+from .compositing import month_starts
 from .config import RunConfig
 from .products import INDICES, SENSORS, get_product
 
@@ -100,8 +102,14 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
     mp4 = next((str(p) for p in paths if str(p).endswith(".mp4")), None)
     gif = next((str(p) for p in paths if str(p).endswith(".gif")), None)
     series = deps.timeseries(frames, region_geom, cfg.scale)   # [(month, value)] over the region
-    status = (f"Rendered {len(frames)} monthly {sensor} {index.upper()} frames "
+    n_months = len(month_starts(str(start), str(end)))
+    dropped = n_months - len(frames)
+    status = (f"Rendered {len(frames)} of {n_months} months as {sensor} {index.upper()} "
               f"({frames[0].label} → {frames[-1].label}).")
+    if dropped > 0:
+        status += (f" {dropped} month(s) had no scene under the "
+                   f"{float(region_max_cloud_percent):g}% region-cloud filter — "
+                   f"raise it for more frames.")
     return mp4, gif, status, series
 
 
@@ -136,7 +144,8 @@ def build_app():
                 with gr.Row():
                     fps = gr.Number(label="Frames per second", value=4)
                     dims = gr.Number(label="Frame size (px)", value=768)
-                project = gr.Textbox(label="Earth Engine project", value="hnee-331218")
+                project = gr.Textbox(label="Earth Engine project",
+                                     value=os.environ.get("EE_PROJECT", "hnee-331218"))
                 go = gr.Button("Generate animation", variant="primary")
             with gr.Column():
                 video = gr.Video(label="Animation (MP4)")

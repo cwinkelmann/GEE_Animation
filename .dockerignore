@@ -1,0 +1,23 @@
+.git
+.gitignore
+.idea
+.claude
+.superpowers
+out/
+venv/
+.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+pytest-of-*/
+notebooks/
+tests/
+docs/
+config*.yaml
+*.zip
+*.json
+# secrets must never be baked into the image — mount them at runtime instead
+**/credentials
+*key*.json

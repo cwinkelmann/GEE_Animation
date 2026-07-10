@@ -75,6 +75,37 @@ click *Generate*. The MP4 plays inline with a GIF download, and a **region
 time-series chart** (the index averaged over the AOI, one point per month) is
 shown alongside it.
 
+## Docker
+
+Run the GUI in a container. **Earth Engine auth is not interactive here** — use a
+Google Cloud **service account** (the `Dockerfile` sets no credentials of its own):
+
+1. In your EE project create a service account, register it for Earth Engine, and
+   download its JSON key (e.g. `ee-key.json`).
+2. Build, then run with the key **mounted at runtime** (never baked into the image):
+
+```bash
+docker build -t gee-timelapse .
+docker run --rm -p 7860:7860 \
+  -v "$PWD/ee-key.json:/secrets/ee-key.json:ro" \
+  -e EE_SERVICE_ACCOUNT_KEY=/secrets/ee-key.json \
+  -e EE_PROJECT=hnee-331218 \
+  gee-timelapse
+```
+
+Open http://localhost:7860. The app binds `0.0.0.0:7860` inside the container
+(via `GRADIO_SERVER_NAME`). `auth.init` reads `EE_SERVICE_ACCOUNT_KEY` (the account
+email is taken from the key; override with `EE_SERVICE_ACCOUNT`) and falls back to
+cached interactive credentials when it's unset.
+
+**Local dev without a service account** — mount your existing credentials instead
+and drop the service-account env vars:
+
+```bash
+docker run --rm -p 7860:7860 \
+  -v "$HOME/.config/earthengine:/root/.config/earthengine:ro" gee-timelapse
+```
+
 ## Configuration
 
 See `config.example.yaml` (Sentinel-2 NDVI) or `config.lst.example.yaml` (Landsat LST). Key fields:
