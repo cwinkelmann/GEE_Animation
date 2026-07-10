@@ -123,7 +123,7 @@ def build_app():
     import gradio as gr
 
     sensors = list(SENSORS)
-    default_sensor = "sentinel2"
+    default_sensor, default_index = "landsat", "lst"
 
     with gr.Blocks(title="GEE Index Timelapse") as app:
         gr.Markdown(
@@ -141,7 +141,7 @@ def build_app():
                     value=DEFAULT_AOI)
                 buffer_m = gr.Number(label="Frame buffer around AOI (metres)", value=1000)
                 sensor = gr.Dropdown(sensors, value=default_sensor, label="Sensor")
-                index = gr.Dropdown(indices_for(default_sensor), value="ndvi", label="Index")
+                index = gr.Dropdown(indices_for(default_sensor), value=default_index, label="Index")
                 with gr.Row():
                     start = gr.Textbox(label="Start (YYYY-MM-DD)", value="2022-05-01")
                     end = gr.Textbox(label="End (YYYY-MM-DD, exclusive)", value="2022-09-01")

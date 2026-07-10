@@ -21,3 +21,5 @@ config*.yaml
 # secrets must never be baked into the image — mount them at runtime instead
 **/credentials
 *key*.json
+
+key/

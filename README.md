@@ -78,16 +78,24 @@ shown alongside it.
 ## Docker
 
 Run the GUI in a container. **Earth Engine auth is not interactive here** — use a
-Google Cloud **service account** (the `Dockerfile` sets no credentials of its own):
+Google Cloud **service account** (the `Dockerfile` ships no credentials of its own).
 
-1. In your EE project create a service account, register it for Earth Engine, and
-   download its JSON key (e.g. `ee-key.json`).
-2. Build, then run with the key **mounted at runtime** (never baked into the image):
+**1. Service account + IAM (one-time).** In the GCP project create a service
+account and download its JSON key into `key/` (git- and docker-ignored). Grant the
+account, on the project, at least:
+
+- `roles/serviceusage.serviceUsageConsumer` — to use the project's APIs, and
+- Earth Engine access — register the account for Earth Engine (or grant an
+  `roles/earthengine.*` role).
+
+Without these you'll see *"Caller does not have required permission to use project…"*.
+
+**2. Build and run** with the key **mounted at runtime** (never baked into the image):
 
 ```bash
 docker build -t gee-timelapse .
 docker run --rm -p 7860:7860 \
-  -v "$PWD/ee-key.json:/secrets/ee-key.json:ro" \
+  -v "$PWD/key/hnee-331218-8b258960ed6c.json:/secrets/ee-key.json:ro" \
   -e EE_SERVICE_ACCOUNT_KEY=/secrets/ee-key.json \
   -e EE_PROJECT=hnee-331218 \
   gee-timelapse
