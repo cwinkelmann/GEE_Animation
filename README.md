@@ -80,34 +80,11 @@ shown alongside it.
 Run the GUI in a container. Earth Engine auth is **not** interactive here, so use a
 Google Cloud **service account** (the image ships no credentials of its own).
 
-### 1. Create the service account and grant roles (one-time)
+### 1. Service account (one-time)
 
-The project must be **registered for Earth Engine**
-(https://console.cloud.google.com/earth-engine). Then, using `gcloud` (or the
-Cloud Console equivalents):
-
-```bash
-PROJECT=hnee-331218
-gcloud iam service-accounts create gee-animation --project="$PROJECT" \
-  --display-name="GEE Animation"
-SA="gee-animation@$PROJECT.iam.gserviceaccount.com"
-
-# use the project's APIs
-gcloud projects add-iam-policy-binding "$PROJECT" \
-  --member="serviceAccount:$SA" --role="roles/serviceusage.serviceUsageConsumer"
-# Earth Engine read AND rendering (getThumbURL needs earthengine.thumbnails.create,
-# which `writer` includes and `viewer` does not)
-gcloud projects add-iam-policy-binding "$PROJECT" \
-  --member="serviceAccount:$SA" --role="roles/earthengine.writer"
-
-# download a JSON key into key/ (git- and docker-ignored)
-mkdir -p key
-gcloud iam service-accounts keys create key/ee-key.json --iam-account="$SA"
-```
-
-Missing roles surface as staged errors: *"…required permission to use project…"*
-(no `serviceUsageConsumer`) → then *"earthengine.thumbnails.create denied"* (no
-`writer`).
+Create the service account, grant it `serviceUsageConsumer` + `earthengine.writer`,
+and download a key — see **[Service Account Setup](#service-account-setup)**. That
+leaves the key at `key/ee-key.json`, used below.
 
 ### 2. Build
 
@@ -206,13 +183,48 @@ pytest -m "not integration"          # fast unit tests (no network)
 GEE_INTEGRATION=1 pytest -m integration   # live EE test (needs auth)
 ```
 
+## Service Account Setup
 
+For headless / containerized use (see [Docker](#docker)) Earth Engine
+authenticates via a Google Cloud **service account** instead of the interactive
+`earthengine authenticate` flow.
 
-### Service Account Setup
+**Prerequisite:** the project must be registered for Earth Engine
+(https://console.cloud.google.com/earth-engine).
 
+Create the account, grant the two required roles, and download a key (with
+`gcloud`, or the Cloud Console equivalents):
+
+```bash
+PROJECT=hnee-331218
+gcloud iam service-accounts create gee-animation --project="$PROJECT" \
+  --display-name="GEE Animation"
+SA="gee-animation@$PROJECT.iam.gserviceaccount.com"
+
+# 1) use the project's APIs
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="serviceAccount:$SA" --role="roles/serviceusage.serviceUsageConsumer"
+
+# 2) Earth Engine read + rendering — getThumbURL needs earthengine.thumbnails.create,
+#    which `writer` includes and `viewer` does not
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="serviceAccount:$SA" --role="roles/earthengine.writer"
+
+# 3) download a JSON key into key/ (git- and docker-ignored)
+mkdir -p key
+gcloud iam service-accounts keys create key/ee-key.json --iam-account="$SA"
 ```
-cloud projects add-iam-policy-binding hnee-331218 --member="serviceAccount:gee-animation@hnee-331218.iam.gserviceaccount.com" --role="roles/serviceusage.serviceUsageConsumer"
 
+Point `EE_SERVICE_ACCOUNT_KEY` at the key and `auth.init` uses it automatically
+(the account email is read from the key; override with `EE_SERVICE_ACCOUNT`).
+Verify from the shell:
 
-gcloud projects add-iam-policy-binding hnee-331218 --member="serviceAccount:gee-animation@hnee-331218.iam.gserviceaccount.com"  --role="roles/earthengine.writer"
+```bash
+EE_SERVICE_ACCOUNT_KEY=key/ee-key.json python -c \
+  "from gee_animation import auth; import ee; auth.init('hnee-331218'); print('EE ok:', ee.Number(1).getInfo())"
 ```
+
+The roles map to the pipeline stages you hit in order — missing ones surface as
+staged errors: *"…required permission to use project…"* (no
+`serviceUsageConsumer`) → then *"earthengine.thumbnails.create denied"* (no
+`writer`, which is needed to render frames).
