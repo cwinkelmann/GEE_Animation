@@ -20,11 +20,16 @@ def add_region_cloud_fraction(image, region, scale, cloud_band, ee_module=ee):
 
 def build(cfg, frame_geom, region_geom, ee_module=ee):
     sensor, index = get_product(cfg.sensor, cfg.index)
-    coll = (
-        sensor.collection(ee_module)
-        .filterDate(cfg.start, cfg.end)
-        .filterBounds(frame_geom)
-    )
+    if getattr(index, "build_collection", None) is not None:
+        # Index supplies its own (already date/bounds-filtered) source collection,
+        # e.g. lst_smw's satellite-aware Landsat+TOA join.
+        coll = index.build_collection(cfg, frame_geom, ee_module)
+    else:
+        coll = (
+            sensor.collection(ee_module)
+            .filterDate(cfg.start, cfg.end)
+            .filterBounds(frame_geom)
+        )
     # Coarse scene-level cloud pre-filter — only sensors that carry a per-scene
     # cloud metadata property (S2, Landsat); MODIS has none, so skip it and rely
     # on the in-region QA cloud-fraction filter below.

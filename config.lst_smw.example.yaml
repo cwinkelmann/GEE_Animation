@@ -1,0 +1,27 @@
+# Example config for Land Surface Temperature via the Statistical Mono-Window
+# algorithm of Ermida et al. (2020) — an alternative to the USGS Collection-2
+# Level-2 ST product used by `index: lst`. SMW derives LST from TOA brightness
+# temperature + ASTER-GED emissivity + NCEP water vapour (both are in °C here).
+name: wne_lst_smw           # output basename -> out/wne_lst_smw.mp4 / .gif
+project: hnee-331218        # Google Earth Engine project id
+
+aoi:
+  frame:                         # rectangle -> animation extent (aspect ratio preserved)
+    shapefile: docs/aoi/wne/frame_timelaps_wne.shp
+  region:                        # polygon -> important region (cloud-filtered + outlined)
+    shapefile: docs/aoi/wne/wne.shp    # Grumsin world-heritage beech forest polygon
+  region_max_cloud_percent: 20   # relaxed: fewer Landsat scenes available
+
+start: "2022-05-01"         # inclusive
+end: "2022-09-01"           # exclusive (widened for Landsat scene availability)
+
+sensor: landsat             # Landsat L4-L9 (TOA thermal joined for brightness temp)
+index: lst_smw              # Ermida et al. (2020) SMW LST (Landsat-only)
+cadence: monthly
+max_cloud_percent: 60       # scene-level pre-filter before pixel masking
+draw_region: true           # overlay the region polygon outline on each frame
+
+render:
+  fps: 4
+  scale: 30                 # metres/pixel
+  dimensions: 768           # max width/height of each frame

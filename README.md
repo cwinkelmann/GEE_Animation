@@ -41,10 +41,16 @@ Ready-to-run example configs (WNE AOI) live at the repo root. Each writes
 | NDWI  | Sentinel-2  | `gee-animation --config config.ndwi.example.yaml`  | `wne_ndwi`        |
 | NDMI  | Sentinel-2  | `gee-animation --config config.ndmi.example.yaml`  | `wne_ndmi`        |
 | LST   | Landsat     | `gee-animation --config config.lst.example.yaml`   | `wne_lst`         |
+| LST (SMW) | Landsat | `gee-animation --config config.lst_smw.example.yaml` | `wne_lst_smw`   |
 | ECOSTRESS | Landsat | `gee-animation --config config.ecostress.example.yaml` | `wne_ecostress` |
 | NDVI  | MODIS       | `gee-animation --config config.modis.example.yaml` | `wne_modis_ndvi`  |
 
-(`ecostress` = NDVI-sharpened Landsat LST — an approximation, since real ECOSTRESS data isn't in Earth Engine.)
+Two Landsat LST methods are available: `lst` = the USGS Collection-2 Level-2
+Surface Temperature product (the pre-computed `ST_B*` band); `lst_smw` = the
+Statistical Mono-Window algorithm of **Ermida et al. (2020)**, derived from TOA
+brightness temperature + ASTER-GED emissivity + NCEP water vapour. Both output °C
+and typically agree within ~1–3 K. (`ecostress` = NDVI-sharpened Landsat LST — an
+approximation, since real ECOSTRESS data isn't in Earth Engine.)
 
 Generate them all in one go:
 
@@ -138,7 +144,7 @@ See `config.example.yaml` (Sentinel-2 NDVI) or `config.lst.example.yaml` (Landsa
   - **`region`**: the important region (polygon); only scenes where cloud coverage over this region is less than `region_max_cloud_percent` (default: 10%) are included, and its outline is drawn on each frame when `draw_region` is set.
 - **`start`/`end`**: ISO dates (end exclusive).
 - **`sensor`**: `sentinel2`, `landsat` (Collection-2 L2, missions 4/5/7/8/9 harmonized — ~1984→present), or `modis` (MOD09A1, 8-day 500 m).
-- **`index`**: `ndvi`, `evi`, `ndwi` (McFeeters, open water), `ndmi` (moisture) — all sensors; or `lst` / `ecostress` (Landsat only). `ecostress` is an NDVI-sharpened LST (an approximation — real ECOSTRESS data is not in the Earth Engine catalog).
+- **`index`**: `ndvi`, `evi`, `ndwi` (McFeeters, open water), `ndmi` (moisture) — all sensors; or `lst` (USGS C2 L2 ST), `lst_smw` (Ermida et al. 2020 Statistical Mono-Window), or `ecostress` (Landsat only). `ecostress` is an NDVI-sharpened LST (an approximation — real ECOSTRESS data is not in the Earth Engine catalog).
 - **`max_cloud_percent`**: scene-level pre-filter threshold (Sentinel-2/Landsat only; MODIS has no per-scene cloud metadata, so this is ignored and only the region filter applies).
 - **`region_max_cloud_percent`**: region-level cloud filter (kept only if cloud over region < threshold).
 - **`viz`** (optional; min/max/palette): fixed range for colorization so colour is comparable across frames. If omitted, per-index defaults apply (NDVI −0.2..0.9 green; EVI 0..1 green; NDWI −0.3..0.6 brown→blue; NDMI −0.5..0.8 brown→teal; LST 0..40°C thermal).

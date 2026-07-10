@@ -183,6 +183,10 @@ class Index:
     sensors: frozenset
     default_viz: tuple
     compute: Callable
+    # Optional (cfg, frame_geom, ee_module) -> ImageCollection. When set, build()
+    # uses it instead of the sensor's default collection — for indices that need a
+    # bespoke, satellite-aware source (e.g. lst_smw joins the TOA thermal band).
+    build_collection: Callable = None
 
 
 SENSORS = {
@@ -214,6 +218,17 @@ INDICES = {
                        (0.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
                        _ecostress),
 }
+
+
+_LST_PALETTE = ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]
+
+# Ermida et al. (2020) Statistical Mono-Window LST (Landsat-only). Registered
+# here (after the dataclasses/constants it needs) so smw_lst can import from us.
+from . import smw_lst  # noqa: E402  (deferred to break the import cycle)
+
+INDICES["lst_smw"] = Index("lst_smw", frozenset({"landsat"}),
+                           (0.0, 40.0, _LST_PALETTE), smw_lst.compute,
+                           build_collection=smw_lst.landsat_collection)
 
 
 def get_product(sensor: str, index: str):
