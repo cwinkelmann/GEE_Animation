@@ -36,10 +36,10 @@ def _mean(values):
 # MODIS is 500 m; the optical/thermal sensors are 30 m — pick the thumbnail scale.
 _SCALE = {"modis": 500}
 
-# Pre-load the shipped WNE AOI as the default upload (None if it isn't present,
-# e.g. in the Docker image where docs/ is excluded).
+# Pre-load a default AOI upload: GEE_DEFAULT_AOI if set (e.g. a path mounted into
+# the container), else the shipped WNE AOI, else None (docs/ isn't in the image).
 _WNE_AOI = Path(__file__).resolve().parent.parent / "docs" / "aoi" / "wne" / "wne.geojson"
-DEFAULT_AOI = str(_WNE_AOI) if _WNE_AOI.exists() else None
+DEFAULT_AOI = os.environ.get("GEE_DEFAULT_AOI") or (str(_WNE_AOI) if _WNE_AOI.exists() else None)
 
 
 def indices_for(sensor: str) -> list:

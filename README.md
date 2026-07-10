@@ -77,34 +77,67 @@ shown alongside it.
 
 ## Docker
 
-Run the GUI in a container. **Earth Engine auth is not interactive here** — use a
-Google Cloud **service account** (the `Dockerfile` ships no credentials of its own).
+Run the GUI in a container. Earth Engine auth is **not** interactive here, so use a
+Google Cloud **service account** (the image ships no credentials of its own).
 
-**1. Service account + IAM (one-time).** In the GCP project create a service
-account and download its JSON key into `key/` (git- and docker-ignored). Grant the
-account, on the project, at least:
+### 1. Create the service account and grant roles (one-time)
 
-- `roles/serviceusage.serviceUsageConsumer` — to use the project's APIs, and
-- Earth Engine access — register the account for Earth Engine (or grant an
-  `roles/earthengine.*` role).
+The project must be **registered for Earth Engine**
+(https://console.cloud.google.com/earth-engine). Then, using `gcloud` (or the
+Cloud Console equivalents):
 
-Without these you'll see *"Caller does not have required permission to use project…"*.
+```bash
+PROJECT=hnee-331218
+gcloud iam service-accounts create gee-animation --project="$PROJECT" \
+  --display-name="GEE Animation"
+SA="gee-animation@$PROJECT.iam.gserviceaccount.com"
 
-**2. Build and run** with the key **mounted at runtime** (never baked into the image):
+# use the project's APIs
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="serviceAccount:$SA" --role="roles/serviceusage.serviceUsageConsumer"
+# Earth Engine read AND rendering (getThumbURL needs earthengine.thumbnails.create,
+# which `writer` includes and `viewer` does not)
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="serviceAccount:$SA" --role="roles/earthengine.writer"
+
+# download a JSON key into key/ (git- and docker-ignored)
+mkdir -p key
+gcloud iam service-accounts keys create key/ee-key.json --iam-account="$SA"
+```
+
+Missing roles surface as staged errors: *"…required permission to use project…"*
+(no `serviceUsageConsumer`) → then *"earthengine.thumbnails.create denied"* (no
+`writer`).
+
+### 2. Build
 
 ```bash
 docker build -t gee-timelapse .
+```
+
+### 3. Run the GUI
+
+Mount the key **read-only at runtime** (never baked into the image); optionally
+mount an AOI to pre-load it:
+
+```bash
 docker run --rm -p 7860:7860 \
-  -v "$PWD/key/hnee-331218-8b258960ed6c.json:/secrets/ee-key.json:ro" \
+  -v "$PWD/key/ee-key.json:/secrets/ee-key.json:ro" \
+  -v "$PWD/docs/aoi/wne/wne.geojson:/data/aoi.geojson:ro" \
   -e EE_SERVICE_ACCOUNT_KEY=/secrets/ee-key.json \
   -e EE_PROJECT=hnee-331218 \
+  -e GEE_DEFAULT_AOI=/data/aoi.geojson \
   gee-timelapse
 ```
 
-Open http://localhost:7860. The app binds `0.0.0.0:7860` inside the container
-(via `GRADIO_SERVER_NAME`). `auth.init` reads `EE_SERVICE_ACCOUNT_KEY` (the account
-email is taken from the key; override with `EE_SERVICE_ACCOUNT`) and falls back to
-cached interactive credentials when it's unset.
+Open **http://localhost:7860**. Environment variables the container reads:
+
+| Var | Purpose |
+|-----|---------|
+| `EE_SERVICE_ACCOUNT_KEY` | path to the mounted key (SA email read from it; override with `EE_SERVICE_ACCOUNT`) |
+| `EE_PROJECT` | default Earth Engine project shown in the UI |
+| `GEE_DEFAULT_AOI` | optional path (mounted) to pre-load as the AOI |
+| `GRADIO_SERVER_NAME` / `GRADIO_SERVER_PORT` | bind host/port (default `0.0.0.0:7860`) |
 
 **Local dev without a service account** — mount your existing credentials instead
 and drop the service-account env vars:
@@ -171,4 +204,15 @@ a neutral grey rather than an index colour.
 ```bash
 pytest -m "not integration"          # fast unit tests (no network)
 GEE_INTEGRATION=1 pytest -m integration   # live EE test (needs auth)
+```
+
+
+
+### Service Account Setup
+
+```
+cloud projects add-iam-policy-binding hnee-331218 --member="serviceAccount:gee-animation@hnee-331218.iam.gserviceaccount.com" --role="roles/serviceusage.serviceUsageConsumer"
+
+
+gcloud projects add-iam-policy-binding hnee-331218 --member="serviceAccount:gee-animation@hnee-331218.iam.gserviceaccount.com"  --role="roles/earthengine.writer"
 ```
