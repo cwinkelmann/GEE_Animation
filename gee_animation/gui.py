@@ -31,6 +31,11 @@ DEFAULT_DEPS = types.SimpleNamespace(
 # MODIS is 500 m; the optical/thermal sensors are 30 m — pick the thumbnail scale.
 _SCALE = {"modis": 500}
 
+# Pre-load the shipped WNE AOI as the default upload (None if it isn't present,
+# e.g. in the Docker image where docs/ is excluded).
+_WNE_AOI = Path(__file__).resolve().parent.parent / "docs" / "aoi" / "wne" / "wne.geojson"
+DEFAULT_AOI = str(_WNE_AOI) if _WNE_AOI.exists() else None
+
 
 def indices_for(sensor: str) -> list:
     """Indices a sensor supports (e.g. lst/ecostress are Landsat-only)."""
@@ -132,7 +137,8 @@ def build_app():
             with gr.Column():
                 aoi_file = gr.File(
                     label="AOI — GeoJSON or zipped shapefile",
-                    file_types=[".geojson", ".json", ".zip"], type="filepath")
+                    file_types=[".geojson", ".json", ".zip"], type="filepath",
+                    value=DEFAULT_AOI)
                 buffer_m = gr.Number(label="Frame buffer around AOI (metres)", value=1000)
                 sensor = gr.Dropdown(sensors, value=default_sensor, label="Sensor")
                 index = gr.Dropdown(indices_for(default_sensor), value="ndvi", label="Index")

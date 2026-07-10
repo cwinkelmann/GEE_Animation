@@ -32,6 +32,13 @@ def _fake_deps(tmp_path, captured, frames=None):
     )
 
 
+def test_default_aoi_is_the_shipped_wne_geojson():
+    from pathlib import Path
+    assert gui.DEFAULT_AOI is not None
+    assert gui.DEFAULT_AOI.replace("\\", "/").endswith("docs/aoi/wne/wne.geojson")
+    assert Path(gui.DEFAULT_AOI).exists()
+
+
 def test_indices_for_filters_by_sensor():
     assert "lst" in gui.indices_for("landsat") and "ecostress" in gui.indices_for("landsat")
     assert "lst" not in gui.indices_for("sentinel2")
