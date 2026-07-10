@@ -11,7 +11,7 @@ import types
 import zipfile
 from pathlib import Path
 
-from . import auth, aoi, collection, compositing, render
+from . import auth, aoi, charts, collection, compositing, render
 from .config import RunConfig
 from .products import INDICES, SENSORS, get_product
 
@@ -23,6 +23,7 @@ DEFAULT_DEPS = types.SimpleNamespace(
     build=collection.build,
     monthly_median=compositing.monthly_median,
     render=render.render,
+    timeseries=charts.region_timeseries,
 )
 
 # MODIS is 500 m; the optical/thermal sensors are 30 m — pick the thumbnail scale.
@@ -98,9 +99,10 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
     paths = deps.render(frames, cfg, geometry=frame_geom)
     mp4 = next((str(p) for p in paths if str(p).endswith(".mp4")), None)
     gif = next((str(p) for p in paths if str(p).endswith(".gif")), None)
+    series = deps.timeseries(frames, region_geom, cfg.scale)   # [(month, value)] over the region
     status = (f"Rendered {len(frames)} monthly {sensor} {index.upper()} frames "
               f"({frames[0].label} → {frames[-1].label}).")
-    return mp4, gif, status
+    return mp4, gif, status, series
 
 
 def build_app():
@@ -139,6 +141,9 @@ def build_app():
             with gr.Column():
                 video = gr.Video(label="Animation (MP4)")
                 gif = gr.File(label="Animation (GIF, download)")
+                chart = gr.LinePlot(x="month", y="value", x_title="Month",
+                                    y_title="Index (region mean)",
+                                    title="Region time-series", height=260)
                 status = gr.Markdown()
 
         # Keep the index choices in sync with the selected sensor.
@@ -149,20 +154,23 @@ def build_app():
 
         def _go(aoi_file, buffer_m, sensor, index, start, end, region_cloud, fps, dims,
                 project, progress=gr.Progress()):
+            import pandas as pd
             try:
                 progress(0.05, desc="Filtering imagery and building frames…")
-                mp4, gif_path, msg = run_animation(
+                mp4, gif_path, msg, series = run_animation(
                     aoi_path=aoi_file, buffer_m=buffer_m, sensor=sensor, index=index,
                     start=start, end=end, region_max_cloud_percent=region_cloud,
                     fps=fps, dimensions=dims, project=project)
+                df = pd.DataFrame([(m, v) for m, v in series if v is not None],
+                                  columns=["month", "value"])
                 progress(1.0, desc="Done")
-                return mp4, gif_path, msg
+                return mp4, gif_path, msg, df
             except Exception as exc:   # surface a friendly message in the UI
-                return None, None, f"**Error:** {exc}"
+                return None, None, f"**Error:** {exc}", None
 
         go.click(_go,
                  [aoi_file, buffer_m, sensor, index, start, end, region_cloud, fps, dims, project],
-                 [video, gif, status])
+                 [video, gif, status, chart])
     return app
 
 

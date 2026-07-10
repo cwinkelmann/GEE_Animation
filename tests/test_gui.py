@@ -28,6 +28,7 @@ def _fake_deps(tmp_path, captured, frames=None):
         build=lambda cfg, f, r: (captured.update(cfg=cfg, frame=f, region=r) or "COLL"),
         monthly_median=lambda coll, cfg: frames,
         render=lambda frames_, cfg, geometry=None: [tmp_path / "o.mp4", tmp_path / "o.gif"],
+        timeseries=lambda frames_, region, scale: [(f.label, 0.5) for f in frames_],
     )
 
 
@@ -63,7 +64,7 @@ def test_region_aoi_from_upload_rejects_unknown(tmp_path):
 def test_run_animation_builds_config_and_threads_geometry(tmp_path):
     aoi = _write_geojson(tmp_path)
     captured = {}
-    mp4, gif, status = gui.run_animation(
+    mp4, gif, status, series = gui.run_animation(
         aoi_path=str(aoi), buffer_m=1500, sensor="sentinel2", index="ndvi",
         start="2022-05-01", end="2022-07-01", region_max_cloud_percent=15,
         fps=5, dimensions=512, out_dir=str(tmp_path), deps=_fake_deps(tmp_path, captured))
@@ -76,6 +77,7 @@ def test_run_animation_builds_config_and_threads_geometry(tmp_path):
     assert cfg.scale == 30 and cfg.region_max_cloud_percent == 15
     assert mp4.endswith("o.mp4") and gif.endswith("o.gif")
     assert "Rendered 2 monthly" in status
+    assert series == [("2022-05", 0.5), ("2022-06", 0.5)]     # region time-series
 
 
 def test_run_animation_uses_500m_scale_for_modis(tmp_path):

@@ -71,7 +71,9 @@ Then in the browser: **upload an AOI** (GeoJSON or a zipped shapefile — this i
 the cloud-filtered region), set a **frame buffer in metres** (the animation
 extent is the AOI's bounding box expanded by this), pick a **sensor** and
 **index** (choices update per sensor), a **date range** and cloud threshold, and
-click *Generate*. The MP4 plays inline with a GIF download.
+click *Generate*. The MP4 plays inline with a GIF download, and a **region
+time-series chart** (the index averaged over the AOI, one point per month) is
+shown alongside it.
 
 ## Configuration
 
