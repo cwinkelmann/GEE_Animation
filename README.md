@@ -59,7 +59,33 @@ Every frame is annotated: an info bar (top) with the formula and bands used, a
 value colorbar (indices only), the region outline, a ground-distance scale bar,
 and the month.
 
-![Example NDVI frame over the WNE / Grumsin beech-forest AOI](docs/images/example_ndvi.png)
+### Example frames
+
+One representative frame per product over the WNE / Grumsin beech-forest AOI
+(July 2022; Landsat June 2022):
+
+<table>
+<tr>
+<td align="center"><b>NDVI</b> (Sentinel-2)<br><img src="docs/images/example_ndvi.png" width="360"></td>
+<td align="center"><b>EVI</b> (Sentinel-2)<br><img src="docs/images/example_evi.png" width="360"></td>
+</tr>
+<tr>
+<td align="center"><b>NDWI</b> (Sentinel-2)<br><img src="docs/images/example_ndwi.png" width="360"></td>
+<td align="center"><b>NDMI</b> (Sentinel-2)<br><img src="docs/images/example_ndmi.png" width="360"></td>
+</tr>
+<tr>
+<td align="center"><b>RGB</b> true colour (Sentinel-2)<br><img src="docs/images/example_rgb.png" width="360"></td>
+<td align="center"><b>CIR</b> false-colour IR (Sentinel-2)<br><img src="docs/images/example_cir.png" width="360"></td>
+</tr>
+<tr>
+<td align="center"><b>LST</b> USGS C2 L2 ST (Landsat)<br><img src="docs/images/example_lst.png" width="360"></td>
+<td align="center"><b>LST (SMW)</b> Ermida 2020 (Landsat)<br><img src="docs/images/example_lst_smw.png" width="360"></td>
+</tr>
+<tr>
+<td align="center"><b>ECOSTRESS</b> sharpened LST (Landsat)<br><img src="docs/images/example_ecostress.png" width="360"></td>
+<td align="center"><b>NDVI</b> (MODIS, 500 m)<br><img src="docs/images/example_modis_ndvi.png" width="360"></td>
+</tr>
+</table>
 
 Generate them all in one go:
 
