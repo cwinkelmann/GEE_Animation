@@ -158,6 +158,10 @@ def test_render_pipeline_with_injected_fetch(tmp_path):
     frames = [Frame("2022-01", object()), Frame("2022-02", object())]
     paths = render(frames, cfg, fetch=fake_fetch, geometry=None)
     assert any(p.suffix == ".gif" and p.exists() for p in paths)
+    # one downloadable PNG per frame, named {name}_{label}.png
+    pngs = [p for p in paths if p.suffix == ".png"]
+    assert [p.name for p in pngs] == ["anim_2022-01.png", "anim_2022-02.png"]
+    assert all(p.exists() and p.stat().st_size > 0 for p in pngs)
 
 
 def _cfg_ns():

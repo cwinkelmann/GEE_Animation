@@ -26,7 +26,8 @@ cp config.example.yaml config.yaml   # edit AOI, dates, palette, fps
 gee-animation --config config.yaml
 ```
 
-Output is written to `out/<name>.mp4` and `out/<name>.gif`.
+Output is written to `out/<name>.mp4`, `out/<name>.gif`, and one annotated PNG
+per month (`out/<name>_<YYYY-MM>.png`) so single frames can be reused on their own.
 
 ## Generate each index animation
 
@@ -71,7 +72,8 @@ Then in the browser: **upload an AOI** (GeoJSON or a zipped shapefile — this i
 the cloud-filtered region), set a **frame buffer in metres** (the animation
 extent is the AOI's bounding box expanded by this), pick a **sensor** and
 **index** (choices update per sensor), a **date range** and cloud threshold, and
-click *Generate*. The MP4 plays inline with a GIF download, and a **region
+click *Generate*. The MP4 plays inline with a GIF download, a **frame gallery**
+previews each month with a **ZIP of the single PNGs** to download, and a **region
 time-series chart** (the index averaged over the AOI, one point per month) is
 shown alongside it.
 

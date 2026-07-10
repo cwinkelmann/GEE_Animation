@@ -33,6 +33,15 @@ def _mean(values):
     vals = [v for v in values if v is not None]
     return sum(vals) / len(vals) if vals else None
 
+
+def _zip_frames(png_paths, out_dir, name) -> str:
+    """Bundle the per-frame PNGs into a single ``{name}_frames.zip`` for download."""
+    zip_path = Path(out_dir) / f"{name}_frames.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in png_paths:
+            zf.write(p, Path(p).name)
+    return str(zip_path)
+
 # MODIS is 500 m; the optical/thermal sensors are 30 m — pick the thumbnail scale.
 _SCALE = {"modis": 500}
 
@@ -75,7 +84,12 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
                   region_max_cloud_percent=10.0, max_cloud_percent=60.0,
                   fps=4, dimensions=768, project="hnee-331218",
                   out_dir=None, deps=DEFAULT_DEPS):
-    """Build one animation from GUI inputs; returns (mp4_path, gif_path, status)."""
+    """Build one animation from GUI inputs.
+
+    Returns ``(mp4_path, gif_path, frame_pngs, frames_zip, status, series)`` where
+    `frame_pngs` is the list of per-month PNGs and `frames_zip` bundles them for
+    download (both ``None``/empty if no frames were rendered).
+    """
     if not aoi_path:
         raise ValueError("please upload an AOI (a GeoJSON file or a zipped shapefile)")
     get_product(sensor, index)   # validate the (sensor, index) pair up front
@@ -111,6 +125,8 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
     paths = deps.render(frames, cfg, geometry=frame_geom)
     mp4 = next((str(p) for p in paths if str(p).endswith(".mp4")), None)
     gif = next((str(p) for p in paths if str(p).endswith(".gif")), None)
+    frame_pngs = [str(p) for p in paths if str(p).endswith(".png")]
+    frames_zip = _zip_frames(frame_pngs, out_dir, cfg.name) if frame_pngs else None
     # [(month, inside, outside)] — index mean inside the AOI vs the surrounding frame
     series = deps.timeseries(frames, region_geom, frame_geom, cfg.scale)
     n_months = len(month_starts(str(start), str(end)))
@@ -126,7 +142,7 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
     if inside_mean is not None and outside_mean is not None:
         status += (f" Mean {index.upper()} — inside AOI {inside_mean:.3f}, "
                    f"outside {outside_mean:.3f} (Δ {inside_mean - outside_mean:+.3f}).")
-    return mp4, gif, status, series
+    return mp4, gif, frame_pngs, frames_zip, status, series
 
 
 def build_app():
@@ -167,6 +183,9 @@ def build_app():
             with gr.Column():
                 video = gr.Video(label="Animation (MP4)")
                 gif = gr.File(label="Animation (GIF, download)")
+                gallery = gr.Gallery(label="Frames (click to preview)", columns=4,
+                                     height=200, object_fit="contain")
+                frames_zip = gr.File(label="Frames (ZIP of PNGs, download)")
                 chart = gr.LinePlot(x="month", y="value", color="area", x_title="Month",
                                     y_title="Index (mean)",
                                     title="Inside vs outside the AOI", height=280)
@@ -183,7 +202,7 @@ def build_app():
             import pandas as pd
             try:
                 progress(0.05, desc="Filtering imagery and building frames…")
-                mp4, gif_path, msg, series = run_animation(
+                mp4, gif_path, frame_pngs, zip_path, msg, series = run_animation(
                     aoi_path=aoi_file, buffer_m=buffer_m, sensor=sensor, index=index,
                     start=start, end=end, region_max_cloud_percent=region_cloud,
                     fps=fps, dimensions=dims, project=project)
@@ -195,13 +214,13 @@ def build_app():
                         rows.append((month, outside, "outside AOI"))
                 df = pd.DataFrame(rows, columns=["month", "value", "area"])
                 progress(1.0, desc="Done")
-                return mp4, gif_path, msg, df
+                return mp4, gif_path, frame_pngs, zip_path, msg, df
             except Exception as exc:   # surface a friendly message in the UI
-                return None, None, f"**Error:** {exc}", None
+                return None, None, None, None, f"**Error:** {exc}", None
 
         go.click(_go,
                  [aoi_file, buffer_m, sensor, index, start, end, region_cloud, fps, dims, project],
-                 [video, gif, status, chart])
+                 [video, gif, gallery, frames_zip, status, chart])
     return app
 
 

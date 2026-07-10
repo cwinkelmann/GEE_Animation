@@ -173,6 +173,21 @@ def _write_gif(path: Path, frames: list[np.ndarray], fps: int) -> None:
     imageio.mimsave(path, frames, format="GIF", duration=1000.0 / fps, loop=0)
 
 
+def _write_frames(out_dir: Path, name: str, frames_rgb: list[np.ndarray],
+                  labels: list[str]) -> list[Path]:
+    """Save each annotated frame as its own PNG, named ``{name}_{label}.png``.
+
+    Returns the frame paths in order so callers can offer the single images for
+    download alongside the assembled MP4/GIF.
+    """
+    paths: list[Path] = []
+    for rgb, label in zip(frames_rgb, labels):
+        p = out_dir / f"{name}_{label}.png"
+        Image.fromarray(rgb.astype(np.uint8), "RGB").save(p)
+        paths.append(p)
+    return paths
+
+
 def assemble(frames_rgb: list[np.ndarray], cfg) -> list[Path]:
     out_dir = Path(cfg.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -204,4 +219,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         if draw_overlay:
             rgb = draw_region(rgb, bounds, rings)
         rgb_frames.append(rgb)
-    return assemble(rgb_frames, cfg)
+    paths = assemble(rgb_frames, cfg)
+    paths += _write_frames(Path(cfg.out_dir), cfg.name, rgb_frames,
+                           [f.label for f in frames])
+    return paths

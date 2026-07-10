@@ -1,6 +1,7 @@
 import json
 import types
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -21,13 +22,22 @@ def _fake_deps(tmp_path, captured, frames=None):
         captured["buffer"] = m
         return [0.0, 0.0, 2.0, 2.0]
 
+    def render(frames_, cfg, geometry=None):
+        # one real PNG per frame (so run_animation can zip them) + the mp4/gif
+        pngs = []
+        for f in frames_:
+            p = tmp_path / f"o_{f.label}.png"
+            p.write_bytes(b"x")
+            pngs.append(p)
+        return [tmp_path / "o.mp4", tmp_path / "o.gif", *pngs]
+
     return types.SimpleNamespace(
         init=lambda project: captured.__setitem__("project", project),
         parse=lambda a: ("geom", tuple(sorted(a))),
         frame_bbox=frame_bbox,
         build=lambda cfg, f, r: (captured.update(cfg=cfg, frame=f, region=r) or "COLL"),
         monthly_median=lambda coll, cfg: frames,
-        render=lambda frames_, cfg, geometry=None: [tmp_path / "o.mp4", tmp_path / "o.gif"],
+        render=render,
         timeseries=lambda frames_, region, frame, scale: [(f.label, 0.8, 0.5) for f in frames_],
     )
 
@@ -71,7 +81,7 @@ def test_region_aoi_from_upload_rejects_unknown(tmp_path):
 def test_run_animation_builds_config_and_threads_geometry(tmp_path):
     aoi = _write_geojson(tmp_path)
     captured = {}
-    mp4, gif, status, series = gui.run_animation(
+    mp4, gif, frame_pngs, zip_path, status, series = gui.run_animation(
         aoi_path=str(aoi), buffer_m=1500, sensor="sentinel2", index="ndvi",
         start="2022-05-01", end="2022-07-01", region_max_cloud_percent=15,
         fps=5, dimensions=512, out_dir=str(tmp_path), deps=_fake_deps(tmp_path, captured))
@@ -83,6 +93,11 @@ def test_run_animation_builds_config_and_threads_geometry(tmp_path):
     assert cfg.viz_min == -0.2 and cfg.viz_max == 0.9          # NDVI default viz
     assert cfg.scale == 30 and cfg.region_max_cloud_percent == 15
     assert mp4.endswith("o.mp4") and gif.endswith("o.gif")
+    # per-frame PNGs are offered for download, bundled into a single zip
+    assert [Path(p).name for p in frame_pngs] == ["o_2022-05.png", "o_2022-06.png"]
+    assert zip_path.endswith("sentinel2_ndvi_frames.zip")   # {cfg.name}_frames.zip
+    with zipfile.ZipFile(zip_path) as zf:
+        assert sorted(zf.namelist()) == ["o_2022-05.png", "o_2022-06.png"]
     assert "Rendered 2 of 2 months" in status                 # May + June both rendered
     assert series == [("2022-05", 0.8, 0.5), ("2022-06", 0.8, 0.5)]   # (month, inside, outside)
     # inside/outside summary appended to the status
@@ -93,7 +108,7 @@ def test_run_animation_status_reports_dropped_months(tmp_path):
     # 4-month range but only 2 frames -> status flags the 2 dropped (cloud-filtered) months
     aoi = _write_geojson(tmp_path)
     frames = [types.SimpleNamespace(label="2022-05"), types.SimpleNamespace(label="2022-08")]
-    _, _, status, _ = gui.run_animation(
+    *_, status, _ = gui.run_animation(
         aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
         start="2022-05-01", end="2022-09-01", region_max_cloud_percent=10,
         out_dir=str(tmp_path), deps=_fake_deps(tmp_path, {}, frames=frames))
