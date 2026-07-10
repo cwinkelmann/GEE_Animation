@@ -120,6 +120,26 @@ def _ndmi(sensor, image, ee_module=ee):
             .set("system:time_start", image.get("system:time_start")))
 
 
+# "ecostress": an approximation of high-resolution LST. Real ECOSTRESS data is
+# NOT in the Earth Engine catalog, so this NDVI-guided thermal-sharpens Landsat's
+# own ST_B10 LST: it injects the high-frequency NDVI detail (native 30 m minus a
+# ~100 m focal mean — the thermal band's effective resolution) into the
+# temperature field, cooler where local vegetation detail is higher. Empirical,
+# "somewhat" sharpened — not a rigorous TsHARP regression.
+_ECOSTRESS_NDVI_SLOPE = 16.0   # °C per unit of NDVI detail
+
+
+def _ecostress(sensor, image, ee_module=ee):
+    lst = (image.select("ST_B10")
+           .multiply(0.00341802).add(149.0).subtract(273.15))
+    ndvi = sensor.reflectance(image, ee_module).normalizedDifference(["nir", "red"])
+    ndvi_detail = ndvi.subtract(
+        ndvi.focal_mean(radius=100, kernelType="circle", units="meters"))
+    sharp = lst.subtract(ndvi_detail.multiply(_ECOSTRESS_NDVI_SLOPE))
+    return (sharp.rename(INDEX_BAND)
+            .set("system:time_start", image.get("system:time_start")))
+
+
 @dataclass(frozen=True)
 class Sensor:
     name: str
@@ -172,6 +192,9 @@ INDICES = {
                   (-0.3, 0.6, ["#a1622f", "#f6e8c3", "#2166ac"]), _ndwi),
     "ndmi": Index("ndmi", _REFL,
                   (-0.5, 0.8, ["#8c510a", "#f6e8c3", "#01665e"]), _ndmi),
+    "ecostress": Index("ecostress", frozenset({"landsat"}),
+                       (0.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
+                       _ecostress),
 }
 
 

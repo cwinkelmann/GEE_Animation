@@ -8,7 +8,8 @@ _REFL_INDICES = frozenset({"sentinel2", "landsat", "modis"})
 
 def test_registry_contents():
     assert set(P.SENSORS) == {"sentinel2", "landsat", "modis"}
-    assert set(P.INDICES) == {"ndvi", "lst", "evi", "ndwi", "ndmi"}
+    assert set(P.INDICES) == {"ndvi", "lst", "evi", "ndwi", "ndmi", "ecostress"}
+    assert P.INDICES["ecostress"].sensors == frozenset({"landsat"})   # sharpened Landsat LST
     assert P.SENSORS["sentinel2"].scene_cloud_property == "CLOUDY_PIXEL_PERCENTAGE"
     assert P.SENSORS["landsat"].scene_cloud_property == "CLOUD_COVER"
     assert P.SENSORS["modis"].scene_cloud_property is None   # no per-scene cloud metadata
@@ -82,6 +83,33 @@ def test_ndmi_is_nir_swir1_normalized_difference():
     out = P.INDICES["ndmi"].compute(sensor, img, ee_module=None)
     assert rec["nd"] == ("nir", "swir1")                   # moisture index
     assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
+
+
+def test_ecostress_sharpens_lst_with_ndvi_detail_and_keeps_time():
+    rec = {"multiply": [], "add": [], "subtract": [], "select": []}
+    class Chain:
+        def __init__(self, r): self.r = r
+        def select(self, b): self.r["select"].append(b); return self
+        def multiply(self, v): self.r["multiply"].append(v); return self
+        def add(self, v): self.r["add"].append(v); return self
+        def subtract(self, v): self.r["subtract"].append(v); return self
+        def normalizedDifference(self, b): self.r["nd"] = tuple(b); return self
+        def focal_mean(self, **k): self.r["focal_mean"] = k; return self
+        def rename(self, n): self.r["rename"] = n; return self
+        def set(self, k, v): self.r["set"] = (k, v); return "ecostress_band"
+        def get(self, k): return "TS"
+    class FakeSensor:
+        def reflectance(self, image, ee_module=None): rec["refl"] = True; return Chain(rec)
+    out = P.INDICES["ecostress"].compute(FakeSensor(), Chain(rec), ee_module=None)
+    # LST from ST_B10 with the standard scale/offset, in Celsius
+    assert "ST_B10" in rec["select"]
+    assert 0.00341802 in rec["multiply"] and 149.0 in rec["add"] and 273.15 in rec["subtract"]
+    # NDVI high-frequency detail (focal-mean smoothing) injected into the thermal field
+    assert rec.get("refl") and rec["nd"] == ("nir", "red")
+    assert rec["focal_mean"]["units"] == "meters"
+    assert 16.0 in rec["multiply"]                      # NDVI-detail slope
+    assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
+    assert out == "ecostress_band"
 
 
 def test_modis_reflectance_maps_bands_and_scales():

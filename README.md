@@ -40,12 +40,15 @@ Ready-to-run example configs (WNE AOI) live at the repo root. Each writes
 | NDWI  | Sentinel-2  | `gee-animation --config config.ndwi.example.yaml`  | `wne_ndwi`        |
 | NDMI  | Sentinel-2  | `gee-animation --config config.ndmi.example.yaml`  | `wne_ndmi`        |
 | LST   | Landsat     | `gee-animation --config config.lst.example.yaml`   | `wne_lst`         |
+| ECOSTRESS | Landsat | `gee-animation --config config.ecostress.example.yaml` | `wne_ecostress` |
 | NDVI  | MODIS       | `gee-animation --config config.modis.example.yaml` | `wne_modis_ndvi`  |
+
+(`ecostress` = NDVI-sharpened Landsat LST — an approximation, since real ECOSTRESS data isn't in Earth Engine.)
 
 Generate them all in one go:
 
 ```bash
-for c in example evi.example ndwi.example ndmi.example lst.example modis.example; do
+for c in example evi.example ndwi.example ndmi.example lst.example ecostress.example modis.example; do
   gee-animation --config "config.$c.yaml"
 done
 ```
@@ -66,7 +69,7 @@ See `config.example.yaml` (Sentinel-2 NDVI) or `config.lst.example.yaml` (Landsa
   - **`region`**: the important region (polygon); only scenes where cloud coverage over this region is less than `region_max_cloud_percent` (default: 10%) are included, and its outline is drawn on each frame when `draw_region` is set.
 - **`start`/`end`**: ISO dates (end exclusive).
 - **`sensor`**: `sentinel2`, `landsat`, or `modis` (MOD09A1, 8-day 500 m).
-- **`index`**: `ndvi`, `evi`, `ndwi` (McFeeters, open water), `ndmi` (moisture) — all sensors; or `lst` (Landsat only).
+- **`index`**: `ndvi`, `evi`, `ndwi` (McFeeters, open water), `ndmi` (moisture) — all sensors; or `lst` / `ecostress` (Landsat only). `ecostress` is an NDVI-sharpened LST (an approximation — real ECOSTRESS data is not in the Earth Engine catalog).
 - **`max_cloud_percent`**: scene-level pre-filter threshold (Sentinel-2/Landsat only; MODIS has no per-scene cloud metadata, so this is ignored and only the region filter applies).
 - **`region_max_cloud_percent`**: region-level cloud filter (kept only if cloud over region < threshold).
 - **`viz`** (optional; min/max/palette): fixed range for colorization so colour is comparable across frames. If omitted, per-index defaults apply (NDVI −0.2..0.9 green; EVI 0..1 green; NDWI −0.3..0.6 brown→blue; NDMI −0.5..0.8 brown→teal; LST 0..40°C thermal).
@@ -89,8 +92,12 @@ a neutral grey rather than an index colour.
 - Sensors: Sentinel-2 and Landsat. One cadence (monthly) is supported; config
   is structured to add more.
 - Sensors: Sentinel-2, Landsat, MODIS. Indices: NDVI, EVI, NDWI, NDMI (all
-  sensors), LST (Landsat only). Adding new indices/sensors requires registry
-  changes in `products.py`.
+  sensors), LST and `ecostress` (Landsat only). Adding new indices/sensors
+  requires registry changes in `products.py`.
+- `ecostress` approximates high-resolution LST by NDVI-guided thermal-sharpening
+  of Landsat `ST_B10` (real ECOSTRESS data is not available in Earth Engine). It
+  injects native-30 m NDVI detail into the coarser thermal field using an
+  empirical slope (`_ECOSTRESS_NDVI_SLOPE` in `products.py`, tune to taste).
 - The region cloud filter averages only over the pixels a scene actually covers.
   A scene that clips a small clear corner of the region can still pass the
   `region_max_cloud_percent` threshold; use a region well inside the frame extent.

@@ -1,0 +1,18 @@
+# Landsat "ecostress" = NDVI-sharpened LST (approximation) over the WNE AOIs.
+name: wne_ecostress
+project: hnee-331218
+
+aoi:
+  frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 20
+
+sensor: landsat
+index: ecostress
+start: "2022-05-01"
+end: "2022-09-01"
+cadence: monthly
+max_cloud_percent: 60
+draw_region: true
+render: { fps: 3, scale: 30, dimensions: 768 }
+# viz omitted -> thermal default (0..40 C)
