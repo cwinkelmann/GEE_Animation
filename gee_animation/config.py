@@ -63,7 +63,10 @@ class RunConfig:
                 region_max_cloud_percent=float(aoi.get("region_max_cloud_percent", 10)),
                 viz_min=float(viz.get("min", d_min)),
                 viz_max=float(viz.get("max", d_max)),
-                palette=list(viz.get("palette", d_pal)),
+                # fall back to the index default only when 'palette' is absent (an
+                # explicit [] is preserved so validate() still rejects it); the
+                # composite default is None -> [].
+                palette=list(_p) if (_p := viz.get("palette", d_pal)) is not None else [],
                 fps=int(render["fps"]),
                 scale=float(render["scale"]),
                 dimensions=int(render["dimensions"]),
@@ -100,5 +103,7 @@ class RunConfig:
             raise ConfigError(f"end ({self.end}) must be after start ({self.start})")
         if self.viz_max <= self.viz_min:
             raise ConfigError("viz.max must be greater than viz.min")
-        if not self.palette:
+        spec = INDICES.get(self.index)
+        if not (spec and spec.composite) and not self.palette:
+            # composites (rgb/cir) render 3 real bands, so they need no palette
             raise ConfigError("viz.palette must be non-empty")

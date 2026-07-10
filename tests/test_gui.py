@@ -52,7 +52,7 @@ def test_default_aoi_is_the_shipped_wne_geojson():
 def test_indices_for_filters_by_sensor():
     assert "lst" in gui.indices_for("landsat") and "ecostress" in gui.indices_for("landsat")
     assert "lst" not in gui.indices_for("sentinel2")
-    assert set(gui.indices_for("modis")) == {"ndvi", "evi", "ndwi", "ndmi"}
+    assert set(gui.indices_for("modis")) == {"ndvi", "evi", "ndwi", "ndmi", "rgb", "cir"}
 
 
 def test_region_aoi_from_upload_geojson(tmp_path):

@@ -94,7 +94,9 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
         raise ValueError("please upload an AOI (a GeoJSON file or a zipped shapefile)")
     get_product(sensor, index)   # validate the (sensor, index) pair up front
     region_aoi = _region_aoi_from_upload(aoi_path)
+    composite = INDICES[index].composite
     viz_min, viz_max, palette = INDICES[index].default_viz
+    palette = palette or []      # composites (rgb/cir) carry no palette
     out_dir = out_dir or tempfile.mkdtemp()
 
     deps.init(project)
@@ -127,8 +129,9 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
     gif = next((str(p) for p in paths if str(p).endswith(".gif")), None)
     frame_pngs = [str(p) for p in paths if str(p).endswith(".png")]
     frames_zip = _zip_frames(frame_pngs, out_dir, cfg.name) if frame_pngs else None
-    # [(month, inside, outside)] — index mean inside the AOI vs the surrounding frame
-    series = deps.timeseries(frames, region_geom, frame_geom, cfg.scale)
+    # [(month, inside, outside)] — index mean inside the AOI vs the surrounding frame.
+    # Composites (rgb/cir) have no single INDEX band to reduce, so skip the chart.
+    series = [] if composite else deps.timeseries(frames, region_geom, frame_geom, cfg.scale)
     n_months = len(month_starts(str(start), str(end)))
     dropped = n_months - len(frames)
     status = (f"Rendered {len(frames)} of {n_months} months as {sensor} {index.upper()} "

@@ -8,8 +8,12 @@ _REFL_INDICES = frozenset({"sentinel2", "landsat", "modis"})
 
 def test_registry_contents():
     assert set(P.SENSORS) == {"sentinel2", "landsat", "modis"}
-    assert set(P.INDICES) == {"ndvi", "lst", "lst_smw", "evi", "ndwi", "ndmi", "ecostress"}
+    assert set(P.INDICES) == {"ndvi", "lst", "lst_smw", "evi", "ndwi", "ndmi",
+                              "rgb", "cir", "ecostress"}
     assert P.INDICES["lst_smw"].sensors == frozenset({"landsat"})   # Ermida 2020 SMW LST
+    assert P.INDICES["rgb"].composite and P.INDICES["cir"].composite
+    assert P.INDICES["ndvi"].formula == "(NIR - Red) / (NIR + Red)"   # overlay metadata
+    assert P.INDICES["rgb"].composite and P.INDICES["rgb"].default_viz[2] is None
     assert P.INDICES["ecostress"].sensors == frozenset({"landsat"})   # sharpened Landsat LST
     assert P.SENSORS["sentinel2"].scene_cloud_property == "CLOUDY_PIXEL_PERCENTAGE"
     assert P.SENSORS["landsat"].scene_cloud_property == "CLOUD_COVER"

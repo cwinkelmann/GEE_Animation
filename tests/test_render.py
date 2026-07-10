@@ -1,6 +1,7 @@
 from pathlib import Path
 import numpy as np
 import types
+from PIL import Image
 from gee_animation.render import (
     add_colorbar,
     annotate,
@@ -125,6 +126,19 @@ def test_render_skips_region_overlay_when_disabled(tmp_path, monkeypatch):
     render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)  # must not raise
 
 
+def test_info_text_shows_formula_and_bands():
+    from gee_animation.render import _info_text, draw_info_bar
+    cfg = types.SimpleNamespace(index="ndvi")
+    txt = _info_text(cfg)
+    assert txt.startswith("NDVI = (NIR - Red)") and "bands: NIR, Red" in txt
+    # composite: bands but no formula
+    assert _info_text(types.SimpleNamespace(index="cir")) == "CIR   bands: R<-NIR, G<-Red, B<-Green"
+    # and the bar draws onto the top strip
+    rgb = np.zeros((60, 200, 3), np.uint8)
+    out = draw_info_bar(rgb, txt)
+    assert out[:12, :].sum() > 0 and out[30:, :].sum() == 0
+
+
 def test_nice_distance_rounds_to_1_2_5_decades():
     assert _nice_distance(2500) == 2000      # 2 km
     assert _nice_distance(800) == 500        # 500 m
@@ -172,6 +186,26 @@ def test_assemble_falls_back_to_gif_when_mp4_fails(tmp_path, monkeypatch):
     paths = assemble(frames, cfg)
     assert all(p.suffix == ".gif" for p in paths)
     assert paths[0].exists()
+
+
+def test_render_composite_passes_rgb_through_without_colorbar(tmp_path):
+    # rgb/cir fetch returns an H×W×3 colour array; render must NOT colorize it,
+    # and must not draw a palette colorbar (composites have no palette).
+    cfg = _cfg(tmp_path, name="rgbtest")
+    cfg.index = "rgb"
+    cfg.palette = []                                   # composite: no palette
+
+    def fake_fetch(image, cfg, geometry=None):
+        rgb = np.full((90, 140, 3), 123, dtype=float)
+        return rgb, np.ones((90, 140), dtype=bool)
+
+    paths = render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+    png = next(p for p in paths if p.suffix == ".png")
+    arr = np.asarray(Image.open(png))
+    # a central pixel (clear of the top info bar, bottom label bar and scale bar)
+    # keeps the exact composite value — proof it was passed through, not palettized
+    assert tuple(arr[45, 70]) == (123, 123, 123)
+    assert any(p.suffix == ".gif" and p.exists() for p in paths)
 
 
 def test_render_pipeline_with_injected_fetch(tmp_path):

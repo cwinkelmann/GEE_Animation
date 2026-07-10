@@ -13,12 +13,23 @@ from PIL import Image, ImageDraw
 
 from .aoi import _load_geojson_geometry, _read_shapefile_geometry
 from .imaging import colorize
+from .products import INDICES
 
 log = logging.getLogger(__name__)
 
 
 NODATA_RGB = (240, 240, 240)
 REGION_OUTLINE_RGB = (255, 235, 59)   # amber — high contrast over the index palette
+
+
+def _index_meta(cfg):
+    """Registry entry for cfg.index (bands/formula/composite), or None if unknown."""
+    return INDICES.get(getattr(cfg, "index", None))
+
+
+def _is_composite(cfg) -> bool:
+    meta = _index_meta(cfg)
+    return bool(meta and meta.composite)
 
 
 def _thumb_params(cfg, geometry) -> dict:
@@ -38,11 +49,20 @@ def _thumb_params(cfg, geometry) -> dict:
 
 
 def _fetch_thumbnail(image, cfg, geometry):
-    """Download the INDEX band via EE getThumbURL.
+    """Download the frame via EE getThumbURL.
 
-    Returns ``(index_arr, valid)`` where ``valid`` is a boolean mask (True where
-    EE returned data; masked/cloud pixels are transparent → False).
+    For a normal index returns ``(index_arr, valid)`` — a 2-D array in INDEX units
+    plus a validity mask. For a composite (rgb/cir) returns ``(rgb_arr, valid)``
+    where ``rgb_arr`` is H×W×3 (0..255, already colour). ``valid`` is False where
+    EE returned no data (masked/cloud pixels are transparent).
     """
+    if _is_composite(cfg):
+        url = image.select(["R", "G", "B"]).getThumbURL(_thumb_params(cfg, geometry))
+        with urlopen(url) as resp:  # noqa: S310 (trusted EE URL)
+            data = resp.read()
+        arr = np.asarray(Image.open(io.BytesIO(data)).convert("RGBA"), dtype=float)
+        return arr[..., :3], arr[..., 3] > 0
+
     url = image.select("INDEX").getThumbURL(_thumb_params(cfg, geometry))
     with urlopen(url) as resp:  # noqa: S310 (trusted EE URL)
         data = resp.read()
@@ -61,13 +81,13 @@ def apply_nodata(rgb: np.ndarray, valid: np.ndarray, color=NODATA_RGB) -> np.nda
     return out
 
 
-def add_colorbar(rgb: np.ndarray, cfg) -> np.ndarray:
+def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4) -> np.ndarray:
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
     w, h = img.size
     bar_w = max(20, int(w * 0.4))
     bar_h = max(6, h // 20)
-    x0, y0 = 4, 4
+    x0, y0 = 4, y_offset
     ramp = colorize(
         np.linspace(cfg.viz_min, cfg.viz_max, bar_w)[None, :],
         cfg.viz_min, cfg.viz_max, cfg.palette,
@@ -78,6 +98,26 @@ def add_colorbar(rgb: np.ndarray, cfg) -> np.ndarray:
     draw.rectangle([x0, y0, x0 + bar_w, y0 + bar_h], outline=(255, 255, 255, 255))
     draw.text((x0, y0 + bar_h + 1), f"{cfg.index.upper()} {cfg.viz_min:g}..{cfg.viz_max:g}",
               fill=(255, 255, 255, 255))
+    return np.asarray(img)
+
+
+def _info_text(cfg) -> str:
+    """One-line 'INDEX = formula   bands: …' describing how the frame was made."""
+    meta = _index_meta(cfg)
+    name = getattr(cfg, "index", "").upper()
+    head = f"{name} = {meta.formula}" if (meta and meta.formula) else name
+    bands = meta.bands if meta else ""
+    return f"{head}   bands: {bands}" if bands else head
+
+
+def draw_info_bar(rgb: np.ndarray, text: str) -> np.ndarray:
+    """Draw a translucent top bar naming the bands used and the formula (if any)."""
+    img = Image.fromarray(rgb.astype(np.uint8), "RGB")
+    draw = ImageDraw.Draw(img, "RGBA")
+    w, h = img.size
+    bar_h = max(12, h // 12)
+    draw.rectangle([0, 0, w, bar_h], fill=(0, 0, 0, 140))
+    draw.text((4, 1), text, fill=(255, 255, 255, 255))
     return np.asarray(img)
 
 
@@ -260,13 +300,19 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     draw_overlay = getattr(cfg, "draw_region", False) and getattr(cfg, "region_aoi", None)
     if draw_overlay:
         rings = _region_rings(cfg.region_aoi)
+    composite = _is_composite(cfg)
+    info_text = _info_text(cfg)
     rgb_frames: list[np.ndarray] = []
     for frame in frames:
-        index_arr, valid = fetch(frame.image, cfg, geometry)
-        rgb = colorize(index_arr, cfg.viz_min, cfg.viz_max, cfg.palette)
+        arr, valid = fetch(frame.image, cfg, geometry)
+        # composite fetch already returns colour (H×W×3); an index returns 2-D.
+        rgb = arr if arr.ndim == 3 else colorize(arr, cfg.viz_min, cfg.viz_max, cfg.palette)
         rgb = apply_nodata(rgb, valid)
         rgb = annotate(rgb, frame.label)
-        rgb = add_colorbar(rgb, cfg)
+        top_h = max(12, rgb.shape[0] // 12)          # height of the top info bar
+        if not composite:                            # colorbar needs a palette
+            rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4)
+        rgb = draw_info_bar(rgb, info_text)
         if draw_overlay:
             rgb = draw_region(rgb, bounds, rings)
         if bounds is not None:

@@ -1,0 +1,27 @@
+# Example config for a colour-infrared (CIR / false-colour) Sentinel-2 composite.
+# Channels: R<-NIR, G<-Red, B<-Green. Healthy vegetation (bright in NIR) reads red.
+name: wne_cir               # output basename -> out/wne_cir.mp4 / .gif / _<month>.png
+project: hnee-331218
+
+aoi:
+  frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 40
+
+start: "2022-05-01"
+end: "2022-09-01"
+
+sensor: sentinel2           # any reflectance sensor (sentinel2 / landsat / modis)
+index: cir                  # colour-infrared composite
+cadence: monthly
+max_cloud_percent: 60
+draw_region: true
+
+viz:
+  min: 0.0
+  max: 0.3
+
+render:
+  fps: 4
+  scale: 10
+  dimensions: 768

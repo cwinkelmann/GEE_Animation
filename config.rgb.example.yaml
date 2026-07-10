@@ -1,0 +1,28 @@
+# Example config for a true-colour (RGB) Sentinel-2 composite animation.
+# Composites render 3 real bands (R=Red, G=Green, B=Blue) — no index palette.
+name: wne_rgb               # output basename -> out/wne_rgb.mp4 / .gif / _<month>.png
+project: hnee-331218
+
+aoi:
+  frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 40
+
+start: "2022-05-01"
+end: "2022-09-01"
+
+sensor: sentinel2           # any reflectance sensor (sentinel2 / landsat / modis)
+index: rgb                  # true-colour composite
+cadence: monthly
+max_cloud_percent: 60
+draw_region: true
+
+# viz.min/max set the reflectance stretch applied to all three channels.
+viz:
+  min: 0.0
+  max: 0.3
+
+render:
+  fps: 4
+  scale: 10
+  dimensions: 768

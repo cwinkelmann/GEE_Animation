@@ -137,6 +137,21 @@ def _ndmi(sensor, image, ee_module=ee):
             .set("system:time_start", image.get("system:time_start")))
 
 
+def _rgb(sensor, image, ee_module=ee):
+    # True-colour composite: R=Red, G=Green, B=Blue (natural colour).
+    return (sensor.reflectance(image, ee_module)
+            .select(["red", "green", "blue"], ["R", "G", "B"])
+            .set("system:time_start", image.get("system:time_start")))
+
+
+def _cir(sensor, image, ee_module=ee):
+    # Colour-infrared (false colour): R←NIR, G←Red, B←Green. Healthy vegetation,
+    # highly reflective in NIR, reads bright red.
+    return (sensor.reflectance(image, ee_module)
+            .select(["nir", "red", "green"], ["R", "G", "B"])
+            .set("system:time_start", image.get("system:time_start")))
+
+
 # "ecostress": an approximation of high-resolution LST. Real ECOSTRESS data is
 # NOT in the Earth Engine catalog, so this NDVI-guided thermal-sharpens Landsat's
 # own thermal-band LST: it injects the high-frequency NDVI detail (native 30 m minus a
@@ -187,6 +202,11 @@ class Index:
     # uses it instead of the sensor's default collection — for indices that need a
     # bespoke, satellite-aware source (e.g. lst_smw joins the TOA thermal band).
     build_collection: Callable = None
+    # Overlay metadata (drawn on every frame): the bands used and the formula.
+    bands: str = ""
+    formula: str = None
+    # composite=True => a 3-band (R,G,B) visualization, not a 1-band palette index.
+    composite: bool = False
 
 
 SENSORS = {
@@ -204,19 +224,30 @@ _REFL = frozenset({"sentinel2", "landsat", "modis"})
 
 INDICES = {
     "ndvi": Index("ndvi", _REFL,
-                  (-0.2, 0.9, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _ndvi),
+                  (-0.2, 0.9, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _ndvi,
+                  bands="NIR, Red", formula="(NIR - Red) / (NIR + Red)"),
     "lst": Index("lst", frozenset({"landsat"}),
                  (0.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
-                 _lst),
+                 _lst, bands="Thermal (ST_B6/ST_B10)",
+                 formula="ST_B * 0.00341802 + 149.0 - 273.15 [C]"),
     "evi": Index("evi", _REFL,
-                 (0.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _evi),
+                 (0.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _evi,
+                 bands="NIR, Red, Blue",
+                 formula="2.5*(NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1)"),
     "ndwi": Index("ndwi", _REFL,
-                  (-0.3, 0.6, ["#a1622f", "#f6e8c3", "#2166ac"]), _ndwi),
+                  (-0.3, 0.6, ["#a1622f", "#f6e8c3", "#2166ac"]), _ndwi,
+                  bands="Green, NIR", formula="(Green - NIR) / (Green + NIR)"),
     "ndmi": Index("ndmi", _REFL,
-                  (-0.5, 0.8, ["#8c510a", "#f6e8c3", "#01665e"]), _ndmi),
+                  (-0.5, 0.8, ["#8c510a", "#f6e8c3", "#01665e"]), _ndmi,
+                  bands="NIR, SWIR1", formula="(NIR - SWIR1) / (NIR + SWIR1)"),
+    "rgb": Index("rgb", _REFL, (0.0, 0.3, None), _rgb,
+                 bands="Red, Green, Blue", composite=True),
+    "cir": Index("cir", _REFL, (0.0, 0.3, None), _cir,
+                 bands="R<-NIR, G<-Red, B<-Green", composite=True),
     "ecostress": Index("ecostress", frozenset({"landsat"}),
                        (0.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
-                       _ecostress),
+                       _ecostress, bands="Thermal, NIR, Red",
+                       formula="LST - 16*(NDVI - NDVI_100m)"),
 }
 
 
@@ -228,7 +259,9 @@ from . import smw_lst  # noqa: E402  (deferred to break the import cycle)
 
 INDICES["lst_smw"] = Index("lst_smw", frozenset({"landsat"}),
                            (0.0, 40.0, _LST_PALETTE), smw_lst.compute,
-                           build_collection=smw_lst.landsat_collection)
+                           build_collection=smw_lst.landsat_collection,
+                           bands="TOA Tb, NIR, Red, Green, QA",
+                           formula="A*Tb/e + B/e + C  (Ermida 2020 SMW)")
 
 
 def get_product(sensor: str, index: str):
