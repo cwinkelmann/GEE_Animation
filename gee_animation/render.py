@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -150,6 +151,55 @@ def draw_region(rgb: np.ndarray, bounds: tuple, rings: list,
     return np.asarray(img)
 
 
+def _nice_distance(meters: float) -> float:
+    """Round a distance down to a cartographer-friendly 1/2/5 × 10ᵏ value."""
+    exp = math.floor(math.log10(meters))
+    base = 10 ** exp
+    for mult in (5, 2, 1):
+        if meters >= mult * base:
+            return mult * base
+    return base
+
+
+def draw_scale_bar(rgb: np.ndarray, bounds: tuple, target_frac: float = 0.25,
+                   color=(255, 255, 255)) -> np.ndarray:
+    """Draw a ground-distance scale bar (bottom-right) onto an RGB frame.
+
+    `bounds` is the frame extent (minLon, minLat, maxLon, maxLat); the thumbnail
+    is linear EPSG:4326 over it, so metres-per-pixel follows from the longitude
+    span at the frame's mid-latitude. A "nice" round distance near `target_frac`
+    of the frame width is chosen for the bar length and label.
+    """
+    img = Image.fromarray(rgb.astype(np.uint8), "RGB")
+    h, w = rgb.shape[:2]
+    minx, miny, maxx, maxy = bounds
+    m_per_deg_lon = 111320.0 * math.cos(math.radians((miny + maxy) / 2.0))
+    frame_w_m = (maxx - minx) * m_per_deg_lon
+    if w < 24 or frame_w_m <= 0:      # too small to annotate meaningfully
+        return np.asarray(img)
+    nice_m = _nice_distance(frame_w_m * target_frac)
+    bar_px = int(round(nice_m / (frame_w_m / w)))
+    if bar_px < 1:
+        return np.asarray(img)
+    label = f"{nice_m / 1000:g} km" if nice_m >= 1000 else f"{nice_m:g} m"
+
+    draw = ImageDraw.Draw(img, "RGBA")
+    bar_h = max(12, h // 12)          # bottom label bar height (see annotate)
+    margin, tick = 6, 4
+    x1 = w - margin
+    x0 = x1 - bar_px
+    y = h - bar_h - margin            # sit just above the bottom month-label bar
+    tb = draw.textbbox((0, 0), label)
+    tw, th = tb[2] - tb[0], tb[3] - tb[1]
+    panel_top = y - tick - th - 4
+    draw.rectangle([x0 - 4, panel_top, x1 + 4, y + 4], fill=(0, 0, 0, 120))
+    draw.line([(x0, y), (x1, y)], fill=color, width=2)
+    draw.line([(x0, y - tick), (x0, y)], fill=color, width=2)   # end ticks
+    draw.line([(x1, y - tick), (x1, y)], fill=color, width=2)
+    draw.text(((x0 + x1) / 2 - tw / 2, panel_top + 2), label, fill=color)
+    return np.asarray(img)
+
+
 def _pad_to_even(frame: np.ndarray) -> np.ndarray:
     """Pad a frame's width/height up to the next even number (edge-replicated).
 
@@ -205,9 +255,10 @@ def assemble(frames_rgb: list[np.ndarray], cfg) -> list[Path]:
 
 
 def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
+    frame_aoi = getattr(cfg, "frame_aoi", None)
+    bounds = _aoi_bounds(frame_aoi) if frame_aoi else None
     draw_overlay = getattr(cfg, "draw_region", False) and getattr(cfg, "region_aoi", None)
     if draw_overlay:
-        bounds = _aoi_bounds(cfg.frame_aoi)
         rings = _region_rings(cfg.region_aoi)
     rgb_frames: list[np.ndarray] = []
     for frame in frames:
@@ -218,6 +269,8 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         rgb = add_colorbar(rgb, cfg)
         if draw_overlay:
             rgb = draw_region(rgb, bounds, rings)
+        if bounds is not None:
+            rgb = draw_scale_bar(rgb, bounds)
         rgb_frames.append(rgb)
     paths = assemble(rgb_frames, cfg)
     paths += _write_frames(Path(cfg.out_dir), cfg.name, rgb_frames,

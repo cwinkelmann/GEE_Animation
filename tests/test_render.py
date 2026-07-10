@@ -6,7 +6,9 @@ from gee_animation.render import (
     annotate,
     apply_nodata,
     assemble,
+    draw_scale_bar,
     render,
+    _nice_distance,
 )
 from gee_animation.compositing import Frame
 
@@ -15,7 +17,7 @@ def _cfg(tmp_path, name="anim", fps=2):
     return types.SimpleNamespace(
         name=name, out_dir=str(tmp_path),
         index="ndvi", viz_min=-0.2, viz_max=0.9, palette=["#000000", "#ffffff"],
-        fps=fps, scale=20, dimensions=64,
+        fps=fps, scale=20, dimensions=64, frame_aoi={"bbox": [0, 0, 1, 1]},
     )
 
 
@@ -121,6 +123,30 @@ def test_render_skips_region_overlay_when_disabled(tmp_path, monkeypatch):
         return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
 
     render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)  # must not raise
+
+
+def test_nice_distance_rounds_to_1_2_5_decades():
+    assert _nice_distance(2500) == 2000      # 2 km
+    assert _nice_distance(800) == 500        # 500 m
+    assert _nice_distance(140) == 100        # 100 m
+    assert _nice_distance(9000) == 5000      # 5 km
+
+
+def test_draw_scale_bar_labels_and_marks_frame():
+    # 1° lon at the equator ~111 km wide; a quarter of that -> a 20 km "nice" bar.
+    rgb = np.zeros((120, 240, 3), np.uint8)
+    out = draw_scale_bar(rgb, (0.0, 0.0, 1.0, 1.0))
+    assert out.shape == rgb.shape and out.dtype == np.uint8
+    assert out.sum() > 0                                  # bar/label drawn
+    # drawn in the bottom-right quadrant, not the top-left
+    assert out[:60, :120].sum() == 0
+    assert out[60:, 120:].sum() > 0
+
+
+def test_draw_scale_bar_skips_tiny_frames():
+    rgb = np.zeros((8, 8, 3), np.uint8)
+    out = draw_scale_bar(rgb, (0.0, 0.0, 1.0, 1.0))
+    assert out.sum() == 0                                 # too small: no-op
 
 
 def test_assemble_encodes_mp4_for_odd_dimension_frames(tmp_path):
