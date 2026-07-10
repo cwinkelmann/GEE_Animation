@@ -68,7 +68,7 @@ See `config.example.yaml` (Sentinel-2 NDVI) or `config.lst.example.yaml` (Landsa
   - **`frame`**: the animation extent (rectangle); aspect ratio is preserved when rendering.
   - **`region`**: the important region (polygon); only scenes where cloud coverage over this region is less than `region_max_cloud_percent` (default: 10%) are included, and its outline is drawn on each frame when `draw_region` is set.
 - **`start`/`end`**: ISO dates (end exclusive).
-- **`sensor`**: `sentinel2`, `landsat`, or `modis` (MOD09A1, 8-day 500 m).
+- **`sensor`**: `sentinel2`, `landsat` (Collection-2 L2, missions 4/5/7/8/9 harmonized — ~1984→present), or `modis` (MOD09A1, 8-day 500 m).
 - **`index`**: `ndvi`, `evi`, `ndwi` (McFeeters, open water), `ndmi` (moisture) — all sensors; or `lst` / `ecostress` (Landsat only). `ecostress` is an NDVI-sharpened LST (an approximation — real ECOSTRESS data is not in the Earth Engine catalog).
 - **`max_cloud_percent`**: scene-level pre-filter threshold (Sentinel-2/Landsat only; MODIS has no per-scene cloud metadata, so this is ignored and only the region filter applies).
 - **`region_max_cloud_percent`**: region-level cloud filter (kept only if cloud over region < threshold).
@@ -94,6 +94,11 @@ a neutral grey rather than an index colour.
 - Sensors: Sentinel-2, Landsat, MODIS. Indices: NDVI, EVI, NDWI, NDMI (all
   sensors), LST and `ecostress` (Landsat only). Adding new indices/sensors
   requires registry changes in `products.py`.
+- The `landsat` sensor spans **Collection-2 missions 4/5/7/8/9** (~1984→present):
+  each mission's bands are renamed to a canonical set at collection build
+  (TM/ETM+ `SR_B1–B5,B7` + `ST_B6`; OLI/TIRS `SR_B2–B7` + `ST_B10`), so every
+  Landsat index runs across the whole record. Landsat 7 (post-2003 SLC-off) has
+  wedge-shaped data gaps, softened by monthly medians.
 - `ecostress` approximates high-resolution LST by NDVI-guided thermal-sharpening
   of Landsat `ST_B10` (real ECOSTRESS data is not available in Earth Engine). It
   injects native-30 m NDVI detail into the coarser thermal field using an

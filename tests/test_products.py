@@ -13,9 +13,7 @@ def test_registry_contents():
     assert P.SENSORS["sentinel2"].scene_cloud_property == "CLOUDY_PIXEL_PERCENTAGE"
     assert P.SENSORS["landsat"].scene_cloud_property == "CLOUD_COVER"
     assert P.SENSORS["modis"].scene_cloud_property is None   # no per-scene cloud metadata
-    assert P.SENSORS["modis"].collection_ids == ("MODIS/061/MOD09A1",)
-    assert P.SENSORS["landsat"].collection_ids == (
-        "LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2")
+    assert callable(P.SENSORS["landsat"].collection)          # custom harmonizing builder
     assert P.INDICES["lst"].sensors == frozenset({"landsat"})
     for name in ("ndvi", "evi", "ndwi", "ndmi"):
         assert P.INDICES[name].sensors == _REFL_INDICES
@@ -101,8 +99,8 @@ def test_ecostress_sharpens_lst_with_ndvi_detail_and_keeps_time():
     class FakeSensor:
         def reflectance(self, image, ee_module=None): rec["refl"] = True; return Chain(rec)
     out = P.INDICES["ecostress"].compute(FakeSensor(), Chain(rec), ee_module=None)
-    # LST from ST_B10 with the standard scale/offset, in Celsius
-    assert "ST_B10" in rec["select"]
+    # LST from the canonical thermal band with the standard scale/offset, in Celsius
+    assert "thermal" in rec["select"]
     assert 0.00341802 in rec["multiply"] and 149.0 in rec["add"] and 273.15 in rec["subtract"]
     # NDVI high-frequency detail (focal-mean smoothing) injected into the thermal field
     assert rec.get("refl") and rec["nd"] == ("nir", "red")
@@ -146,14 +144,38 @@ def test_modis_mask_and_cloud_band_use_state_bits():
     assert cb == "cloudband" and rec["rename"] == "cloud"
 
 
-def test_collection_merges_landsat(ee_recorder=None):
-    calls = []
+def test_landsat_collection_harmonizes_l4_to_l9():
+    loaded, selects = [], []
     class FakeColl:
         def __init__(self, cid): self.cid = cid
-        def merge(self, other): calls.append(("merge", self.cid, other.cid)); return self
-    ee = types.SimpleNamespace(ImageCollection=lambda cid: FakeColl(cid))
+        def select(self, src, dst): selects.append((self.cid, tuple(src), tuple(dst))); return self
+        def merge(self, other): return self
+    ee = types.SimpleNamespace(ImageCollection=lambda cid: (loaded.append(cid) or FakeColl(cid)))
     P.SENSORS["landsat"].collection(ee_module=ee)
-    assert calls == [("merge", "LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2")]
+    # all five Landsat missions loaded
+    assert loaded == [
+        "LANDSAT/LT04/C02/T1_L2", "LANDSAT/LT05/C02/T1_L2", "LANDSAT/LE07/C02/T1_L2",
+        "LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2"]
+    dst_sets = {s[2] for s in selects}
+    # every mission is renamed to the SAME canonical band set
+    assert dst_sets == {("blue", "green", "red", "nir", "swir1", "swir2", "thermal", "QA_PIXEL")}
+    by_id = {s[0]: s[1] for s in selects}
+    # TM/ETM+ thermal is ST_B6, red=SR_B3, nir=SR_B4; OLI thermal is ST_B10, red=SR_B4, nir=SR_B5
+    assert by_id["LANDSAT/LT05/C02/T1_L2"] == (
+        "SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "ST_B6", "QA_PIXEL")
+    assert by_id["LANDSAT/LC08/C02/T1_L2"] == (
+        "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "ST_B10", "QA_PIXEL")
+
+
+def test_s2_and_modis_collection_merge():
+    loaded = []
+    class FakeColl:
+        def __init__(self, cid): self.cid = cid
+        def merge(self, other): return self
+    ee = types.SimpleNamespace(ImageCollection=lambda cid: (loaded.append(cid) or FakeColl(cid)))
+    P.SENSORS["sentinel2"].collection(ee_module=ee)
+    P.SENSORS["modis"].collection(ee_module=ee)
+    assert loaded == ["COPERNICUS/S2_SR_HARMONIZED", "MODIS/061/MOD09A1"]
 
 
 def test_s2_reflectance_selects_aliases_and_scales():
@@ -169,14 +191,16 @@ def test_s2_reflectance_selects_aliases_and_scales():
     assert "add" not in rec   # S2 scale is purely multiplicative, no offset
 
 
-def test_landsat_reflectance_scales_with_offset():
+def test_landsat_reflectance_selects_canonical_bands_and_scales():
+    # Landsat is harmonized to canonical band names at collection build, so
+    # reflectance just selects the aliases and scales.
     rec = {}
     class FakeImg:
-        def select(self, bands, names): rec["select"] = (tuple(bands), tuple(names)); return self
+        def select(self, names): rec["select"] = tuple(names); return self
         def multiply(self, v): rec["multiply"] = v; return self
         def add(self, v): rec["add"] = v; return self
     P.SENSORS["landsat"].reflectance(FakeImg())
-    assert rec["select"][0] == ("SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7")
+    assert rec["select"] == ("blue", "green", "red", "nir", "swir1", "swir2")
     assert rec["multiply"] == 0.0000275 and rec["add"] == -0.2
 
 
@@ -210,7 +234,7 @@ def test_lst_applies_scale_offset_kelvin_to_celsius_and_keeps_time():
         def select(self, b): rec["select"] = b; return FakeBand()
         def get(self, k): rec["get"] = k; return "TS"
     out = P.INDICES["lst"].compute(object(), FakeImg(), ee_module=None)
-    assert rec["select"] == "ST_B10"
+    assert rec["select"] == "thermal"   # canonical harmonized thermal band (ST_B6/ST_B10)
     assert rec["multiply"] == 0.00341802 and rec["add"] == 149.0 and rec["subtract"] == 273.15
     assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
     assert out == "lst_band"

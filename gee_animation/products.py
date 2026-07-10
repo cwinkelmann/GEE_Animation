@@ -31,11 +31,27 @@ def _s2_reflectance(image, ee_module=ee):
     return image.select(list(_S2_ALIASES[0]), list(_S2_ALIASES[1])).multiply(0.0001)
 
 
-# --- Landsat Collection 2 Level 2 ------------------------------------------
+# --- Landsat Collection 2 Level 2 (harmonized L4-L9) ------------------------
 # QA_PIXEL bits: 1 dilated cloud, 2 cirrus, 3 cloud, 4 cloud shadow, 5 snow.
 _L_QA_BITS = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5)
-_L_ALIASES = (("SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7"),
-              ("blue", "green", "red", "nir", "swir1", "swir2"))
+
+# L4/5/7 (TM/ETM+) and L8/9 (OLI/TIRS) name bands differently; harmonize every
+# mission to a single canonical band set at collection build. SR and ST scale
+# factors are identical across all C2 L2 missions, and QA_PIXEL is standardized.
+_L_CANON = ["blue", "green", "red", "nir", "swir1", "swir2", "thermal", "QA_PIXEL"]
+_L_TM_SRC = ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "ST_B6", "QA_PIXEL"]
+_L_OLI_SRC = ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "ST_B10", "QA_PIXEL"]
+_L_TM_IDS = ("LANDSAT/LT04/C02/T1_L2", "LANDSAT/LT05/C02/T1_L2", "LANDSAT/LE07/C02/T1_L2")
+_L_OLI_IDS = ("LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2")
+
+
+def _landsat_collection(ee_module=ee):
+    parts = [ee_module.ImageCollection(cid).select(_L_TM_SRC, _L_CANON) for cid in _L_TM_IDS]
+    parts += [ee_module.ImageCollection(cid).select(_L_OLI_SRC, _L_CANON) for cid in _L_OLI_IDS]
+    merged = parts[0]
+    for extra in parts[1:]:
+        merged = merged.merge(extra)
+    return merged
 
 
 def _landsat_mask_clouds(image, ee_module=ee):
@@ -48,7 +64,8 @@ def _landsat_cloud_band(image, ee_module=ee):
 
 
 def _landsat_reflectance(image, ee_module=ee):
-    return image.select(list(_L_ALIASES[0]), list(_L_ALIASES[1])).multiply(0.0000275).add(-0.2)
+    # bands already renamed to canonical aliases at collection build
+    return image.select(["blue", "green", "red", "nir", "swir1", "swir2"]).multiply(0.0000275).add(-0.2)
 
 
 # --- MODIS (MOD09A1 8-day surface reflectance, 500 m) -----------------------
@@ -89,7 +106,7 @@ def _ndvi(sensor, image, ee_module=ee):
 
 
 def _lst(sensor, image, ee_module=ee):
-    return (image.select("ST_B10")
+    return (image.select("thermal")
             .multiply(0.00341802).add(149.0).subtract(273.15)
             .rename(INDEX_BAND)
             .set("system:time_start", image.get("system:time_start")))
@@ -122,7 +139,7 @@ def _ndmi(sensor, image, ee_module=ee):
 
 # "ecostress": an approximation of high-resolution LST. Real ECOSTRESS data is
 # NOT in the Earth Engine catalog, so this NDVI-guided thermal-sharpens Landsat's
-# own ST_B10 LST: it injects the high-frequency NDVI detail (native 30 m minus a
+# own thermal-band LST: it injects the high-frequency NDVI detail (native 30 m minus a
 # ~100 m focal mean — the thermal band's effective resolution) into the
 # temperature field, cooler where local vegetation detail is higher. Empirical,
 # "somewhat" sharpened — not a rigorous TsHARP regression.
@@ -130,7 +147,7 @@ _ECOSTRESS_NDVI_SLOPE = 16.0   # °C per unit of NDVI detail
 
 
 def _ecostress(sensor, image, ee_module=ee):
-    lst = (image.select("ST_B10")
+    lst = (image.select("thermal")
            .multiply(0.00341802).add(149.0).subtract(273.15))
     ndvi = sensor.reflectance(image, ee_module).normalizedDifference(["nir", "red"])
     ndvi_detail = ndvi.subtract(
@@ -140,21 +157,24 @@ def _ecostress(sensor, image, ee_module=ee):
             .set("system:time_start", image.get("system:time_start")))
 
 
+def _merged(*collection_ids):
+    """A collection builder that loads and merges one or more collections as-is."""
+    def build(ee_module=ee):
+        merged = ee_module.ImageCollection(collection_ids[0])
+        for cid in collection_ids[1:]:
+            merged = merged.merge(ee_module.ImageCollection(cid))
+        return merged
+    return build
+
+
 @dataclass(frozen=True)
 class Sensor:
     name: str
-    collection_ids: tuple
-    scene_cloud_property: str
+    collection: Callable          # (ee_module=ee) -> ee.ImageCollection
+    scene_cloud_property: str      # None if the sensor has no per-scene cloud metadata
     mask_clouds: Callable
     cloud_band: Callable
     reflectance: Callable
-
-    def collection(self, ee_module=ee):
-        colls = [ee_module.ImageCollection(cid) for cid in self.collection_ids]
-        merged = colls[0]
-        for extra in colls[1:]:
-            merged = merged.merge(extra)
-        return merged
 
 
 @dataclass(frozen=True)
@@ -166,14 +186,12 @@ class Index:
 
 
 SENSORS = {
-    "sentinel2": Sensor("sentinel2", ("COPERNICUS/S2_SR_HARMONIZED",),
+    "sentinel2": Sensor("sentinel2", _merged("COPERNICUS/S2_SR_HARMONIZED"),
                         "CLOUDY_PIXEL_PERCENTAGE",
                         _s2_mask_clouds, _s2_cloud_band, _s2_reflectance),
-    "landsat": Sensor("landsat",
-                      ("LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2"),
-                      "CLOUD_COVER",
+    "landsat": Sensor("landsat", _landsat_collection, "CLOUD_COVER",
                       _landsat_mask_clouds, _landsat_cloud_band, _landsat_reflectance),
-    "modis": Sensor("modis", ("MODIS/061/MOD09A1",), None,
+    "modis": Sensor("modis", _merged("MODIS/061/MOD09A1"), None,
                     _modis_mask_clouds, _modis_cloud_band, _modis_reflectance),
 }
 
