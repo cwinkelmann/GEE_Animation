@@ -24,4 +24,5 @@ draw_region: true           # overlay the region polygon outline on each frame
 render:
   fps: 4
   scale: 30                 # metres/pixel
-  dimensions: 768           # max width/height of each frame
+  dimensions: 768           # capped to native 100 m thermal -> honest (blocky) pixels
+  crs: auto                 # UTM from AOI centroid -> square pixels + correct scale bar

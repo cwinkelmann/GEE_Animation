@@ -39,13 +39,17 @@ def _thumb_params(cfg, geometry) -> dict:
     preserving the frame's aspect ratio.
     """
     # single-int `dimensions` -> EE fits the largest side and preserves aspect ratio
-    return {
+    params = {
         "min": cfg.viz_min,
         "max": cfg.viz_max,
         "dimensions": cfg.dimensions,
         "region": geometry,
         "format": "png",
     }
+    crs = getattr(cfg, "crs", None)   # metric CRS (e.g. EPSG:32633) -> square pixels
+    if crs:
+        params["crs"] = crs
+    return params
 
 
 def _fetch_thumbnail(image, cfg, geometry):
@@ -234,24 +238,59 @@ def _nice_distance(meters: float) -> float:
     return base
 
 
-def draw_scale_bar(rgb: np.ndarray, bounds: tuple, target_frac: float = 0.25,
+def _utm_epsg(lon: float, lat: float) -> str:
+    """WGS84 UTM EPSG code for a lon/lat (e.g. Brandenburg 13.9E/53N -> EPSG:32633)."""
+    zone = int((lon + 180) / 6) + 1
+    return f"EPSG:{(32600 if lat >= 0 else 32700) + zone}"
+
+
+def _resolve_crs(cfg, bounds):
+    """Concrete render CRS: None (EPSG:4326), an explicit code, or UTM for "auto"."""
+    crs = getattr(cfg, "crs", None)
+    if not crs:
+        return None
+    if crs == "auto":
+        if bounds is None:
+            return None
+        minx, miny, maxx, maxy = bounds
+        return _utm_epsg((minx + maxx) / 2.0, (miny + maxy) / 2.0)
+    return crs
+
+
+def _project(bounds, rings, crs):
+    """Project a lon/lat bbox + rings into `crs` (metres). Returns (bounds, rings)."""
+    from pyproj import Transformer
+    t = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+    minx, miny, maxx, maxy = bounds
+    xs, ys = zip(*(t.transform(lon, lat) for lon, lat
+                   in [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]))
+    pbounds = (min(xs), min(ys), max(xs), max(ys))
+    prings = [[t.transform(lon, lat) for lon, lat in ring] for ring in rings]
+    return pbounds, prings
+
+
+def _frame_width_m(bounds, proj_bounds, crs) -> float:
+    """Ground width (metres) of the frame's x-extent, in whatever CRS is rendered."""
+    if crs:
+        return proj_bounds[2] - proj_bounds[0]
+    minx, miny, maxx, maxy = bounds
+    return (maxx - minx) * 111320.0 * math.cos(math.radians((miny + maxy) / 2.0))
+
+
+def draw_scale_bar(rgb: np.ndarray, frame_width_m: float, target_frac: float = 0.25,
                    color=(255, 255, 255)) -> np.ndarray:
     """Draw a ground-distance scale bar (bottom-right) onto an RGB frame.
 
-    `bounds` is the frame extent (minLon, minLat, maxLon, maxLat); the thumbnail
-    is linear EPSG:4326 over it, so metres-per-pixel follows from the longitude
-    span at the frame's mid-latitude. A "nice" round distance near `target_frac`
-    of the frame width is chosen for the bar length and label.
+    `frame_width_m` is the frame's x-extent in metres (the image width maps to it),
+    so the bar is correct whether the render is plate carrée or a metric CRS. A
+    "nice" round distance near `target_frac` of the frame width is chosen.
     """
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     h, w = rgb.shape[:2]
-    minx, miny, maxx, maxy = bounds
-    m_per_deg_lon = 111320.0 * math.cos(math.radians((miny + maxy) / 2.0))
-    frame_w_m = (maxx - minx) * m_per_deg_lon
-    if w < 24 or frame_w_m <= 0:      # too small to annotate meaningfully
+    if w < 24 or frame_width_m <= 0:      # too small to annotate meaningfully
         return np.asarray(img)
-    nice_m = _nice_distance(frame_w_m * target_frac)
-    bar_px = int(round(nice_m / (frame_w_m / w)))
+    nice_m = _nice_distance(frame_width_m * target_frac)
+    bar_px = int(round(nice_m / (frame_width_m / w)))
     if bar_px < 1:
         return np.asarray(img)
     label = f"{nice_m / 1000:g} km" if nice_m >= 1000 else f"{nice_m:g} m"
@@ -331,9 +370,16 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     frame_aoi = getattr(cfg, "frame_aoi", None)
     bounds = _aoi_bounds(frame_aoi) if frame_aoi else None
     _cap_dimensions(cfg, bounds)      # honest native resolution (no silent upsampling)
-    draw_overlay = getattr(cfg, "draw_region", False) and getattr(cfg, "region_aoi", None)
-    if draw_overlay:
-        rings = _region_rings(cfg.region_aoi)
+    cfg.crs = _resolve_crs(cfg, bounds)   # concrete EPSG (or None) for getThumbURL + overlays
+    draw_overlay = bool(getattr(cfg, "draw_region", False) and getattr(cfg, "region_aoi", None)
+                        and bounds is not None)
+    rings = _region_rings(cfg.region_aoi) if draw_overlay else []
+    # Project the overlay bounds/rings into the render CRS so the region outline and
+    # scale bar match the (possibly metric) pixel grid; identity for EPSG:4326.
+    if bounds is not None:
+        proj_bounds, proj_rings = (_project(bounds, rings, cfg.crs) if cfg.crs
+                                   else (bounds, rings))
+        frame_width_m = _frame_width_m(bounds, proj_bounds, cfg.crs)
     composite = _is_composite(cfg)
     info_text = _info_text(cfg)
     rgb_frames: list[np.ndarray] = []
@@ -349,9 +395,9 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
             rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4)
         rgb = draw_info_bar(rgb, info_text)
         if draw_overlay:
-            rgb = draw_region(rgb, bounds, rings)
+            rgb = draw_region(rgb, proj_bounds, proj_rings)
         if bounds is not None:
-            rgb = draw_scale_bar(rgb, bounds)
+            rgb = draw_scale_bar(rgb, frame_width_m)
         rgb_frames.append(rgb)
     paths = assemble(rgb_frames, cfg)
     paths += _write_frames(Path(cfg.out_dir), cfg.name, rgb_frames,

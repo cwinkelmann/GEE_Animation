@@ -200,7 +200,7 @@ See `config.example.yaml` (Sentinel-2 NDVI) or `config.lst.example.yaml` (Landsa
 - **`max_cloud_percent`**: scene-level pre-filter threshold (Sentinel-2/Landsat only; MODIS has no per-scene cloud metadata, so this is ignored and only the region filter applies).
 - **`region_max_cloud_percent`**: region-level cloud filter (kept only if cloud over region < threshold).
 - **`viz`** (optional; min/max/palette): fixed range for colorization so colour is comparable across frames. If omitted, per-index defaults apply (NDVI −0.2..0.9 green; EVI 0..1 green; NDWI −0.3..0.6 brown→blue; NDMI −0.5..0.8 brown→teal; LST 0..40°C thermal).
-- **`render`** (fps/scale/dimensions): rendering parameters.
+- **`render`** (fps/scale/dimensions/crs): rendering parameters. `render.crs` sets the output projection — omit for EPSG:4326 (plate carrée; at 53° N the x-axis is compressed by `cos(lat)`, so pixels are non-square), or set `auto` for the UTM zone from the AOI centroid (square pixels; the scale bar is then correct on both axes), or an explicit code like `EPSG:25833`.
 - **`out_dir`**: output directory (default `out`).
 
 Default GEE project is `hnee-331218`.

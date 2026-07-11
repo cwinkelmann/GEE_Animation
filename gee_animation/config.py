@@ -35,6 +35,9 @@ class RunConfig:
     fps: int
     scale: float
     dimensions: int
+    # Render CRS (from render.crs). None => EPSG:4326 (plate carrée). "auto" => UTM
+    # zone from the AOI centroid (square pixels; correct scale bar on both axes).
+    crs: str = None
     out_dir: str = "out"
     draw_region: bool = True
     # Optional Landsat mission whitelist (e.g. ["L8", "L9"]). None => sensor default
@@ -79,6 +82,7 @@ class RunConfig:
                 fps=int(render["fps"]),
                 scale=float(render["scale"]),
                 dimensions=int(render["dimensions"]),
+                crs=render.get("crs"),
                 out_dir=str(raw.get("out_dir", "out")),
                 draw_region=bool(raw.get("draw_region", True)),
                 missions=raw.get("missions"),

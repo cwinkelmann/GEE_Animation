@@ -139,6 +139,25 @@ def test_info_text_shows_formula_and_bands():
     assert out[:12, :].sum() > 0 and out[30:, :].sum() == 0
 
 
+def test_render_projects_overlay_and_resolves_crs_when_auto(tmp_path, monkeypatch):
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.crs = "auto"
+    cfg.draw_region = True
+    cfg.frame_aoi = {"bbox": [13.90, 52.99, 13.92, 53.00]}   # Brandenburg
+    cfg.region_aoi = {"bbox": [13.905, 52.993, 13.915, 52.998]}
+    captured = {}
+    monkeypatch.setattr(r, "draw_region",
+                        lambda rgb, bounds, rings, **k: (captured.update(bounds=bounds) or rgb))
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
+
+    render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+    assert cfg.crs == "EPSG:32633"                    # "auto" resolved to UTM 33N
+    assert captured["bounds"][0] > 100_000            # overlay bounds are UTM metres, not degrees
+
+
 def test_nice_distance_rounds_to_1_2_5_decades():
     assert _nice_distance(2500) == 2000      # 2 km
     assert _nice_distance(800) == 500        # 500 m
@@ -147,9 +166,9 @@ def test_nice_distance_rounds_to_1_2_5_decades():
 
 
 def test_draw_scale_bar_labels_and_marks_frame():
-    # 1° lon at the equator ~111 km wide; a quarter of that -> a 20 km "nice" bar.
+    # ~111 km wide frame; a quarter of that -> a 20 km "nice" bar.
     rgb = np.zeros((120, 240, 3), np.uint8)
-    out = draw_scale_bar(rgb, (0.0, 0.0, 1.0, 1.0))
+    out = draw_scale_bar(rgb, 111320.0)
     assert out.shape == rgb.shape and out.dtype == np.uint8
     assert out.sum() > 0                                  # bar/label drawn
     # drawn in the bottom-right quadrant, not the top-left
@@ -159,8 +178,31 @@ def test_draw_scale_bar_labels_and_marks_frame():
 
 def test_draw_scale_bar_skips_tiny_frames():
     rgb = np.zeros((8, 8, 3), np.uint8)
-    out = draw_scale_bar(rgb, (0.0, 0.0, 1.0, 1.0))
+    out = draw_scale_bar(rgb, 111320.0)
     assert out.sum() == 0                                 # too small: no-op
+
+
+def test_utm_epsg_and_resolve_crs():
+    from gee_animation.render import _utm_epsg, _resolve_crs
+    assert _utm_epsg(13.9, 53.0) == "EPSG:32633"          # Brandenburg -> UTM 33N
+    assert _utm_epsg(-122.4, 37.8) == "EPSG:32610"        # San Francisco -> UTM 10N
+    assert _utm_epsg(13.9, -53.0) == "EPSG:32733"         # southern hemisphere
+    cfg = types.SimpleNamespace(crs="auto")
+    assert _resolve_crs(cfg, (13.0, 52.9, 14.0, 53.1)) == "EPSG:32633"
+    assert _resolve_crs(types.SimpleNamespace(crs=None), (13, 52, 14, 53)) is None
+    assert _resolve_crs(types.SimpleNamespace(crs="EPSG:3035"), None) == "EPSG:3035"
+
+
+def test_project_gives_metric_bounds_and_square_pixels():
+    from gee_animation.render import _project, _frame_width_m
+    # a ~1 km square AOI at 53N: in EPSG:4326 the lon span is compressed by cos(53),
+    # but in UTM the ground width and height should be ~equal (square pixels).
+    b = (13.900, 52.995, 13.910, 53.005)
+    pb, pr = _project(b, [[(13.9, 53.0), (13.91, 53.0)]], "EPSG:32633")
+    w_m = pb[2] - pb[0]; h_m = pb[3] - pb[1]
+    assert 600 < w_m < 800 and 1050 < h_m < 1200          # metres, not degrees
+    assert len(pr) == 1 and len(pr[0]) == 2               # rings projected too
+    assert _frame_width_m(b, pb, "EPSG:32633") == pb[2] - pb[0]
 
 
 def test_assemble_encodes_mp4_for_odd_dimension_frames(tmp_path):
