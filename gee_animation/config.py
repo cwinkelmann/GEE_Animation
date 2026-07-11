@@ -37,6 +37,9 @@ class RunConfig:
     dimensions: int
     out_dir: str = "out"
     draw_region: bool = True
+    # Optional Landsat mission whitelist (e.g. ["L8", "L9"]). None => sensor default
+    # (thermal indices default to L8/L9; see collection.build).
+    missions: list = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RunConfig":
@@ -72,6 +75,7 @@ class RunConfig:
                 dimensions=int(render["dimensions"]),
                 out_dir=str(raw.get("out_dir", "out")),
                 draw_region=bool(raw.get("draw_region", True)),
+                missions=raw.get("missions"),
             )
         except KeyError as exc:
             raise ConfigError(f"missing required config key: {exc}") from exc
@@ -94,6 +98,12 @@ class RunConfig:
                 )
         if not 0 <= self.region_max_cloud_percent <= 100:
             raise ConfigError("region_max_cloud_percent must be between 0 and 100")
+        if self.missions is not None:
+            valid = {"L4", "L5", "L7", "L8", "L9"}
+            bad = [m for m in self.missions if m not in valid]
+            if bad:
+                raise ConfigError(
+                    f"unknown missions {bad}; valid Landsat missions: {sorted(valid)}")
         try:
             start = date.fromisoformat(self.start)
             end = date.fromisoformat(self.end)

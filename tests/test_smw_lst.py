@@ -107,10 +107,10 @@ def test_compute_outputs_index_band_and_preserves_time_start():
 
 def test_build_uses_index_build_collection_hook(monkeypatch):
     """When an index provides build_collection, build() must use it (not sensor.collection)."""
-    used = {}
+    used = {"filters": []}
 
     class FakeColl:
-        def filter(self, f): return self
+        def filter(self, f): used["filters"].append(("filter", f)); return self
         def map(self, fn): return self
 
     def fake_build_collection(cfg, frame_geom, ee_module):
@@ -128,13 +128,16 @@ def test_build_uses_index_build_collection_hook(monkeypatch):
         build_collection=fake_build_collection)
     monkeypatch.setattr(C, "get_product", lambda s, i: (FakeSensor(), fake_index))
     ee = types.SimpleNamespace(Filter=types.SimpleNamespace(
-        lte=lambda n, v: ("lte", n, v), lt=lambda n, v: ("lt", n, v)))
-    cfg = types.SimpleNamespace(sensor="landsat", index="lst_smw",
+        lte=lambda n, v: ("lte", n, v), lt=lambda n, v: ("lt", n, v),
+        inList=lambda p, v: ("inList", p, v)))
+    cfg = types.SimpleNamespace(sensor="landsat", index="lst_smw", missions=None,
                                 start="2022-05-01", end="2022-09-01",
                                 max_cloud_percent=60, region_max_cloud_percent=10, scale=30)
     C.build(cfg, "FRAME", "REGION", ee_module=ee)
     assert used["hook"] == ("lst_smw", "FRAME")        # hook used with frame geometry
     assert "sensor_collection" not in used             # default path skipped
+    # thermal index also gets the L8/L9 mission filter on the hook's collection
+    assert ("filter", ("inList", "mission", ["L8", "L9"])) in used["filters"]
 
 
 def test_lst_smw_registered_landsat_only():

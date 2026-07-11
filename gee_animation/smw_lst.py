@@ -104,8 +104,10 @@ def landsat_collection(cfg, frame_geom, ee_module=ee):
               .select(src, _L_CANON))
         toa = (ee_module.ImageCollection(toa_id)
                .filterDate(cfg.start, cfg.end).filterBounds(frame_geom))
+        # SATID drives the per-image SMW coefficients; "mission" lets build() apply
+        # the same L8/L9-only thermal filter it uses for the plain landsat collection.
         joined = _join_bt(l2, toa, tir, ee_module).map(
-            lambda img: img.set("SATID", satid))
+            lambda img: img.set({"SATID": satid, "mission": satid}))
         parts.append(joined)
     merged = parts[0]
     for extra in parts[1:]:

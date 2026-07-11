@@ -154,6 +154,7 @@ def test_landsat_collection_harmonizes_l4_to_l9():
     class FakeColl:
         def __init__(self, cid): self.cid = cid
         def select(self, src, dst): selects.append((self.cid, tuple(src), tuple(dst))); return self
+        def map(self, fn): return self          # mission tagging — no-op for this fake
         def merge(self, other): return self
     ee = types.SimpleNamespace(ImageCollection=lambda cid: (loaded.append(cid) or FakeColl(cid)))
     P.SENSORS["landsat"].collection(ee_module=ee)

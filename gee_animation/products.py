@@ -41,13 +41,19 @@ _L_QA_BITS = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5)
 _L_CANON = ["blue", "green", "red", "nir", "swir1", "swir2", "thermal", "QA_PIXEL"]
 _L_TM_SRC = ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "ST_B6", "QA_PIXEL"]
 _L_OLI_SRC = ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "ST_B10", "QA_PIXEL"]
-_L_TM_IDS = ("LANDSAT/LT04/C02/T1_L2", "LANDSAT/LT05/C02/T1_L2", "LANDSAT/LE07/C02/T1_L2")
-_L_OLI_IDS = ("LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2")
+# (mission id, Collection-2 L2 id) per mission; each image is tagged with a
+# "mission" property so build() can select missions (e.g. L8/L9-only for thermal).
+_L_TM_MISSIONS = (("L4", "LANDSAT/LT04/C02/T1_L2"), ("L5", "LANDSAT/LT05/C02/T1_L2"),
+                  ("L7", "LANDSAT/LE07/C02/T1_L2"))
+_L_OLI_MISSIONS = (("L8", "LANDSAT/LC08/C02/T1_L2"), ("L9", "LANDSAT/LC09/C02/T1_L2"))
 
 
 def _landsat_collection(ee_module=ee):
-    parts = [ee_module.ImageCollection(cid).select(_L_TM_SRC, _L_CANON) for cid in _L_TM_IDS]
-    parts += [ee_module.ImageCollection(cid).select(_L_OLI_SRC, _L_CANON) for cid in _L_OLI_IDS]
+    def _part(mission, cid, src):
+        return (ee_module.ImageCollection(cid).select(src, _L_CANON)
+                .map(lambda img, m=mission: img.set("mission", m)))
+    parts = [_part(m, cid, _L_TM_SRC) for m, cid in _L_TM_MISSIONS]
+    parts += [_part(m, cid, _L_OLI_SRC) for m, cid in _L_OLI_MISSIONS]
     merged = parts[0]
     for extra in parts[1:]:
         merged = merged.merge(extra)

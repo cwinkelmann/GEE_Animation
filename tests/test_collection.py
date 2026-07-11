@@ -41,20 +41,43 @@ def test_build_pipeline_order_and_uses_sensor(monkeypatch):
     ee = types.SimpleNamespace(
         Filter=types.SimpleNamespace(
             lte=lambda name, val: ("lte", name, val),
-            lt=lambda name, val: ("lt", name, val)))
-    cfg = types.SimpleNamespace(sensor="landsat", index="lst",
+            lt=lambda name, val: ("lt", name, val),
+            inList=lambda prop, vals: ("inList", prop, vals)))
+    cfg = types.SimpleNamespace(sensor="landsat", index="lst", missions=None,
                                 start="2022-01-01", end="2022-02-01",
                                 max_cloud_percent=60, region_max_cloud_percent=10, scale=20)
     C.build(cfg, "FRAME", "REGION", ee_module=ee)
     names = [c[0] for c in calls]
     assert names[0] == "collection"
     assert ("filterBounds", "FRAME") in calls
+    assert ("filter", ("inList", "mission", ["L8", "L9"])) in calls  # thermal -> L8/L9 only
     assert ("filter", ("lte", "CLOUD_COVER", 60)) in calls        # sensor's coarse property
     assert ("filter", ("lt", "region_cloud_fraction", 0.1)) in calls
     idx_lt = next(i for i, c in enumerate(calls) if c == ("filter", ("lt", "region_cloud_fraction", 0.1)))
     idx_maps = [i for i, c in enumerate(calls) if c == ("map",)]
     # map order: region-fraction, mask, index -> fraction filter before the mask map
     assert idx_maps[0] < idx_lt < idx_maps[1] < idx_maps[2]
+
+
+def test_effective_missions_defaults_thermal_to_l8_l9():
+    def cfg(sensor, index, missions=None, start="2022-01-01"):
+        return types.SimpleNamespace(sensor=sensor, index=index, missions=missions, start=start)
+    # thermal indices default to L8/L9; reflectance/non-landsat get no filter
+    assert C.effective_missions(cfg("landsat", "lst")) == ["L8", "L9"]
+    assert C.effective_missions(cfg("landsat", "lst_smw")) == ["L8", "L9"]
+    assert C.effective_missions(cfg("landsat", "lst_sharp")) == ["L8", "L9"]
+    assert C.effective_missions(cfg("landsat", "ndvi")) is None
+    assert C.effective_missions(cfg("sentinel2", "ndvi")) is None
+    # explicit missions always win, even for a thermal index
+    assert C.effective_missions(cfg("landsat", "lst", missions=["L7", "L8"])) == ["L7", "L8"]
+
+
+def test_effective_missions_warns_when_thermal_default_predates_landsat8(caplog):
+    import logging
+    cfg = types.SimpleNamespace(sensor="landsat", index="lst", missions=None, start="2005-06-01")
+    with caplog.at_level(logging.WARNING):
+        assert C.effective_missions(cfg) == ["L8", "L9"]
+    assert "predates Landsat 8" in caplog.text
 
 
 def test_build_skips_coarse_filter_when_no_scene_cloud_property(monkeypatch):
