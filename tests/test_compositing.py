@@ -21,16 +21,19 @@ class FakeImage:
 class FakeFiltered:
     def __init__(self, count):
         self._count = count
-    def size(self):
-        return types.SimpleNamespace(getInfo=lambda: self._count)
     def median(self):
         return FakeImage("median")
 
 
 class FakeCollection:
-    """Records filterDate calls; returns configured counts per month."""
+    """Fakes the two calls monthly_median makes: aggregate the present months in
+    one shot (via map + aggregate_array), then filterDate(month).median()."""
     def __init__(self, counts_by_start):
         self.counts = counts_by_start
+    def map(self, fn):
+        yms = [start[:7] for start, n in self.counts.items() for _ in range(n)]
+        return types.SimpleNamespace(
+            aggregate_array=lambda prop: types.SimpleNamespace(getInfo=lambda: yms))
     def filterDate(self, start, end):
         return FakeFiltered(self.counts.get(start, 0))
 
