@@ -9,6 +9,32 @@ def _write(tmp_path, body: str):
     return p
 
 
+def _base(extra: str) -> str:
+    return (
+        "name: t\nproject: p\n"
+        "aoi:\n  frame: {shapefile: frame.shp}\n  region: {shapefile: region.shp}\n"
+        'start: "2022-01-01"\nend: "2023-01-01"\n'
+        "sensor: landsat\ncadence: monthly\nmax_cloud_percent: 60\n"
+        "render: {fps: 4, scale: 30, dimensions: 768}\n" + extra)
+
+
+def test_climatology_anomaly_uses_diverging_default_and_needs_baseline(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+        "index: lst\nanomaly: climatology\nbaseline_years: [2015, 2024]\n")))
+    assert cfg.anomaly == "climatology" and cfg.baseline_years == [2015, 2024]
+    assert (cfg.viz_min, cfg.viz_max) == (-3.0, 3.0)          # diverging default applied
+    # missing baseline_years is rejected
+    with pytest.raises(ConfigError, match="baseline_years"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nanomaly: climatology\n")))
+
+
+def test_reference_anomaly_is_thermal_only(tmp_path):
+    with pytest.raises(ConfigError, match="thermal-only"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\nanomaly: reference\n")))
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: lst_smw\nanomaly: reference\n")))
+    assert cfg.anomaly == "reference"
+
+
 def test_accepts_shapefile_aois(tmp_path):
     p = _write(tmp_path, """
         name: t

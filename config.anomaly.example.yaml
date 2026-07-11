@@ -1,0 +1,26 @@
+# Climatology-anomaly LST over the WNE AOIs: each pixel as a z-score against its own
+# long-term value for the same calendar month. Turns the loop from decorative into
+# diagnostic — the forest shows up as a coherent thermal unit (its buffering vs the
+# fields), which a raw fixed-range LST can't show. Diverging palette by default.
+name: wne_lst_anomaly
+project: hnee-331218
+
+aoi:
+  frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 40
+
+sensor: landsat
+index: lst                   # any index works; thermal is the headline use
+start: "2022-05-01"
+end: "2022-10-01"
+cadence: monthly
+max_cloud_percent: 70
+
+anomaly: climatology         # (x - mean_month) / std_month per pixel
+baseline_years: [2015, 2024] # inclusive year range the climatology is built from
+
+draw_region: true
+render: { fps: 3, scale: 30, dimensions: 768, crs: auto }
+# viz omitted -> diverging z-score default (-3..3 sigma). For LST minus air
+# temperature instead, use: anomaly: reference   (thermal indices only; no baseline).

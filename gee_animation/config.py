@@ -44,6 +44,11 @@ class RunConfig:
     preset: str = None
     aspect: str = None
     upscale: str = "lanczos"
+    # Anomaly rendering (from top-level `anomaly` / `baseline_years`). "climatology"
+    # => per-pixel z-score vs baseline monthly climatology; "reference" => LST minus
+    # ERA5 air temp (thermal only). None => raw values.
+    anomaly: str = None
+    baseline_years: list = None
     out_dir: str = "out"
     draw_region: bool = True
     # Optional Landsat mission whitelist (e.g. ["L8", "L9"]). None => sensor default
@@ -66,7 +71,12 @@ class RunConfig:
             index = str(raw.get("index", "ndvi"))
             viz = dict(raw.get("viz") or {})
             spec = INDICES.get(index)
-            d_min, d_max, d_pal = spec.default_viz if spec else (0.0, 1.0, ["#000000", "#ffffff"])
+            anomaly = raw.get("anomaly")
+            if anomaly and not raw.get("viz"):        # diverging default (subsumes P0-5)
+                from .anomaly import ANOMALY_VIZ
+                d_min, d_max, d_pal = ANOMALY_VIZ.get(anomaly, (-3.0, 3.0, ["#000000", "#ffffff"]))
+            else:
+                d_min, d_max, d_pal = spec.default_viz if spec else (0.0, 1.0, ["#000000", "#ffffff"])
             cfg = cls(
                 name=str(raw["name"]),
                 project=str(raw["project"]),
@@ -94,6 +104,8 @@ class RunConfig:
                 upscale=str(render.get("upscale", "lanczos")),
                 out_dir=str(raw.get("out_dir", "out")),
                 draw_region=bool(raw.get("draw_region", True)),
+                anomaly=anomaly,
+                baseline_years=raw.get("baseline_years"),
                 missions=raw.get("missions"),
                 min_scenes=int(raw.get("min_scenes", 1)),
                 allow_upsample=bool(raw.get("allow_upsample", False)),
@@ -127,6 +139,16 @@ class RunConfig:
                     f"unknown missions {bad}; valid Landsat missions: {sorted(valid)}")
         if self.min_scenes < 1:
             raise ConfigError("min_scenes must be >= 1")
+        if self.anomaly is not None:
+            from .products import THERMAL_INDICES
+            if self.anomaly not in ("climatology", "reference"):
+                raise ConfigError(
+                    f"unknown anomaly {self.anomaly!r}; use 'climatology' or 'reference'")
+            if self.anomaly == "reference" and self.index not in THERMAL_INDICES:
+                raise ConfigError("anomaly: reference is thermal-only (lst / lst_smw / lst_sharp)")
+            if self.anomaly == "climatology" and not (
+                    isinstance(self.baseline_years, (list, tuple)) and len(self.baseline_years) == 2):
+                raise ConfigError("anomaly: climatology needs baseline_years: [firstYear, lastYear]")
         if self.preset or self.aspect or self.upscale != "lanczos":
             from .render import ASPECTS, PRESETS, UPSCALE_METHODS
             if self.preset and self.preset.lower() not in PRESETS and not str(self.preset).isdigit():

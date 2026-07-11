@@ -12,7 +12,7 @@ import types
 import zipfile
 from pathlib import Path
 
-from . import auth, aoi, charts, collection, compositing, render
+from . import anomaly, auth, aoi, charts, collection, compositing, render
 from .compositing import month_starts
 from .config import RunConfig
 from .products import INDICES, SENSORS, get_product
@@ -24,6 +24,7 @@ DEFAULT_DEPS = types.SimpleNamespace(
     frame_bbox=aoi.frame_bbox_from_region,
     build=collection.build,
     monthly_median=compositing.monthly_median,
+    anomaly=anomaly.apply,
     render=render.render,
     timeseries=charts.inside_outside_timeseries,
 )
@@ -124,6 +125,7 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
             "No imagery found for that AOI, date range and cloud filter — "
             "try a wider date range or a higher cloud threshold."
         )
+    frames = deps.anomaly(frames, cfg, frame_geom, region_geom, deps.build)
     paths = deps.render(frames, cfg, geometry=frame_geom)
     mp4 = next((str(p) for p in paths if str(p).endswith(".mp4")), None)
     gif = next((str(p) for p in paths if str(p).endswith(".gif")), None)

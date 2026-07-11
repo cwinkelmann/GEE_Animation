@@ -6,7 +6,7 @@ import sys
 import types
 from pathlib import Path
 
-from . import auth, aoi, collection, compositing, render
+from . import anomaly, auth, aoi, collection, compositing, render
 from .config import RunConfig, ConfigError
 
 DEFAULT_DEPS = types.SimpleNamespace(
@@ -14,6 +14,7 @@ DEFAULT_DEPS = types.SimpleNamespace(
     parse=aoi.parse,
     build=collection.build,
     monthly_median=compositing.monthly_median,
+    anomaly=anomaly.apply,
     render=render.render,
 )
 
@@ -29,6 +30,7 @@ def run(config_path: str, deps=DEFAULT_DEPS) -> list[Path]:
         raise RuntimeError(
             "No images found for the given AOI/date range/cloud filter."
         )
+    frames = deps.anomaly(frames, cfg, frame_geom, region_geom, deps.build)
     return deps.render(frames, cfg, geometry=frame_geom)
 
 

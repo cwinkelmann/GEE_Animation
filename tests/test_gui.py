@@ -37,6 +37,7 @@ def _fake_deps(tmp_path, captured, frames=None):
         frame_bbox=frame_bbox,
         build=lambda cfg, f, r: (captured.update(cfg=cfg, frame=f, region=r) or "COLL"),
         monthly_median=lambda coll, cfg: frames,
+        anomaly=lambda frames_, cfg, f, r, build: frames_,
         render=render,
         timeseries=lambda frames_, region, frame, scale: [(f.label, 0.8, 0.5) for f in frames_],
     )
