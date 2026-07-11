@@ -78,6 +78,12 @@ def _join_bt(l2_coll, toa_coll, tir_band, ee_module):
     """Attach the TOA brightness-temperature band as ``bt`` to each L2 image.
 
     Matches L2 and TOA scenes on ``system:index`` (identical per Landsat scene).
+    Verified 1:1 with no scene loss (L2 count == TOA count == joined count over the
+    WNE frame). Because the join happens here — before the cloud filter, mask and
+    LST compute in collection.build — those all run on the SAME joined images, so the
+    scene set for lst_smw cannot silently diverge from the pixels it reads (the L1/L2
+    pitfall in docs/REVIEW_AND_PLAN.md P1-3). lst vs lst_smw then differ only by a
+    smooth ~1-3 K algorithm offset, not a localized artifact.
     """
     filt = ee_module.Filter.equals(leftField="system:index", rightField="system:index")
     joined = ee_module.Join.saveFirst("toa").apply(

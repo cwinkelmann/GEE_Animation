@@ -76,6 +76,34 @@ def _fake_ee(log):
     return ee, p
 
 
+def test_join_bt_matches_toa_on_system_index_and_adds_bt():
+    # Guards the L2<->TOA join contract (P1-3): inner join on system:index via
+    # saveFirst, with the TOA thermal band renamed to "bt". Changing this to a
+    # position/order-based combine would silently diverge the scene sets.
+    rec = {}
+
+    class FakeColl:
+        def __init__(self, tag): self.tag = tag
+        def select(self, bands, names=None): rec["toa_select"] = (tuple(bands), names); return self
+        def map(self, fn): rec["mapped"] = True; return self
+
+    class FakeJoin:
+        def apply(self, primary, secondary, filt): rec["apply_filter"] = filt; return "JOINED"
+
+    ee = types.SimpleNamespace(
+        Filter=types.SimpleNamespace(equals=lambda **k: ("equals", k)),
+        Join=types.SimpleNamespace(
+            saveFirst=lambda key: (rec.__setitem__("save_key", key) or FakeJoin())),
+        Image=lambda x: x,
+        ImageCollection=lambda x: FakeColl("joined"))
+    out = smw_lst._join_bt(FakeColl("l2"), FakeColl("toa"), "B10", ee)
+    assert rec["save_key"] == "toa"
+    assert rec["apply_filter"] == ("equals", {"leftField": "system:index",
+                                              "rightField": "system:index"})
+    assert rec["toa_select"] == (("B10",), ["bt"])   # TOA thermal -> "bt"
+    assert rec["mapped"] is True                      # bt added per image
+
+
 def test_landsat_collection_references_all_five_missions_and_merges():
     log = []
     ee, _ = _fake_ee(log)
