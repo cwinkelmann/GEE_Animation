@@ -236,13 +236,13 @@ a neutral grey rather than an index colour.
   wedge-shaped data gaps: over a few-scene monthly median these are **not** fully
   softened — the median's sample composition changes across a gap edge, which can
   print as banding in thermal composites. Prefer L8/L9-era dates for `lst`/`lst_smw`.
-- `lst_sharp` approximates high-resolution LST by NDVI-guided thermal-sharpening of
-  Landsat `ST_B10` — **not** the real ECOSTRESS mission (that product is in EE as
-  `NASA/ECOSTRESS/L2T_LSTE/V2`, but LA-only for now and edge-of-coverage at this
-  latitude). It injects native-30 m NDVI detail into the coarser thermal field using
-  an empirical slope (`_LST_SHARP_NDVI_SLOPE` in `products.py`, tune to taste). A
-  rigorous version would fit the slope per scene and add the coarse residual back
-  (TsHARP/DisTrad).
+- `lst_sharp` sharpens the 100 m Landsat thermal LST to 30 m by **TsHARP / DisTrad**
+  (Kustas 2003, Agam 2007): it fits `LST = a·NIRv + b` per scene at the coarse grid,
+  applies the fit at the fine (30 m) NIRv scale, then **adds the coarse residual back**
+  so the sharpened field aggregates to the observed coarse LST (a temperature, not a
+  texture — the conservation is unit-tested in `imaging.distrad_sharpen`). NIRv is the
+  predictor because NDVI saturates in a closed canopy. It is **not** the real ECOSTRESS
+  mission (`NASA/ECOSTRESS/L2T_LSTE/V2` is in EE but LA-only and edge-of-coverage here).
 - **MODIS is being decommissioned.** Terra & Aqua begin shutting down in late
   2026 / early 2027 (exact dates vary by NASA source — treat as imminent), and both
   platforms are already drifting from their designed orbits, shifting equatorial

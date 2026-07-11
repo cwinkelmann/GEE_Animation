@@ -158,24 +158,34 @@ def _cir(sensor, image, ee_module=ee):
             .set("system:time_start", image.get("system:time_start")))
 
 
-# "lst_sharp": an NDVI-sharpened Landsat LST (NOT the real ECOSTRESS mission — see
-# NASA/ECOSTRESS/L2T_LSTE/V2, which is LA-only in EE and barely reaches this AOI's
-# latitude). It injects high-frequency NDVI detail (native 30 m minus a ~100 m focal
-# mean — the thermal band's effective resolution) into the temperature field, cooler
-# where local vegetation detail is higher. Empirical, "somewhat" sharpened — not a
-# rigorous TsHARP/DisTrad regression (which fits the slope per scene and adds the
-# coarse residual back so the result aggregates to the observed LST).
-_LST_SHARP_NDVI_SLOPE = 16.0   # °C per unit of NDVI detail
+# "lst_sharp": TsHARP / DisTrad thermal sharpening (Kustas 2003, Agam 2007) — NOT the
+# real ECOSTRESS mission. Fit LST = a·NIRv + b per scene at the coarse (100 m TIRS)
+# grid, apply it at the fine (30 m) NIRv scale, then add the coarse residual back so
+# the sharpened field aggregates to the observed coarse LST (conservative — a
+# temperature, not a texture). The predictor is NIRv (NDVI·NIR), which keeps dynamic
+# range where NDVI saturates in a closed canopy. The unit-tested math lives in
+# imaging.distrad_sharpen; this mirrors it in Earth Engine.
+_LST_SHARP_COARSE_M = 100   # TIRS native — the LST's true resolution
 
 
 def _lst_sharp(sensor, image, ee_module=ee):
     lst = (image.select("thermal")
            .multiply(0.00341802).add(149.0).subtract(273.15))
-    ndvi = sensor.reflectance(image, ee_module).normalizedDifference(["nir", "red"])
-    ndvi_detail = ndvi.subtract(
-        ndvi.focal_mean(radius=100, kernelType="circle", units="meters"))
-    sharp = lst.subtract(ndvi_detail.multiply(_LST_SHARP_NDVI_SLOPE))
-    return (sharp.rename(INDEX_BAND)
+    refl = sensor.reflectance(image, ee_module)
+    nirv = refl.normalizedDifference(["nir", "red"]).multiply(refl.select("nir"))
+    coarse = lst.projection().atScale(_LST_SHARP_COARSE_M)
+    lst_c = lst.reduceResolution(ee_module.Reducer.mean(), maxPixels=512).reproject(coarse)
+    pred_c = nirv.reduceResolution(ee_module.Reducer.mean(), maxPixels=512).reproject(coarse)
+    fit = (pred_c.rename("x").addBands(lst_c.rename("y"))
+           .reduceRegion(ee_module.Reducer.linearFit(), geometry=image.geometry(),
+                         scale=_LST_SHARP_COARSE_M, bestEffort=True, maxPixels=int(1e9)))
+    a = ee_module.Number(fit.get("scale"))
+    b = ee_module.Number(fit.get("offset"))
+    residual_c = lst_c.subtract(pred_c.multiply(a).add(b))     # coarse residual
+    sharp = nirv.multiply(a).add(b).add(residual_c)            # fit@fine + residual (nearest)
+    # toFloat() -> a homogeneous band type; reduceResolution otherwise gives each
+    # image a data-dependent range and the monthly median rejects the collection.
+    return (sharp.rename(INDEX_BAND).toFloat()
             .set("system:time_start", image.get("system:time_start")))
 
 
@@ -244,6 +254,8 @@ def native_scale_m(sensor: str, index: str) -> int:
     Rendering finer than this is Earth Engine interpolating — e.g. Landsat thermal is
     100 m (TIRS; TM/ETM+ coarser), so a 2.75 m/px render is a ~36x upsample.
     """
+    if sensor == "landsat" and index == "lst_sharp":
+        return 30    # sharpened to the fine NIRv (reflectance) grid
     if sensor == "landsat" and index in THERMAL_INDICES:
         return 100
     if sensor == "sentinel2" and index in _S2_20M_INDICES:
@@ -274,8 +286,8 @@ INDICES = {
                  bands="R<-NIR, G<-Red, B<-Green", composite=True),
     "lst_sharp": Index("lst_sharp", frozenset({"landsat"}),
                        (0.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
-                       _lst_sharp, bands="Thermal, NIR, Red",
-                       formula="LST - 16*(NDVI - NDVI_100m)"),
+                       _lst_sharp, bands="Thermal(100m) + NIRv(30m)",
+                       formula="TsHARP: fit LST~NIRv @100m, apply @30m, +coarse residual"),
 }
 
 

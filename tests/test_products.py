@@ -27,7 +27,7 @@ def test_registry_contents():
 def test_native_scale_m_per_product():
     assert P.native_scale_m("landsat", "lst") == 100       # TIRS
     assert P.native_scale_m("landsat", "lst_smw") == 100
-    assert P.native_scale_m("landsat", "lst_sharp") == 100
+    assert P.native_scale_m("landsat", "lst_sharp") == 30  # sharpened to the 30 m NIRv grid
     assert P.native_scale_m("landsat", "ndvi") == 30       # Landsat reflectance
     assert P.native_scale_m("sentinel2", "ndvi") == 10
     assert P.native_scale_m("sentinel2", "ndmi") == 20     # 20 m SWIR band
@@ -98,31 +98,30 @@ def test_ndmi_is_nir_swir1_normalized_difference():
     assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
 
 
-def test_lst_sharp_sharpens_lst_with_ndvi_detail_and_keeps_time():
-    rec = {"multiply": [], "add": [], "subtract": [], "select": []}
-    class Chain:
-        def __init__(self, r): self.r = r
-        def select(self, b): self.r["select"].append(b); return self
-        def multiply(self, v): self.r["multiply"].append(v); return self
-        def add(self, v): self.r["add"].append(v); return self
-        def subtract(self, v): self.r["subtract"].append(v); return self
-        def normalizedDifference(self, b): self.r["nd"] = tuple(b); return self
-        def focal_mean(self, **k): self.r["focal_mean"] = k; return self
-        def rename(self, n): self.r["rename"] = n; return self
-        def set(self, k, v): self.r["set"] = (k, v); return "lst_sharp_band"
-        def get(self, k): return "TS"
-    class FakeSensor:
-        def reflectance(self, image, ee_module=None): rec["refl"] = True; return Chain(rec)
-    out = P.INDICES["lst_sharp"].compute(FakeSensor(), Chain(rec), ee_module=None)
-    # LST from the canonical thermal band with the standard scale/offset, in Celsius
-    assert "thermal" in rec["select"]
-    assert 0.00341802 in rec["multiply"] and 149.0 in rec["add"] and 273.15 in rec["subtract"]
-    # NDVI high-frequency detail (focal-mean smoothing) injected into the thermal field
-    assert rec.get("refl") and rec["nd"] == ("nir", "red")
-    assert rec["focal_mean"]["units"] == "meters"
-    assert 16.0 in rec["multiply"]                      # NDVI-detail slope
-    assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
-    assert out == "lst_sharp_band"
+def test_lst_sharp_uses_distrad_fit_reduceresolution_and_residual():
+    # DisTrad: a per-scene fit (linearFit) at the coarse (reduceResolution) grid, not
+    # a hardcoded slope; INDEX band + time_start preserved. (Conservation of the math
+    # is unit-tested in test_imaging.test_distrad_sharpen_is_conservative.)
+    log, reducers = [], []
+
+    class _P:
+        def __call__(self, *a, **k): return self
+        def __getattr__(self, name):
+            def m(*a, **k): log.append((name, a)); return self
+            return m
+    p = _P()
+    ee = types.SimpleNamespace(
+        Reducer=types.SimpleNamespace(mean=lambda: reducers.append("mean") or "MEAN",
+                                      linearFit=lambda: reducers.append("linearFit") or "FIT"),
+        Number=lambda x: p)
+    sensor = types.SimpleNamespace(reflectance=lambda img, ee_module=None: p)
+    out = P.INDICES["lst_sharp"].compute(sensor, p, ee_module=ee)
+    names = [n for n, _ in log]
+    assert "reduceResolution" in names and "reduceRegion" in names   # fit at the coarse grid
+    assert "linearFit" in reducers                                    # fitted slope, not a constant
+    assert ("rename", ("INDEX",)) in log
+    assert any(n == "set" and a and a[0] == "system:time_start" for n, a in log)
+    assert out is p
 
 
 def test_modis_reflectance_maps_bands_and_scales():
