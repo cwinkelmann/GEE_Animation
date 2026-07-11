@@ -17,4 +17,4 @@ cadence: monthly
 max_cloud_percent: 60
 draw_region: true
 render: { fps: 3, scale: 30, dimensions: 768, crs: auto }   # crs auto -> square pixels
-# viz omitted -> thermal default (0..40 C)
+viz: { min: 10, max: 40 }   # summer LST range (registry default 0..40 for full-year)
