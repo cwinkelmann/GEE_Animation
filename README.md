@@ -61,8 +61,13 @@ and the month.
 
 ### Example frames
 
-One representative frame per product over the WNE / Grumsin beech-forest AOI
-(July 2022; Landsat June 2022):
+The full output in motion — a Sentinel-2 **NDVI timelapse** (monthly medians over
+2022) of the WNE / Grumsin beech-forest AOI, showing spring green-up and autumn
+senescence:
+
+<p align="center"><img src="docs/images/example_ndvi_timelapse.gif" width="480" alt="Animated NDVI timelapse over the WNE / Grumsin AOI, 2022"></p>
+
+And one representative still frame per product (July 2022; Landsat June 2022):
 
 <table>
 <tr>
