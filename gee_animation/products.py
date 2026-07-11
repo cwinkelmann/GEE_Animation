@@ -152,22 +152,23 @@ def _cir(sensor, image, ee_module=ee):
             .set("system:time_start", image.get("system:time_start")))
 
 
-# "ecostress": an approximation of high-resolution LST. Real ECOSTRESS data is
-# NOT in the Earth Engine catalog, so this NDVI-guided thermal-sharpens Landsat's
-# own thermal-band LST: it injects the high-frequency NDVI detail (native 30 m minus a
-# ~100 m focal mean — the thermal band's effective resolution) into the
-# temperature field, cooler where local vegetation detail is higher. Empirical,
-# "somewhat" sharpened — not a rigorous TsHARP regression.
-_ECOSTRESS_NDVI_SLOPE = 16.0   # °C per unit of NDVI detail
+# "lst_sharp": an NDVI-sharpened Landsat LST (NOT the real ECOSTRESS mission — see
+# NASA/ECOSTRESS/L2T_LSTE/V2, which is LA-only in EE and barely reaches this AOI's
+# latitude). It injects high-frequency NDVI detail (native 30 m minus a ~100 m focal
+# mean — the thermal band's effective resolution) into the temperature field, cooler
+# where local vegetation detail is higher. Empirical, "somewhat" sharpened — not a
+# rigorous TsHARP/DisTrad regression (which fits the slope per scene and adds the
+# coarse residual back so the result aggregates to the observed LST).
+_LST_SHARP_NDVI_SLOPE = 16.0   # °C per unit of NDVI detail
 
 
-def _ecostress(sensor, image, ee_module=ee):
+def _lst_sharp(sensor, image, ee_module=ee):
     lst = (image.select("thermal")
            .multiply(0.00341802).add(149.0).subtract(273.15))
     ndvi = sensor.reflectance(image, ee_module).normalizedDifference(["nir", "red"])
     ndvi_detail = ndvi.subtract(
         ndvi.focal_mean(radius=100, kernelType="circle", units="meters"))
-    sharp = lst.subtract(ndvi_detail.multiply(_ECOSTRESS_NDVI_SLOPE))
+    sharp = lst.subtract(ndvi_detail.multiply(_LST_SHARP_NDVI_SLOPE))
     return (sharp.rename(INDEX_BAND)
             .set("system:time_start", image.get("system:time_start")))
 
@@ -244,9 +245,9 @@ INDICES = {
                  bands="Red, Green, Blue", composite=True),
     "cir": Index("cir", _REFL, (0.0, 0.3, None), _cir,
                  bands="R<-NIR, G<-Red, B<-Green", composite=True),
-    "ecostress": Index("ecostress", frozenset({"landsat"}),
+    "lst_sharp": Index("lst_sharp", frozenset({"landsat"}),
                        (0.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
-                       _ecostress, bands="Thermal, NIR, Red",
+                       _lst_sharp, bands="Thermal, NIR, Red",
                        formula="LST - 16*(NDVI - NDVI_100m)"),
 }
 

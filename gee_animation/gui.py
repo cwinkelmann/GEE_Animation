@@ -52,7 +52,7 @@ DEFAULT_AOI = os.environ.get("GEE_DEFAULT_AOI") or (str(_WNE_AOI) if _WNE_AOI.ex
 
 
 def indices_for(sensor: str) -> list:
-    """Indices a sensor supports (e.g. lst/ecostress are Landsat-only)."""
+    """Indices a sensor supports (e.g. lst/lst_smw/lst_sharp are Landsat-only)."""
     return [name for name, idx in INDICES.items() if sensor in idx.sensors]
 
 

@@ -50,14 +50,20 @@ PNG per month. Bands below are canonical roles (NIR/Red/Green/Blue/SWIR1/Thermal
 | CIR   | any | false-colour infrared: R←NIR, G←Red, B←Green (vegetation reads red) | `config.cir.example.yaml` (`wne_cir`) |
 | LST   | Landsat | `ST_B × 0.00341802 + 149.0 − 273.15` °C — USGS C2 L2 ST band | `config.lst.example.yaml` (`wne_lst`) |
 | LST (SMW) | Landsat | `A·Tb/ε + B/ε + C` — Ermida (2020) Statistical Mono-Window from TOA brightness temp, ASTER-GED emissivity ε, NCEP water vapour | `config.lst_smw.example.yaml` (`wne_lst_smw`) |
-| ECOSTRESS | Landsat | `LST − 16·(NDVI − NDVI₁₀₀ₘ)` — NDVI-sharpened LST (approximation) | `config.ecostress.example.yaml` (`wne_ecostress`) |
+| LST-sharp | Landsat | `LST − 16·(NDVI − NDVI₁₀₀ₘ)` — NDVI-sharpened LST (approximation) | `config.lst_sharp.example.yaml` (`wne_lst_sharp`) |
 | NDVI  | MODIS | `(NIR − Red) / (NIR + Red)` on MOD09A1 (500 m) | `config.modis.example.yaml` (`wne_modis_ndvi`) |
 
 Two Landsat LST methods are available: `lst` = the USGS Collection-2 Level-2
 Surface Temperature product (the pre-computed `ST_B*` band); `lst_smw` = the
 Statistical Mono-Window algorithm of **Ermida et al. (2020)**. Both output °C and
-typically agree within ~1–3 K. (`ecostress` = NDVI-sharpened Landsat LST — an
-approximation, since real ECOSTRESS data isn't in Earth Engine.)
+typically agree within ~1–3 K.
+
+`lst_sharp` is an NDVI-sharpened Landsat LST — an approximation, **not** the real
+ECOSTRESS mission. (The real product, `NASA/ECOSTRESS/L2T_LSTE/V2`, *is* in Earth
+Engine now, but only Los Angeles tiles are ingested as of 2026-07, and ECOSTRESS
+rides the ISS — its coverage edge sits at ~53° N, right at this AOI's latitude, so
+Grumsin would be edge-of-swath at best. Watch the EE catalog release notes for wider
+ingest.)
 
 Every frame is annotated: an info bar (top) with the formula and bands used, a
 value colorbar (indices only), the region outline, a ground-distance scale bar,
@@ -91,7 +97,7 @@ And one representative still frame per product (July 2022):
 <td align="center"><b>LST (SMW)</b> Ermida 2020 (Landsat)<br><img src="docs/images/example_lst_smw.png" width="360"></td>
 </tr>
 <tr>
-<td align="center" colspan="2"><b>ECOSTRESS</b> sharpened LST (Landsat)<br><img src="docs/images/example_ecostress.png" width="360"></td>
+<td align="center" colspan="2"><b>LST-sharp</b> NDVI-sharpened LST (Landsat)<br><img src="docs/images/example_lst_sharp.png" width="360"></td>
 </tr>
 </table>
 
@@ -99,14 +105,14 @@ Generate them all in one go:
 
 ```bash
 for c in example evi.example ndwi.example ndmi.example rgb.example cir.example \
-         lst.example lst_smw.example ecostress.example modis.example; do
+         lst.example lst_smw.example lst_sharp.example modis.example; do
   gee-animation --config "config.$c.yaml"
 done
 ```
 
 Any reflectance product (`ndvi`, `evi`, `ndwi`, `ndmi`, `rgb`, `cir`) runs on any
 sensor — copy a config and change `sensor:` / `index:` (see Configuration). `lst`,
-`lst_smw` and `ecostress` are Landsat-only.
+`lst_smw` and `lst_sharp` are Landsat-only.
 
 ## GUI (Gradio)
 
@@ -188,7 +194,7 @@ See `config.example.yaml` (Sentinel-2 NDVI) or `config.lst.example.yaml` (Landsa
   - **`region`**: the important region (polygon); only scenes where cloud coverage over this region is less than `region_max_cloud_percent` (default: 10%) are included, and its outline is drawn on each frame when `draw_region` is set.
 - **`start`/`end`**: ISO dates (end exclusive).
 - **`sensor`**: `sentinel2`, `landsat` (Collection-2 L2, missions 4/5/7/8/9 harmonized — ~1984→present), or `modis` (MOD09A1, 8-day 500 m).
-- **`index`**: `ndvi`, `evi`, `ndwi` (McFeeters, open water), `ndmi` (moisture) — all sensors; or `lst` (USGS C2 L2 ST), `lst_smw` (Ermida et al. 2020 Statistical Mono-Window), or `ecostress` (Landsat only). `ecostress` is an NDVI-sharpened LST (an approximation — real ECOSTRESS data is not in the Earth Engine catalog).
+- **`index`**: `ndvi`, `evi`, `ndwi` (McFeeters, open water), `ndmi` (moisture) — all sensors; or `lst` (USGS C2 L2 ST), `lst_smw` (Ermida et al. 2020 Statistical Mono-Window), or `lst_sharp` (Landsat only). `lst_sharp` is an NDVI-sharpened LST (an approximation — **not** the real ECOSTRESS mission; that product exists in EE as `NASA/ECOSTRESS/L2T_LSTE/V2` but is LA-only for now and its ISS orbit barely reaches this AOI's latitude).
 - **`max_cloud_percent`**: scene-level pre-filter threshold (Sentinel-2/Landsat only; MODIS has no per-scene cloud metadata, so this is ignored and only the region filter applies).
 - **`region_max_cloud_percent`**: region-level cloud filter (kept only if cloud over region < threshold).
 - **`viz`** (optional; min/max/palette): fixed range for colorization so colour is comparable across frames. If omitted, per-index defaults apply (NDVI −0.2..0.9 green; EVI 0..1 green; NDWI −0.3..0.6 brown→blue; NDMI −0.5..0.8 brown→teal; LST 0..40°C thermal).
@@ -211,17 +217,27 @@ a neutral grey rather than an index colour.
 - Sensors: Sentinel-2 and Landsat. One cadence (monthly) is supported; config
   is structured to add more.
 - Sensors: Sentinel-2, Landsat, MODIS. Indices: NDVI, EVI, NDWI, NDMI (all
-  sensors), LST and `ecostress` (Landsat only). Adding new indices/sensors
+  sensors), LST, `lst_smw` and `lst_sharp` (Landsat only). Adding new indices/sensors
   requires registry changes in `products.py`.
 - The `landsat` sensor spans **Collection-2 missions 4/5/7/8/9** (~1984→present):
   each mission's bands are renamed to a canonical set at collection build
   (TM/ETM+ `SR_B1–B5,B7` + `ST_B6`; OLI/TIRS `SR_B2–B7` + `ST_B10`), so every
   Landsat index runs across the whole record. Landsat 7 (post-2003 SLC-off) has
-  wedge-shaped data gaps, softened by monthly medians.
-- `ecostress` approximates high-resolution LST by NDVI-guided thermal-sharpening
-  of Landsat `ST_B10` (real ECOSTRESS data is not available in Earth Engine). It
-  injects native-30 m NDVI detail into the coarser thermal field using an
-  empirical slope (`_ECOSTRESS_NDVI_SLOPE` in `products.py`, tune to taste).
+  wedge-shaped data gaps: over a few-scene monthly median these are **not** fully
+  softened — the median's sample composition changes across a gap edge, which can
+  print as banding in thermal composites. Prefer L8/L9-era dates for `lst`/`lst_smw`.
+- `lst_sharp` approximates high-resolution LST by NDVI-guided thermal-sharpening of
+  Landsat `ST_B10` — **not** the real ECOSTRESS mission (that product is in EE as
+  `NASA/ECOSTRESS/L2T_LSTE/V2`, but LA-only for now and edge-of-coverage at this
+  latitude). It injects native-30 m NDVI detail into the coarser thermal field using
+  an empirical slope (`_LST_SHARP_NDVI_SLOPE` in `products.py`, tune to taste). A
+  rigorous version would fit the slope per scene and add the coarse residual back
+  (TsHARP/DisTrad).
+- **MODIS is being decommissioned.** Terra & Aqua begin shutting down in late
+  2026 / early 2027 (exact dates vary by NASA source — treat as imminent), and both
+  platforms are already drifting from their designed orbits, shifting equatorial
+  overpass times. A long MODIS loop therefore bakes a *moving overpass time* into its
+  recent years — a real confound for a phenology animation. VIIRS is the successor.
 - The region cloud filter averages only over the pixels a scene actually covers.
   A scene that clips a small clear corner of the region can still pass the
   `region_max_cloud_percent` threshold; use a region well inside the frame extent.

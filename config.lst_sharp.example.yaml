@@ -1,5 +1,7 @@
-# Landsat "ecostress" = NDVI-sharpened LST (approximation) over the WNE AOIs.
-name: wne_ecostress
+# Landsat "lst_sharp" = NDVI-sharpened LST (an approximation) over the WNE AOIs.
+# NOT the real ECOSTRESS mission (which is LA-only in Earth Engine and barely
+# reaches this AOI's latitude) — see the README note.
+name: wne_lst_sharp
 project: hnee-331218
 
 aoi:
@@ -8,7 +10,7 @@ aoi:
   region_max_cloud_percent: 20
 
 sensor: landsat
-index: ecostress
+index: lst_sharp
 start: "2022-05-01"
 end: "2022-09-01"
 cadence: monthly

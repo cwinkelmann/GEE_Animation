@@ -9,12 +9,12 @@ _REFL_INDICES = frozenset({"sentinel2", "landsat", "modis"})
 def test_registry_contents():
     assert set(P.SENSORS) == {"sentinel2", "landsat", "modis"}
     assert set(P.INDICES) == {"ndvi", "lst", "lst_smw", "evi", "ndwi", "ndmi",
-                              "rgb", "cir", "ecostress"}
+                              "rgb", "cir", "lst_sharp"}
     assert P.INDICES["lst_smw"].sensors == frozenset({"landsat"})   # Ermida 2020 SMW LST
     assert P.INDICES["rgb"].composite and P.INDICES["cir"].composite
     assert P.INDICES["ndvi"].formula == "(NIR - Red) / (NIR + Red)"   # overlay metadata
     assert P.INDICES["rgb"].composite and P.INDICES["rgb"].default_viz[2] is None
-    assert P.INDICES["ecostress"].sensors == frozenset({"landsat"})   # sharpened Landsat LST
+    assert P.INDICES["lst_sharp"].sensors == frozenset({"landsat"})   # NDVI-sharpened Landsat LST
     assert P.SENSORS["sentinel2"].scene_cloud_property == "CLOUDY_PIXEL_PERCENTAGE"
     assert P.SENSORS["landsat"].scene_cloud_property == "CLOUD_COVER"
     assert P.SENSORS["modis"].scene_cloud_property is None   # no per-scene cloud metadata
@@ -88,7 +88,7 @@ def test_ndmi_is_nir_swir1_normalized_difference():
     assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
 
 
-def test_ecostress_sharpens_lst_with_ndvi_detail_and_keeps_time():
+def test_lst_sharp_sharpens_lst_with_ndvi_detail_and_keeps_time():
     rec = {"multiply": [], "add": [], "subtract": [], "select": []}
     class Chain:
         def __init__(self, r): self.r = r
@@ -99,11 +99,11 @@ def test_ecostress_sharpens_lst_with_ndvi_detail_and_keeps_time():
         def normalizedDifference(self, b): self.r["nd"] = tuple(b); return self
         def focal_mean(self, **k): self.r["focal_mean"] = k; return self
         def rename(self, n): self.r["rename"] = n; return self
-        def set(self, k, v): self.r["set"] = (k, v); return "ecostress_band"
+        def set(self, k, v): self.r["set"] = (k, v); return "lst_sharp_band"
         def get(self, k): return "TS"
     class FakeSensor:
         def reflectance(self, image, ee_module=None): rec["refl"] = True; return Chain(rec)
-    out = P.INDICES["ecostress"].compute(FakeSensor(), Chain(rec), ee_module=None)
+    out = P.INDICES["lst_sharp"].compute(FakeSensor(), Chain(rec), ee_module=None)
     # LST from the canonical thermal band with the standard scale/offset, in Celsius
     assert "thermal" in rec["select"]
     assert 0.00341802 in rec["multiply"] and 149.0 in rec["add"] and 273.15 in rec["subtract"]
@@ -112,7 +112,7 @@ def test_ecostress_sharpens_lst_with_ndvi_detail_and_keeps_time():
     assert rec["focal_mean"]["units"] == "meters"
     assert 16.0 in rec["multiply"]                      # NDVI-detail slope
     assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
-    assert out == "ecostress_band"
+    assert out == "lst_sharp_band"
 
 
 def test_modis_reflectance_maps_bands_and_scales():
