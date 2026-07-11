@@ -77,7 +77,8 @@ senescence:
 
 <p align="center"><img src="docs/images/example_ndvi_timelapse.gif" width="480" alt="Animated NDVI timelapse over the WNE / Grumsin AOI, 2022"></p>
 
-And one representative still frame per product (July 2022):
+And one representative still frame per product (July 2022), rendered at the **4K
+16:9** screen preset (`preset: 4k`, `aspect: 16:9`) and shown downscaled here:
 
 <table>
 <tr>
