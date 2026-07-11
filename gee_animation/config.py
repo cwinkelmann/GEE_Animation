@@ -40,6 +40,9 @@ class RunConfig:
     # Optional Landsat mission whitelist (e.g. ["L8", "L9"]). None => sensor default
     # (thermal indices default to L8/L9; see collection.build).
     missions: list = None
+    # Minimum scenes per monthly median; months with fewer are skipped (default 1 =
+    # keep all non-empty months, but every frame is annotated with its scene count).
+    min_scenes: int = 1
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RunConfig":
@@ -76,6 +79,7 @@ class RunConfig:
                 out_dir=str(raw.get("out_dir", "out")),
                 draw_region=bool(raw.get("draw_region", True)),
                 missions=raw.get("missions"),
+                min_scenes=int(raw.get("min_scenes", 1)),
             )
         except KeyError as exc:
             raise ConfigError(f"missing required config key: {exc}") from exc
@@ -104,6 +108,8 @@ class RunConfig:
             if bad:
                 raise ConfigError(
                     f"unknown missions {bad}; valid Landsat missions: {sorted(valid)}")
+        if self.min_scenes < 1:
+            raise ConfigError("min_scenes must be >= 1")
         try:
             start = date.fromisoformat(self.start)
             end = date.fromisoformat(self.end)

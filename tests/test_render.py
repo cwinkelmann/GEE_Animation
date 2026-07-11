@@ -188,6 +188,19 @@ def test_assemble_falls_back_to_gif_when_mp4_fails(tmp_path, monkeypatch):
     assert paths[0].exists()
 
 
+def test_render_annotates_scene_count_when_present(tmp_path, monkeypatch):
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    labels = []
+    monkeypatch.setattr(r, "annotate", lambda rgb, label: (labels.append(label) or rgb))
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
+
+    render([Frame("2022-06", object(), 7)], cfg, fetch=fake_fetch, geometry=None)
+    assert labels == ["2022-06  n=7"]                  # scene count shown on the frame
+
+
 def test_render_composite_passes_rgb_through_without_colorbar(tmp_path):
     # rgb/cir fetch returns an H×W×3 colour array; render must NOT colorize it,
     # and must not draw a palette colorbar (composites have no palette).

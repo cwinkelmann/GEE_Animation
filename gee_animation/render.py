@@ -308,7 +308,8 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         # composite fetch already returns colour (H×W×3); an index returns 2-D.
         rgb = arr if arr.ndim == 3 else colorize(arr, cfg.viz_min, cfg.viz_max, cfg.palette)
         rgb = apply_nodata(rgb, valid)
-        rgb = annotate(rgb, frame.label)
+        n = getattr(frame, "n_scenes", None)
+        rgb = annotate(rgb, f"{frame.label}  n={n}" if n is not None else frame.label)
         top_h = max(12, rgb.shape[0] // 12)          # height of the top info bar
         if not composite:                            # colorbar needs a palette
             rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4)
