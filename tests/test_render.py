@@ -188,6 +188,39 @@ def test_assemble_falls_back_to_gif_when_mp4_fails(tmp_path, monkeypatch):
     assert paths[0].exists()
 
 
+def _thermal_cfg(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.sensor, cfg.index = "landsat", "lst"
+    cfg.frame_aoi = {"bbox": [0.0, 0.0, 0.01, 0.01]}   # ~1.11 km frame
+    cfg.dimensions = 768
+    cfg.allow_upsample = False
+    return cfg
+
+
+def _tiny_fetch(image, cfg, geometry=None):
+    return np.zeros((8, 8)), np.ones((8, 8), dtype=bool)
+
+
+def test_render_caps_dimensions_to_native_resolution(tmp_path, caplog):
+    import logging
+    cfg = _thermal_cfg(tmp_path)
+    with caplog.at_level(logging.WARNING):
+        render([Frame("2022-06", object(), 4)], cfg, fetch=_tiny_fetch, geometry=None)
+    # ~1113 m / 100 m native -> 11 px; the 768 request is capped (no silent upsample)
+    assert cfg.dimensions == 11
+    assert "native resolution" in caplog.text
+
+
+def test_render_allow_upsample_keeps_dimensions_but_warns(tmp_path, caplog):
+    import logging
+    cfg = _thermal_cfg(tmp_path)
+    cfg.allow_upsample = True
+    with caplog.at_level(logging.WARNING):
+        render([Frame("2022-06", object(), 4)], cfg, fetch=_tiny_fetch, geometry=None)
+    assert cfg.dimensions == 768                        # honoured, not capped
+    assert "upsamples" in caplog.text
+
+
 def test_render_annotates_scene_count_when_present(tmp_path, monkeypatch):
     import gee_animation.render as r
     cfg = _cfg(tmp_path)

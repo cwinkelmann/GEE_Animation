@@ -5,13 +5,12 @@ import logging
 
 import ee
 
-from .products import get_product
+from .products import THERMAL_INDICES, get_product
 
 log = logging.getLogger(__name__)
 
 # Thermal indices default to L8/L9: L7 SLC-off gaps and the 60/120 m TM/ETM+ thermal
 # band stripe a few-scene median (see docs/REVIEW_AND_PLAN.md §1).
-_THERMAL_INDICES = {"lst", "lst_smw", "lst_sharp"}
 _LANDSAT8_START = "2013-04-11"   # first Landsat 8 acquisitions
 
 
@@ -25,7 +24,7 @@ def effective_missions(cfg):
         return None
     if getattr(cfg, "missions", None):
         return list(cfg.missions)
-    if cfg.index in _THERMAL_INDICES:
+    if cfg.index in THERMAL_INDICES:
         if str(cfg.start) < _LANDSAT8_START:
             log.warning(
                 "thermal index %r defaults to L8/L9, but start %s predates Landsat 8 "

@@ -24,6 +24,16 @@ def test_registry_contents():
         assert P.INDICES[name].sensors == _REFL_INDICES
 
 
+def test_native_scale_m_per_product():
+    assert P.native_scale_m("landsat", "lst") == 100       # TIRS
+    assert P.native_scale_m("landsat", "lst_smw") == 100
+    assert P.native_scale_m("landsat", "lst_sharp") == 100
+    assert P.native_scale_m("landsat", "ndvi") == 30       # Landsat reflectance
+    assert P.native_scale_m("sentinel2", "ndvi") == 10
+    assert P.native_scale_m("sentinel2", "ndmi") == 20     # 20 m SWIR band
+    assert P.native_scale_m("modis", "ndvi") == 500
+
+
 def test_get_product_ok():
     sensor, index = P.get_product("modis", "ndmi")
     assert sensor.name == "modis" and index.name == "ndmi"

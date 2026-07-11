@@ -214,8 +214,10 @@ a neutral grey rather than an index colour.
 
 ## Notes / limitations (v1)
 
-- `render.scale` (metres/pixel) is informational; thumbnail size is driven by
-  `render.dimensions`.
+- `render.dimensions` is capped to the product's **native resolution** so the
+  render is never finer than the data (Landsat thermal 100 m, MODIS 500 m,
+  Sentinel-2 10/20 m, Landsat reflectance 30 m); set `allow_upsample: true` to render
+  finer anyway (a warning names the true native GSD). `render.scale` is informational.
 - Sensors: Sentinel-2 and Landsat. One cadence (monthly) is supported; config
   is structured to add more.
 - Sensors: Sentinel-2, Landsat, MODIS. Indices: NDVI, EVI, NDWI, NDMI (all

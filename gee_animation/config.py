@@ -43,6 +43,9 @@ class RunConfig:
     # Minimum scenes per monthly median; months with fewer are skipped (default 1 =
     # keep all non-empty months, but every frame is annotated with its scene count).
     min_scenes: int = 1
+    # By default render is capped to the product's native resolution (no upsampling);
+    # set True to allow a finer render (a warning still names the true native GSD).
+    allow_upsample: bool = False
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RunConfig":
@@ -80,6 +83,7 @@ class RunConfig:
                 draw_region=bool(raw.get("draw_region", True)),
                 missions=raw.get("missions"),
                 min_scenes=int(raw.get("min_scenes", 1)),
+                allow_upsample=bool(raw.get("allow_upsample", False)),
             )
         except KeyError as exc:
             raise ConfigError(f"missing required config key: {exc}") from exc

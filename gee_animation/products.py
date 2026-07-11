@@ -229,6 +229,27 @@ SENSORS = {
 # Reflectance-based indices work on any sensor that exposes the band aliases.
 _REFL = frozenset({"sentinel2", "landsat", "modis"})
 
+# Thermal (LST) indices — Landsat-only; drive the L8/L9 mission default and the
+# 100 m native scale.
+THERMAL_INDICES = frozenset({"lst", "lst_smw", "lst_sharp"})
+
+# Coarsest-relevant native ground sampling (metres) per sensor, with overrides.
+_SENSOR_NATIVE_M = {"sentinel2": 10, "landsat": 30, "modis": 500}
+_S2_20M_INDICES = frozenset({"ndmi"})   # uses the 20 m SWIR band
+
+
+def native_scale_m(sensor: str, index: str) -> int:
+    """Native GSD (metres) a (sensor, index) can honestly resolve.
+
+    Rendering finer than this is Earth Engine interpolating — e.g. Landsat thermal is
+    100 m (TIRS; TM/ETM+ coarser), so a 2.75 m/px render is a ~36x upsample.
+    """
+    if sensor == "landsat" and index in THERMAL_INDICES:
+        return 100
+    if sensor == "sentinel2" and index in _S2_20M_INDICES:
+        return 20
+    return _SENSOR_NATIVE_M.get(sensor, 30)
+
 INDICES = {
     "ndvi": Index("ndvi", _REFL,
                   (-0.2, 0.9, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _ndvi,

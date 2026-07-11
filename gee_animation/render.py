@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw
 
 from .aoi import _load_geojson_geometry, _read_shapefile_geometry
 from .imaging import colorize
-from .products import INDICES
+from .products import INDICES, native_scale_m
 
 log = logging.getLogger(__name__)
 
@@ -191,6 +191,39 @@ def draw_region(rgb: np.ndarray, bounds: tuple, rings: list,
     return np.asarray(img)
 
 
+def _frame_span_m(bounds: tuple) -> float:
+    """Larger ground dimension (metres) of the frame — EE fits it to `dimensions`."""
+    minx, miny, maxx, maxy = bounds
+    mid = math.radians((miny + maxy) / 2.0)
+    w = (maxx - minx) * 111320.0 * math.cos(mid)
+    h = (maxy - miny) * 111320.0
+    return max(w, h)
+
+
+def _cap_dimensions(cfg, bounds) -> None:
+    """Cap cfg.dimensions so the render is no finer than the product's native GSD.
+
+    Mutates cfg.dimensions (render is the terminal step). With cfg.allow_upsample the
+    request is honoured but a warning names the true native resolution.
+    """
+    native = native_scale_m(getattr(cfg, "sensor", None), getattr(cfg, "index", None))
+    dims = getattr(cfg, "dimensions", None)
+    if not (bounds and native and dims):
+        return
+    max_dim = max(1, int(_frame_span_m(bounds) / native))
+    if dims <= max_dim:
+        return
+    if getattr(cfg, "allow_upsample", False):
+        log.warning("rendering %s at %d px upsamples the ~%dm-native data %.1fx; "
+                    "pixels finer than %dm are interpolated.",
+                    getattr(cfg, "index", "?"), dims, native, dims / max_dim, native)
+    else:
+        log.warning("capping render dimensions %d -> %d to stay at native resolution "
+                    "(~%dm/px for %s); set allow_upsample: true to override.",
+                    dims, max_dim, native, getattr(cfg, "index", "?"))
+        cfg.dimensions = max_dim
+
+
 def _nice_distance(meters: float) -> float:
     """Round a distance down to a cartographer-friendly 1/2/5 × 10ᵏ value."""
     exp = math.floor(math.log10(meters))
@@ -297,6 +330,7 @@ def assemble(frames_rgb: list[np.ndarray], cfg) -> list[Path]:
 def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     frame_aoi = getattr(cfg, "frame_aoi", None)
     bounds = _aoi_bounds(frame_aoi) if frame_aoi else None
+    _cap_dimensions(cfg, bounds)      # honest native resolution (no silent upsampling)
     draw_overlay = getattr(cfg, "draw_region", False) and getattr(cfg, "region_aoi", None)
     if draw_overlay:
         rings = _region_rings(cfg.region_aoi)
