@@ -67,7 +67,7 @@ senescence:
 
 <p align="center"><img src="docs/images/example_ndvi_timelapse.gif" width="480" alt="Animated NDVI timelapse over the WNE / Grumsin AOI, 2022"></p>
 
-And one representative still frame per product (July 2022; Landsat June 2022):
+And one representative still frame per product (July 2022):
 
 <table>
 <tr>
@@ -87,8 +87,7 @@ And one representative still frame per product (July 2022; Landsat June 2022):
 <td align="center"><b>LST (SMW)</b> Ermida 2020 (Landsat)<br><img src="docs/images/example_lst_smw.png" width="360"></td>
 </tr>
 <tr>
-<td align="center"><b>ECOSTRESS</b> sharpened LST (Landsat)<br><img src="docs/images/example_ecostress.png" width="360"></td>
-<td align="center"><b>NDVI</b> (MODIS, 500 m)<br><img src="docs/images/example_modis_ndvi.png" width="360"></td>
+<td align="center" colspan="2"><b>ECOSTRESS</b> sharpened LST (Landsat)<br><img src="docs/images/example_ecostress.png" width="360"></td>
 </tr>
 </table>
 
