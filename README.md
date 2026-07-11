@@ -3,6 +3,10 @@
 Generate annotated satellite index timelapses (MP4 + GIF) from Google Earth Engine
 imagery (Sentinel-2 or Landsat), assembled frame-by-frame locally.
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cwinkelmann/GEE_Animation/blob/feat/evi-index/notebooks/colab_gee_animation.ipynb)
+
+No local install needed — **[run it in Google Colab](https://colab.research.google.com/github/cwinkelmann/GEE_Animation/blob/feat/evi-index/notebooks/colab_gee_animation.ipynb)** (builds any index's animation + diagram from your browser).
+
 ## Install
 
 Use the project's conda environment so the package and its dependencies land in
@@ -16,8 +20,8 @@ pip install -e ".[dev,notebook]"              # package + deps into this env
 earthengine authenticate                      # one-time; or the tool prompts on first run
 ```
 
-Run the notebook (`notebooks/ndvi_timelapse.ipynb`) with the `GEE_animation`
-environment selected as the kernel.
+Run the notebook (`notebooks/colab_gee_animation.ipynb`) with the `GEE_animation`
+environment selected as the kernel — or open it directly in Colab via the badge above.
 
 ## Usage
 
