@@ -4,12 +4,13 @@ from __future__ import annotations
 import io
 import logging
 import math
+from functools import lru_cache
 from pathlib import Path
 from urllib.request import urlopen
 
 import imageio.v2 as imageio
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from .aoi import _load_geojson_geometry, _read_shapefile_geometry
 from .imaging import colorize
@@ -20,6 +21,33 @@ log = logging.getLogger(__name__)
 
 NODATA_RGB = (240, 240, 240)
 REGION_OUTLINE_RGB = (255, 235, 59)   # amber — high contrast over the index palette
+LETTERBOX_RGB = (0, 0, 0)
+
+# Screen-output presets (output long edge, px), aspect ratios, and upscale methods.
+PRESETS = {"4k": 3840, "2160p": 3840, "1440p": 2560, "1080p": 1920, "720p": 1280, "480p": 854}
+ASPECTS = {"16:9": 16 / 9, "4:3": 4 / 3, "1:1": 1.0, "3:2": 3 / 2, "21:9": 21 / 9,
+           "9:16": 9 / 16, "4:5": 4 / 5}
+UPSCALE_METHODS = {"lanczos": Image.LANCZOS, "bicubic": Image.BICUBIC,
+                   "bilinear": Image.BILINEAR, "nearest": Image.NEAREST}
+_GIF_MAX_EDGE = 1280   # GIFs stay preview-sized even when the MP4 is 4K
+
+
+@lru_cache(maxsize=64)
+def _font(px: int):
+    """A default font at the given pixel size (cached). Falls back for old Pillow."""
+    try:
+        return ImageFont.load_default(size=max(10, int(px)))
+    except TypeError:            # Pillow < 10 has no size argument
+        return ImageFont.load_default()
+
+
+def _annot_scale(h: int):
+    """(font, line_width) proportional to frame height so overlays read at any size.
+
+    Calibrated so a ~512 px frame matches the previous fixed look (~12 px font, 1 px
+    lines) and a 4K frame gets legible ~54 px text and ~5 px lines.
+    """
+    return _font(max(11, h // 40)), max(1, round(h / 430))
 
 
 def _index_meta(cfg):
@@ -89,9 +117,10 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4) -> np.ndarray:
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
     w, h = img.size
+    font, lw = _annot_scale(h)
     bar_w = max(20, int(w * 0.4))
     bar_h = max(6, h // 20)
-    x0, y0 = 4, y_offset
+    x0, y0 = max(4, w // 200), y_offset
     ramp = colorize(
         np.linspace(cfg.viz_min, cfg.viz_max, bar_w)[None, :],
         cfg.viz_min, cfg.viz_max, cfg.palette,
@@ -99,9 +128,9 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4) -> np.ndarray:
     for i in range(bar_w):
         c = tuple(int(v) for v in ramp[i])
         draw.line([(x0 + i, y0), (x0 + i, y0 + bar_h)], fill=c)
-    draw.rectangle([x0, y0, x0 + bar_w, y0 + bar_h], outline=(255, 255, 255, 255))
-    draw.text((x0, y0 + bar_h + 1), f"{cfg.index.upper()} {cfg.viz_min:g}..{cfg.viz_max:g}",
-              fill=(255, 255, 255, 255))
+    draw.rectangle([x0, y0, x0 + bar_w, y0 + bar_h], outline=(255, 255, 255, 255), width=lw)
+    draw.text((x0, y0 + bar_h + lw + 1), f"{cfg.index.upper()} {cfg.viz_min:g}..{cfg.viz_max:g}",
+              fill=(255, 255, 255, 255), font=font)
     return np.asarray(img)
 
 
@@ -119,9 +148,11 @@ def draw_info_bar(rgb: np.ndarray, text: str) -> np.ndarray:
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
     w, h = img.size
+    font, _ = _annot_scale(h)
     bar_h = max(12, h // 12)
+    pad = max(1, h // 200)
     draw.rectangle([0, 0, w, bar_h], fill=(0, 0, 0, 140))
-    draw.text((4, 1), text, fill=(255, 255, 255, 255))
+    draw.text((max(4, w // 200), pad), text, fill=(255, 255, 255, 255), font=font)
     return np.asarray(img)
 
 
@@ -129,9 +160,11 @@ def annotate(rgb: np.ndarray, label: str) -> np.ndarray:
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
     w, h = img.size
+    font, _ = _annot_scale(h)
     bar_h = max(12, h // 12)
     draw.rectangle([0, h - bar_h, w, h], fill=(0, 0, 0, 140))
-    draw.text((4, h - bar_h + 1), label, fill=(255, 255, 255, 255))
+    draw.text((max(4, w // 200), h - bar_h + max(1, h // 200)), label,
+              fill=(255, 255, 255, 255), font=font)
     return np.asarray(img)
 
 
@@ -185,6 +218,7 @@ def draw_region(rgb: np.ndarray, bounds: tuple, rings: list,
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img)
     h, w = rgb.shape[:2]
+    width = max(width, round(h / 430))   # scale the outline for high-res output
     minx, miny, maxx, maxy = bounds
     dx = (maxx - minx) or 1.0
     dy = (maxy - miny) or 1.0
@@ -296,20 +330,80 @@ def draw_scale_bar(rgb: np.ndarray, frame_width_m: float, target_frac: float = 0
     label = f"{nice_m / 1000:g} km" if nice_m >= 1000 else f"{nice_m:g} m"
 
     draw = ImageDraw.Draw(img, "RGBA")
+    font, lw = _annot_scale(h)
     bar_h = max(12, h // 12)          # bottom label bar height (see annotate)
-    margin, tick = 6, 4
+    margin, tick = max(6, w // 100), max(4, h // 80)
     x1 = w - margin
     x0 = x1 - bar_px
     y = h - bar_h - margin            # sit just above the bottom month-label bar
-    tb = draw.textbbox((0, 0), label)
+    tb = draw.textbbox((0, 0), label, font=font)
     tw, th = tb[2] - tb[0], tb[3] - tb[1]
-    panel_top = y - tick - th - 4
-    draw.rectangle([x0 - 4, panel_top, x1 + 4, y + 4], fill=(0, 0, 0, 120))
-    draw.line([(x0, y), (x1, y)], fill=color, width=2)
-    draw.line([(x0, y - tick), (x0, y)], fill=color, width=2)   # end ticks
-    draw.line([(x1, y - tick), (x1, y)], fill=color, width=2)
-    draw.text(((x0 + x1) / 2 - tw / 2, panel_top + 2), label, fill=color)
+    pad = max(4, h // 200)
+    panel_top = y - tick - th - pad
+    draw.rectangle([x0 - pad, panel_top, x1 + pad, y + pad], fill=(0, 0, 0, 120))
+    draw.line([(x0, y), (x1, y)], fill=color, width=lw)
+    draw.line([(x0, y - tick), (x0, y)], fill=color, width=lw)   # end ticks
+    draw.line([(x1, y - tick), (x1, y)], fill=color, width=lw)
+    draw.text(((x0 + x1) / 2 - tw / 2, panel_top + pad // 2), label, fill=color, font=font)
     return np.asarray(img)
+
+
+def _output_spec(cfg, imagery_wh):
+    """Screen-output layout, or None if no render.preset.
+
+    Returns (canvas_w, canvas_h, place_w, place_h, method): the frame (native aspect)
+    is upscaled to place_*, then letterboxed onto the canvas at the requested aspect.
+    """
+    preset = getattr(cfg, "preset", None)
+    if not preset:
+        return None
+    long_edge = PRESETS.get(str(preset).lower()) or int(preset)
+    method = UPSCALE_METHODS.get(getattr(cfg, "upscale", "lanczos"), Image.LANCZOS)
+    iw, ih = imagery_wh
+    aoi_aspect = iw / ih
+    aspect = getattr(cfg, "aspect", None)
+    if not aspect or aspect == "match":     # canvas == frame aspect; imagery fills it
+        if aoi_aspect >= 1:
+            cw, ch = long_edge, max(1, round(long_edge / aoi_aspect))
+        else:
+            ch, cw = long_edge, max(1, round(long_edge * aoi_aspect))
+        return cw, ch, cw, ch, method
+    target = ASPECTS[aspect]
+    if target >= 1:
+        cw, ch = long_edge, max(1, round(long_edge / target))
+    else:
+        ch, cw = long_edge, max(1, round(long_edge * target))
+    if aoi_aspect > target:                 # frame wider than canvas -> width-limited
+        pw, ph = cw, max(1, round(cw / aoi_aspect))
+    else:
+        ph, pw = ch, max(1, round(ch * aoi_aspect))
+    return cw, ch, pw, ph, method
+
+
+def _upscale_rgb(rgb, pw, ph, method):
+    if (rgb.shape[1], rgb.shape[0]) == (pw, ph):
+        return rgb
+    return np.asarray(Image.fromarray(rgb.astype(np.uint8), "RGB").resize((pw, ph), method))
+
+
+def _letterbox(rgb, cw, ch, bg=LETTERBOX_RGB):
+    h, w = rgb.shape[:2]
+    if (w, h) == (cw, ch):
+        return rgb
+    canvas = Image.new("RGB", (cw, ch), bg)
+    canvas.paste(Image.fromarray(rgb.astype(np.uint8), "RGB"), ((cw - w) // 2, (ch - h) // 2))
+    return np.asarray(canvas)
+
+
+def _cap_edge(frame: np.ndarray, max_edge: int) -> np.ndarray:
+    """Downscale a frame so its longer side is <= max_edge (keeps GIFs preview-sized)."""
+    h, w = frame.shape[:2]
+    m = max(h, w)
+    if m <= max_edge:
+        return frame
+    s = max_edge / m
+    return np.asarray(Image.fromarray(frame.astype(np.uint8), "RGB")
+                      .resize((max(1, round(w * s)), max(1, round(h * s))), Image.LANCZOS))
 
 
 def _pad_to_even(frame: np.ndarray) -> np.ndarray:
@@ -331,7 +425,9 @@ def _write_mp4(path: Path, frames: list[np.ndarray], fps: int) -> None:
 
 
 def _write_gif(path: Path, frames: list[np.ndarray], fps: int) -> None:
-    # imageio>=2.28: GIF per-frame duration is in milliseconds
+    # imageio>=2.28: GIF per-frame duration is in milliseconds. GIFs are capped to a
+    # preview size so a 4K MP4 doesn't yield a hundreds-of-MB GIF.
+    frames = [_cap_edge(f, _GIF_MAX_EDGE) for f in frames]
     imageio.mimsave(path, frames, format="GIF", duration=1000.0 / fps, loop=0)
 
 
@@ -382,12 +478,20 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         frame_width_m = _frame_width_m(bounds, proj_bounds, cfg.crs)
     composite = _is_composite(cfg)
     info_text = _info_text(cfg)
+    output = None      # (cw, ch, pw, ph, method) screen layout, computed on frame 1
     rgb_frames: list[np.ndarray] = []
     for frame in frames:
         arr, valid = fetch(frame.image, cfg, geometry)
         # composite fetch already returns colour (H×W×3); an index returns 2-D.
         rgb = arr if arr.ndim == 3 else colorize(arr, cfg.viz_min, cfg.viz_max, cfg.palette)
         rgb = apply_nodata(rgb, valid)
+        # Screen output: smoothly upscale the native-resolution imagery, then draw the
+        # overlays at the output size so text/lines stay crisp; letterbox at the end.
+        if getattr(cfg, "preset", None):
+            if output is None:
+                output = _output_spec(cfg, (rgb.shape[1], rgb.shape[0]))
+            if output:
+                rgb = _upscale_rgb(rgb, output[2], output[3], output[4])
         n = getattr(frame, "n_scenes", None)
         rgb = annotate(rgb, f"{frame.label}  n={n}" if n is not None else frame.label)
         top_h = max(12, rgb.shape[0] // 12)          # height of the top info bar
@@ -398,6 +502,8 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
             rgb = draw_region(rgb, proj_bounds, proj_rings)
         if bounds is not None:
             rgb = draw_scale_bar(rgb, frame_width_m)
+        if output:
+            rgb = _letterbox(rgb, output[0], output[1])
         rgb_frames.append(rgb)
     paths = assemble(rgb_frames, cfg)
     paths += _write_frames(Path(cfg.out_dir), cfg.name, rgb_frames,

@@ -38,6 +38,12 @@ class RunConfig:
     # Render CRS (from render.crs). None => EPSG:4326 (plate carrée). "auto" => UTM
     # zone from the AOI centroid (square pixels; correct scale bar on both axes).
     crs: str = None
+    # Screen-output controls (from render.*). preset => output long-edge (4k/1440p/
+    # 1080p/720p or an int); aspect => canvas aspect (match/16:9/4:3/1:1/21:9);
+    # upscale => interpolation used to enlarge the native-resolution frame.
+    preset: str = None
+    aspect: str = None
+    upscale: str = "lanczos"
     out_dir: str = "out"
     draw_region: bool = True
     # Optional Landsat mission whitelist (e.g. ["L8", "L9"]). None => sensor default
@@ -83,6 +89,9 @@ class RunConfig:
                 scale=float(render["scale"]),
                 dimensions=int(render["dimensions"]),
                 crs=render.get("crs"),
+                preset=(str(render["preset"]) if render.get("preset") is not None else None),
+                aspect=render.get("aspect"),
+                upscale=str(render.get("upscale", "lanczos")),
                 out_dir=str(raw.get("out_dir", "out")),
                 draw_region=bool(raw.get("draw_region", True)),
                 missions=raw.get("missions"),
@@ -118,6 +127,17 @@ class RunConfig:
                     f"unknown missions {bad}; valid Landsat missions: {sorted(valid)}")
         if self.min_scenes < 1:
             raise ConfigError("min_scenes must be >= 1")
+        if self.preset or self.aspect or self.upscale != "lanczos":
+            from .render import ASPECTS, PRESETS, UPSCALE_METHODS
+            if self.preset and self.preset.lower() not in PRESETS and not str(self.preset).isdigit():
+                raise ConfigError(
+                    f"unknown render.preset {self.preset!r}; use one of {sorted(PRESETS)} or an int")
+            if self.aspect and self.aspect != "match" and self.aspect not in ASPECTS:
+                raise ConfigError(
+                    f"unknown render.aspect {self.aspect!r}; use 'match' or one of {sorted(ASPECTS)}")
+            if self.upscale not in UPSCALE_METHODS:
+                raise ConfigError(
+                    f"unknown render.upscale {self.upscale!r}; use one of {sorted(UPSCALE_METHODS)}")
         try:
             start = date.fromisoformat(self.start)
             end = date.fromisoformat(self.end)

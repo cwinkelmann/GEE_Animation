@@ -158,6 +158,39 @@ def test_render_projects_overlay_and_resolves_crs_when_auto(tmp_path, monkeypatc
     assert captured["bounds"][0] > 100_000            # overlay bounds are UTM metres, not degrees
 
 
+def test_output_spec_match_and_aspect():
+    from gee_animation.render import _output_spec
+    assert _output_spec(types.SimpleNamespace(preset=None), (200, 100)) is None
+    # match: canvas takes the frame aspect, long edge = preset, imagery fills it
+    cfg = types.SimpleNamespace(preset="1080p", aspect="match", upscale="lanczos")
+    assert _output_spec(cfg, (200, 100))[:4] == (1920, 960, 1920, 960)
+    # 16:9 canvas with a wider (2.0) frame -> width-limited, letterboxed top/bottom
+    cfg = types.SimpleNamespace(preset="4k", aspect="16:9", upscale="lanczos")
+    cw, ch, pw, ph, _ = _output_spec(cfg, (200, 100))
+    assert (cw, ch, pw, ph) == (3840, 2160, 3840, 1920)   # 1920 < 2160 -> bars top/bottom
+
+
+def test_letterbox_centers_on_canvas():
+    from gee_animation.render import _letterbox
+    rgb = np.full((50, 100, 3), 200, np.uint8)
+    out = _letterbox(rgb, 120, 80)
+    assert out.shape == (80, 120, 3)
+    assert tuple(out[40, 60]) == (200, 200, 200)   # centre = imagery
+    assert tuple(out[2, 2]) == (0, 0, 0)           # corner = letterbox background
+
+
+def test_render_preset_outputs_target_resolution(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.preset, cfg.aspect, cfg.upscale = "720p", "16:9", "lanczos"
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((30, 40)), np.ones((30, 40), dtype=bool)
+
+    paths = render([Frame("2022-01", object(), 3)], cfg, fetch=fake_fetch, geometry=None)
+    png = next(p for p in paths if p.suffix == ".png")
+    assert np.asarray(Image.open(png)).shape[:2] == (720, 1280)   # 720p 16:9 canvas
+
+
 def test_nice_distance_rounds_to_1_2_5_decades():
     assert _nice_distance(2500) == 2000      # 2 km
     assert _nice_distance(800) == 500        # 500 m
