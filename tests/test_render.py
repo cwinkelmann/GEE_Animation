@@ -283,7 +283,7 @@ def test_render_caps_dimensions_to_native_resolution(tmp_path, caplog):
         render([Frame("2022-06", object(), 4)], cfg, fetch=_tiny_fetch, geometry=None)
     # ~1113 m / 100 m native -> 11 px; the 768 request is capped (no silent upsample)
     assert cfg.dimensions == 11
-    assert "native resolution" in caplog.text
+    assert "capping fetch dimensions" in caplog.text
 
 
 def test_render_allow_upsample_keeps_dimensions_but_warns(tmp_path, caplog):
@@ -294,6 +294,16 @@ def test_render_allow_upsample_keeps_dimensions_but_warns(tmp_path, caplog):
         render([Frame("2022-06", object(), 4)], cfg, fetch=_tiny_fetch, geometry=None)
     assert cfg.dimensions == 768                        # honoured, not capped
     assert "upsamples" in caplog.text
+
+
+def test_render_preset_caps_fetch_to_native_despite_allow_upsample(tmp_path):
+    # with a screen preset, the fetch stays native (avoids blocky server upsampling) —
+    # the preset does the smooth client-side upscale — even if allow_upsample is set
+    cfg = _thermal_cfg(tmp_path)
+    cfg.allow_upsample = True
+    cfg.preset, cfg.aspect, cfg.upscale = "1080p", "match", "lanczos"
+    render([Frame("2022-06", object(), 4)], cfg, fetch=_tiny_fetch, geometry=None)
+    assert cfg.dimensions == 11                         # capped to native, not 768
 
 
 def test_render_annotates_scene_count_when_present(tmp_path, monkeypatch):

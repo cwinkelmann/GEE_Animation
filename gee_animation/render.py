@@ -251,15 +251,21 @@ def _cap_dimensions(cfg, bounds) -> None:
     max_dim = max(1, int(_frame_span_m(bounds) / native))
     if dims <= max_dim:
         return
-    if getattr(cfg, "allow_upsample", False):
+    # With a screen preset the imagery is upscaled client-side (smooth Lanczos), so the
+    # fetch must stay at native — fetching finer here would force Earth Engine to
+    # nearest-neighbour upsample the thumbnail (blocky). Without a preset, allow_upsample
+    # lets the user render directly finer than native.
+    preset = getattr(cfg, "preset", None)
+    if getattr(cfg, "allow_upsample", False) and not preset:
         log.warning("rendering %s at %d px upsamples the ~%dm-native data %.1fx; "
                     "pixels finer than %dm are interpolated.",
                     getattr(cfg, "index", "?"), dims, native, dims / max_dim, native)
-    else:
-        log.warning("capping render dimensions %d -> %d to stay at native resolution "
-                    "(~%dm/px for %s); set allow_upsample: true to override.",
-                    dims, max_dim, native, getattr(cfg, "index", "?"))
-        cfg.dimensions = max_dim
+        return
+    log.warning("capping fetch dimensions %d -> %d to native (~%dm/px for %s)%s.",
+                dims, max_dim, native, getattr(cfg, "index", "?"),
+                "; the preset upscales it smoothly to the output size" if preset
+                else "; set allow_upsample: true to override")
+    cfg.dimensions = max_dim
 
 
 def _nice_distance(meters: float) -> float:
