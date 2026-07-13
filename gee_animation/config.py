@@ -49,6 +49,9 @@ class RunConfig:
     # ERA5 air temp (thermal only). None => raw values.
     anomaly: str = None
     baseline_years: list = None
+    # Write per-frame AOI cloud fraction to <out_dir>/metadata.db (a reduceRegion per
+    # frame, so opt-in).
+    metadata: bool = False
     out_dir: str = "out"
     draw_region: bool = True
     # Optional Landsat mission whitelist (e.g. ["L8", "L9"]). None => sensor default
@@ -106,6 +109,7 @@ class RunConfig:
                 draw_region=bool(raw.get("draw_region", True)),
                 anomaly=anomaly,
                 baseline_years=raw.get("baseline_years"),
+                metadata=bool(raw.get("metadata", False)),
                 missions=raw.get("missions"),
                 min_scenes=int(raw.get("min_scenes", 1)),
                 allow_upsample=bool(raw.get("allow_upsample", False)),

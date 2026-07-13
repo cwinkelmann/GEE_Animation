@@ -6,7 +6,7 @@ import sys
 import types
 from pathlib import Path
 
-from . import anomaly, auth, aoi, collection, compositing, render
+from . import anomaly, auth, aoi, collection, compositing, metadata, render
 from .config import RunConfig, ConfigError
 
 DEFAULT_DEPS = types.SimpleNamespace(
@@ -15,6 +15,7 @@ DEFAULT_DEPS = types.SimpleNamespace(
     build=collection.build,
     monthly_median=compositing.monthly_median,
     anomaly=anomaly.apply,
+    metadata=metadata.write_frame_metadata,
     render=render.render,
 )
 
@@ -31,6 +32,8 @@ def run(config_path: str, deps=DEFAULT_DEPS) -> list[Path]:
             "No images found for the given AOI/date range/cloud filter."
         )
     frames = deps.anomaly(frames, cfg, frame_geom, region_geom, deps.build)
+    if getattr(cfg, "metadata", False):
+        deps.metadata(frames, cfg, region_geom)   # <out_dir>/metadata.db
     return deps.render(frames, cfg, geometry=frame_geom)
 
 
