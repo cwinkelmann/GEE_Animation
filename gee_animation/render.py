@@ -90,13 +90,13 @@ def _fetch_thumbnail(image, cfg, geometry):
     """
     if _is_composite(cfg):
         url = image.select(["R", "G", "B"]).getThumbURL(_thumb_params(cfg, geometry))
-        with urlopen(url) as resp:  # noqa: S310 (trusted EE URL)
+        with urlopen(url, timeout=180) as resp:  # noqa: S310 (trusted EE URL; timeout avoids hangs)
             data = resp.read()
         arr = np.asarray(Image.open(io.BytesIO(data)).convert("RGBA"), dtype=float)
         return arr[..., :3], arr[..., 3] > 0
 
     url = image.select("INDEX").getThumbURL(_thumb_params(cfg, geometry))
-    with urlopen(url) as resp:  # noqa: S310 (trusted EE URL)
+    with urlopen(url, timeout=180) as resp:  # noqa: S310 (trusted EE URL; timeout avoids hangs)
         data = resp.read()
     img = Image.open(io.BytesIO(data)).convert("LA")   # grayscale + alpha
     arr = np.asarray(img, dtype=float)
