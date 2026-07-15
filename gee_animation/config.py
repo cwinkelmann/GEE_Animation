@@ -63,6 +63,9 @@ class RunConfig:
     # By default render is capped to the product's native resolution (no upsampling);
     # set True to allow a finer render (a warning still names the true native GSD).
     allow_upsample: bool = False
+    # Debug: if set to "YYYY-MM", export that month's individual input scenes + the
+    # median they collapse into (to <out_dir>/debug/<month>/) instead of the animation.
+    debug_month: str = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RunConfig":
@@ -113,6 +116,7 @@ class RunConfig:
                 missions=raw.get("missions"),
                 min_scenes=int(raw.get("min_scenes", 1)),
                 allow_upsample=bool(raw.get("allow_upsample", False)),
+                debug_month=(str(raw["debug_month"]) if raw.get("debug_month") else None),
             )
         except KeyError as exc:
             raise ConfigError(f"missing required config key: {exc}") from exc

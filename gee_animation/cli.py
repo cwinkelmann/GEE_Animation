@@ -6,7 +6,7 @@ import sys
 import types
 from pathlib import Path
 
-from . import anomaly, auth, aoi, collection, compositing, metadata, render
+from . import anomaly, auth, aoi, collection, compositing, debug, metadata, render
 from .config import RunConfig, ConfigError
 
 DEFAULT_DEPS = types.SimpleNamespace(
@@ -17,6 +17,7 @@ DEFAULT_DEPS = types.SimpleNamespace(
     anomaly=anomaly.apply,
     metadata=metadata.write_frame_metadata,
     render=render.render,
+    debug=debug.export_month_scenes,
 )
 
 
@@ -25,6 +26,9 @@ def run(config_path: str, deps=DEFAULT_DEPS) -> list[Path]:
     deps.init(cfg.project)
     frame_geom = deps.parse(cfg.frame_aoi)
     region_geom = deps.parse(cfg.region_aoi)
+    if getattr(cfg, "debug_month", None):
+        # Debug mode: export one month's input scenes + median, not the animation.
+        return [deps.debug(cfg, frame_geom, region_geom, cfg.debug_month)]
     coll = deps.build(cfg, frame_geom, region_geom)
     frames = deps.monthly_median(coll, cfg)
     if not frames:
