@@ -21,7 +21,7 @@ pytest -m "not integration"                  # fast unit tests — NO network/EE
 pytest tests/test_config.py::test_rejects_end_before_start   # run a single test
 GEE_INTEGRATION=1 pytest -m integration      # opt-in live-EE test (needs auth)
 earthengine authenticate                     # one-time EE auth (or tool prompts)
-gee-animation --config config.yaml           # run the pipeline (see config.example.yaml)
+gee-animation --config config.yaml           # run the pipeline (see config/example.yaml)
 ```
 
 The unit suite mocks/injects Earth Engine and never hits the network. The single

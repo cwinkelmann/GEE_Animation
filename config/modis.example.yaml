@@ -5,12 +5,12 @@ project: hnee-331218
 aoi:
   frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }
   region: { shapefile: docs/aoi/wne/wne.shp }
-  region_max_cloud_percent: 80    # relaxed: 500 m pixels are coarse over a small region
+  region_max_cloud_percent: 20    # relaxed: 500 m pixels are coarse over a small region
 
 sensor: modis
 index: ndvi
-start: "2022-05-01"
-end: "2022-09-01"
+start: "2021-05-01"
+end: "2026-09-01"
 cadence: monthly
 max_cloud_percent: 60             # ignored for MODIS (no per-scene cloud metadata)
 draw_region: true

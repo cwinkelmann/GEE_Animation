@@ -26,7 +26,7 @@ environment selected as the kernel — or open it directly in Colab via the badg
 ## Usage
 
 ```bash
-cp config.example.yaml config.yaml   # edit AOI, dates, palette, fps
+cp config/example.yaml config.yaml   # edit AOI, dates, palette, fps
 gee-animation --config config.yaml
 ```
 
@@ -35,23 +35,23 @@ per month (`out/<name>_<YYYY-MM>.png`) so single frames can be reused on their o
 
 ## Generate each index animation
 
-Ready-to-run example configs (WNE AOI) live at the repo root. Run each with
+Ready-to-run example configs (WNE AOI) live in `config/`. Run each with
 `gee-animation --config <file>`; each writes `out/<basename>.mp4`, `.gif`, and one
 PNG per month. Bands below are canonical roles (NIR/Red/Green/Blue/SWIR1/Thermal)
 — each sensor maps them to its own bands (e.g. Sentinel-2 NIR = B8, Red = B4).
 
 | Index | Sensor | How the value is calculated | Config (basename) |
 |-------|--------|-----------------------------|-------------------|
-| NDVI  | Sentinel-2 | `(NIR − Red) / (NIR + Red)` — vegetation greenness | `config.example.yaml` (`wne_ndvi`) |
-| EVI   | Sentinel-2 | `2.5·(NIR − Red) / (NIR + 6·Red − 7.5·Blue + 1)` — enhanced vegetation | `config.evi.example.yaml` (`wne_evi`) |
-| NDWI  | Sentinel-2 | `(Green − NIR) / (Green + NIR)` — open water (McFeeters) | `config.ndwi.example.yaml` (`wne_ndwi`) |
-| NDMI  | Sentinel-2 | `(NIR − SWIR1) / (NIR + SWIR1)` — canopy/soil moisture | `config.ndmi.example.yaml` (`wne_ndmi`) |
-| RGB   | any | true colour composite: R=Red, G=Green, B=Blue | `config.rgb.example.yaml` (`wne_rgb`) |
-| CIR   | any | false-colour infrared: R←NIR, G←Red, B←Green (vegetation reads red) | `config.cir.example.yaml` (`wne_cir`) |
-| LST   | Landsat | `ST_B × 0.00341802 + 149.0 − 273.15` °C — USGS C2 L2 ST band | `config.lst.example.yaml` (`wne_lst`) |
-| LST (SMW) | Landsat | `A·Tb/ε + B/ε + C` — Ermida (2020) Statistical Mono-Window from TOA brightness temp, ASTER-GED emissivity ε, NCEP water vapour | `config.lst_smw.example.yaml` (`wne_lst_smw`) |
-| LST-sharp | Landsat | `LST − 16·(NDVI − NDVI₁₀₀ₘ)` — NDVI-sharpened LST (approximation) | `config.lst_sharp.example.yaml` (`wne_lst_sharp`) |
-| NDVI  | MODIS | `(NIR − Red) / (NIR + Red)` on MOD09A1 (500 m) | `config.modis.example.yaml` (`wne_modis_ndvi`) |
+| NDVI  | Sentinel-2 | `(NIR − Red) / (NIR + Red)` — vegetation greenness | `config/example.yaml` (`wne_ndvi`) |
+| EVI   | Sentinel-2 | `2.5·(NIR − Red) / (NIR + 6·Red − 7.5·Blue + 1)` — enhanced vegetation | `config/evi.example.yaml` (`wne_evi`) |
+| NDWI  | Sentinel-2 | `(Green − NIR) / (Green + NIR)` — open water (McFeeters) | `config/ndwi.example.yaml` (`wne_ndwi`) |
+| NDMI  | Sentinel-2 | `(NIR − SWIR1) / (NIR + SWIR1)` — canopy/soil moisture | `config/ndmi.example.yaml` (`wne_ndmi`) |
+| RGB   | any | true colour composite: R=Red, G=Green, B=Blue | `config/rgb.example.yaml` (`wne_rgb`) |
+| CIR   | any | false-colour infrared: R←NIR, G←Red, B←Green (vegetation reads red) | `config/cir.example.yaml` (`wne_cir`) |
+| LST   | Landsat | `ST_B × 0.00341802 + 149.0 − 273.15` °C — USGS C2 L2 ST band | `config/lst.example.yaml` (`wne_lst`) |
+| LST (SMW) | Landsat | `A·Tb/ε + B/ε + C` — Ermida (2020) Statistical Mono-Window from TOA brightness temp, ASTER-GED emissivity ε, NCEP water vapour | `config/lst_smw.example.yaml` (`wne_lst_smw`) |
+| LST-sharp | Landsat | `LST − 16·(NDVI − NDVI₁₀₀ₘ)` — NDVI-sharpened LST (approximation) | `config/lst_sharp.example.yaml` (`wne_lst_sharp`) |
+| NDVI  | MODIS | `(NIR − Red) / (NIR + Red)` on MOD09A1 (500 m) | `config/modis.example.yaml` (`wne_modis_ndvi`) |
 
 Two Landsat LST methods are available: `lst` = the USGS Collection-2 Level-2
 Surface Temperature product (the pre-computed `ST_B*` band); `lst_smw` = the
@@ -185,7 +185,7 @@ docker run --rm -p 7860:7860 \
 
 ## Configuration
 
-See `config.example.yaml` (Sentinel-2 NDVI) or `config.lst.example.yaml` (Landsat LST). Key fields:
+See `config/example.yaml` (Sentinel-2 NDVI) or `config/lst.example.yaml` (Landsat LST). Key fields:
 
 - **`aoi`** (area of interest) defines two geometries, each given as a `bbox`
   `[minLon, minLat, maxLon, maxLat]`, `geojson` (inline dict or file path), or
@@ -201,7 +201,7 @@ See `config.example.yaml` (Sentinel-2 NDVI) or `config.lst.example.yaml` (Landsa
 - **`max_cloud_percent`**: scene-level pre-filter threshold (Sentinel-2/Landsat only; MODIS has no per-scene cloud metadata, so this is ignored and only the region filter applies).
 - **`region_max_cloud_percent`**: region-level cloud filter (kept only if cloud over region < threshold).
 - **`viz`** (optional; min/max/palette): fixed range for colorization so colour is comparable across frames. If omitted, per-index defaults apply (NDVI −0.2..0.9 green; EVI 0..1 green; NDWI −0.3..0.6 brown→blue; NDMI −0.5..0.8 brown→teal; LST 0..40°C thermal). For **LST** a single fixed range can't fit both a cool spring and a hot summer, so a mid-range default washes out any one month — set `viz` to your season, or use `anomaly` (below), which adapts automatically.
-- **`anomaly`** (optional): render departures from normal instead of raw values — turns a decorative loop into a diagnostic one (and picks a diverging, symmetric viz default, so it supersedes the LST-range problem). See `config.anomaly.example.yaml`.
+- **`anomaly`** (optional): render departures from normal instead of raw values — turns a decorative loop into a diagnostic one (and picks a diverging, symmetric viz default, so it supersedes the LST-range problem). See `config/anomaly.example.yaml`.
   - `climatology` — per-pixel **z-score** `(x − mean_month) / std_month` against that pixel's own long-term value for the same calendar month; needs `baseline_years: [firstYear, lastYear]`. Works for any index. (Over the WNE AOI the Grumsin forest shows up as a coherent unit — near-normal while the surrounding fields run anomalously warm in a hot summer.)
   - `reference` — **thermal only**: `LST − ERA5-Land 2 m air temperature` for the month (how much warmer/cooler the surface is than the air). No baseline needed.
 - **`render`** (fps/scale/dimensions/crs/preset/aspect/upscale): rendering parameters.
