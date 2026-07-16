@@ -1,5 +1,36 @@
 import numpy as np
-from gee_animation.imaging import ndvi, colorize
+from gee_animation.imaging import ndvi, colorize, distrad_sharpen, _block_mean
+
+
+def test_distrad_sharpen_is_conservative():
+    # P1-2 acceptance: aggregating the sharpened output back to the coarse grid must
+    # reproduce the input coarse LST to float tolerance (residual correction).
+    rng = np.random.default_rng(0)
+    factor = 3
+    lst_coarse = 15 + 12 * rng.random((8, 10))                 # deg C
+    pred_fine = rng.random((8 * factor, 10 * factor))          # e.g. NIRv at fine scale
+    sharp = distrad_sharpen(lst_coarse, pred_fine, factor)
+    assert sharp.shape == (24, 30)
+    np.testing.assert_allclose(_block_mean(sharp, factor), lst_coarse, atol=1e-9)
+
+
+def test_distrad_sharpen_injects_fine_structure():
+    # LST correlates with the predictor across coarse cells (fit a=8, b=12), so
+    # within-cell predictor variation gives the sharpened LST fine structure.
+    pred = np.array([[0.0, 1.0, 0.0, 0.0],
+                     [0.0, 0.0, 0.0, 0.0],
+                     [1.0, 1.0, 1.0, 1.0],
+                     [1.0, 1.0, 1.0, 1.0]])
+    lst_coarse = 8 * _block_mean(pred, 2) + 12                 # perfectly linear
+    sharp = distrad_sharpen(lst_coarse, pred, 2)
+    assert sharp[0, 1] > sharp[0, 0]                           # brighter predictor -> warmer
+    np.testing.assert_allclose(_block_mean(sharp, 2), lst_coarse, atol=1e-9)
+
+
+def test_distrad_flat_predictor_returns_coarse_value():
+    # no predictor gradient -> flat fit -> every fine pixel == the coarse LST
+    sharp = distrad_sharpen(np.array([[25.0, 30.0]]), np.ones((2, 4)), 2)
+    np.testing.assert_allclose(sharp, [[25, 25, 30, 30], [25, 25, 30, 30]], atol=1e-9)
 
 
 def test_ndvi_basic():

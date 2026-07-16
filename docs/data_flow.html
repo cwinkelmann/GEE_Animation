@@ -1,0 +1,502 @@
+<style>
+  :root {
+    --ground: #0c1310;
+    --panel: #131e19;
+    --panel-2: #182823;
+    --edge: #26382f;
+    --edge-bright: #35d07f33;
+    --ink: #d6e2da;
+    --ink-dim: #93a89c;
+    --ink-faint: #6a7d72;
+    --amber: #e8b64a;      /* the region-outline colour used in the real frames */
+    --amber-soft: #e8b64a22;
+    --chloro: #5cc48a;
+    /* NDVI functional ramp — reused in the composite illustration */
+    --ndvi-0: #2b3a67;
+    --ndvi-1: #2e86ab;
+    --ndvi-2: #7fbf7b;
+    --ndvi-3: #f6c445;
+    --ndvi-4: #d1495b;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", "Consolas", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  .page {
+    background:
+      radial-gradient(1200px 600px at 78% -8%, #17271f 0%, transparent 60%),
+      radial-gradient(900px 500px at 0% 100%, #101a15 0%, transparent 55%),
+      var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.5;
+    min-height: 100vh;
+    padding: clamp(1.5rem, 4vw, 4rem) clamp(1rem, 4vw, 3rem) 5rem;
+  }
+
+  .wrap { max-width: 940px; margin: 0 auto; }
+
+  /* ---- header ---- */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .28em;
+    text-transform: uppercase;
+    color: var(--amber);
+    margin: 0 0 .9rem;
+  }
+  h1 {
+    font-family: var(--sans);
+    font-weight: 680;
+    font-size: clamp(1.7rem, 4.6vw, 2.9rem);
+    line-height: 1.08;
+    letter-spacing: -.015em;
+    text-wrap: balance;
+    margin: 0 0 .8rem;
+  }
+  h1 .accent { color: var(--chloro); }
+  .lede {
+    max-width: 60ch;
+    color: var(--ink-dim);
+    font-size: clamp(1rem, 1.6vw, 1.12rem);
+    margin: 0;
+  }
+  .lede code {
+    font-family: var(--mono);
+    font-size: .86em;
+    color: var(--ink);
+    background: var(--panel-2);
+    padding: .08em .38em;
+    border-radius: 4px;
+  }
+
+  .rule {
+    height: 1px;
+    background: linear-gradient(90deg, var(--edge), transparent);
+    margin: clamp(1.8rem, 4vw, 2.8rem) 0;
+  }
+
+  /* ---- pipeline spine ---- */
+  .spine { display: flex; flex-direction: column; gap: 0; }
+
+  .stage {
+    position: relative;
+    display: grid;
+    grid-template-columns: 8.5rem 1fr;
+    gap: clamp(.8rem, 2.5vw, 1.6rem);
+    padding: clamp(1rem, 2.4vw, 1.4rem);
+    border: 1px solid var(--edge);
+    border-radius: 12px;
+    background: linear-gradient(180deg, var(--panel), #101a15);
+    transition: border-color .2s ease, transform .2s ease;
+  }
+  .stage:hover { border-color: var(--edge-bright); transform: translateX(3px); }
+
+  /* connector between stages */
+  .link {
+    display: flex;
+    justify-content: center;
+    padding: .35rem 0;
+    color: var(--ink-faint);
+  }
+  .link svg { width: 20px; height: 26px; overflow: visible; }
+  .link path { stroke: var(--edge); stroke-width: 1.5; fill: none; }
+  .link .head { fill: var(--ink-faint); stroke: none; }
+
+  .mod {
+    font-family: var(--mono);
+    font-size: .8rem;
+    color: var(--amber);
+    align-self: start;
+    padding-top: .15rem;
+    word-break: break-word;
+  }
+  .mod .fn { color: var(--ink-dim); display: block; margin-top: .2rem; font-size: .74rem; }
+
+  .body h3 {
+    margin: 0 0 .35rem;
+    font-size: 1.02rem;
+    font-weight: 620;
+    letter-spacing: -.01em;
+  }
+  .body p { margin: 0; color: var(--ink-dim); font-size: .93rem; }
+  .body p code, .body h3 code {
+    font-family: var(--mono);
+    font-size: .84em;
+    color: var(--chloro);
+    background: #0e1713;
+    padding: .05em .35em;
+    border-radius: 4px;
+  }
+  .produces {
+    margin-top: .6rem;
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .04em;
+    color: var(--ink-faint);
+  }
+  .produces b { color: var(--ink); font-weight: 600; }
+
+  /* stage that is the focal point */
+  .stage.focus {
+    border-color: var(--amber);
+    background: linear-gradient(180deg, #1c2419, #131a14);
+    box-shadow: 0 0 0 1px var(--amber-soft), 0 18px 40px -22px #000;
+  }
+  .stage.focus .mod { color: var(--amber); }
+  .tag {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: .64rem;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ground);
+    background: var(--amber);
+    padding: .18em .55em;
+    border-radius: 4px;
+    margin-bottom: .5rem;
+  }
+
+  /* ---- composite illustration ---- */
+  .composite {
+    margin-top: 1.1rem;
+    border-top: 1px dashed var(--edge);
+    padding-top: 1.1rem;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: clamp(.7rem, 2vw, 1.4rem);
+    align-items: center;
+  }
+  .stack-label {
+    font-family: var(--mono);
+    font-size: .7rem;
+    letter-spacing: .1em;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    margin: 0 0 .6rem;
+  }
+  .scenes {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: .5rem;
+  }
+  .scene, .result {
+    aspect-ratio: 1;
+    border-radius: 6px;
+    position: relative;
+    overflow: hidden;
+    border: 1px solid #ffffff14;
+    background:
+      linear-gradient(135deg, var(--ndvi-1), var(--ndvi-2) 55%, var(--ndvi-3));
+  }
+  /* cloud blobs on individual scenes */
+  .scene::before, .scene::after {
+    content: "";
+    position: absolute;
+    background: radial-gradient(circle, #dfe6e4 0%, #b9c4c0 55%, transparent 72%);
+    border-radius: 50%;
+    opacity: .9;
+  }
+  .scene.s1::before { width: 60%; height: 55%; top: -12%; left: 30%; }
+  .scene.s1::after  { width: 35%; height: 35%; bottom: 8%; left: -6%; }
+  .scene.s2::before { width: 80%; height: 70%; top: 30%; left: 45%; }
+  .scene.s2::after  { width: 0; height: 0; }
+  .scene.s3::before { width: 40%; height: 38%; top: 45%; left: 8%; }
+  .scene.s3::after  { width: 30%; height: 30%; top: 5%; right: 10%; }
+  .scene.s4::before { width: 0; height: 0; }               /* mostly clear */
+  .scene.s4::after  { width: 28%; height: 26%; bottom: -8%; right: 12%; }
+  .scene.s5::before { width: 95%; height: 90%; top: 8%; left: 6%; opacity: .96; }
+  .scene.s5::after  { width: 0; height: 0; }               /* heavy cloud */
+  .scene.s6::before { width: 34%; height: 32%; top: 12%; left: 12%; }
+  .scene.s6::after  { width: 26%; height: 24%; bottom: 10%; right: 8%; }
+
+  .scene .date {
+    position: absolute;
+    bottom: 2px; left: 3px;
+    font-family: var(--mono);
+    font-size: .5rem;
+    color: #06110c;
+    background: #ffffffbb;
+    padding: 0 3px;
+    border-radius: 3px;
+    letter-spacing: .02em;
+    z-index: 2;
+  }
+
+  .arrow-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: .35rem;
+    color: var(--amber);
+  }
+  .arrow-col .op {
+    font-family: var(--mono);
+    font-size: .66rem;
+    letter-spacing: .06em;
+    color: var(--amber);
+    text-align: center;
+  }
+  .arrow-col svg { width: 46px; height: 22px; }
+  .arrow-col path { stroke: var(--amber); stroke-width: 1.6; fill: none; }
+  .arrow-col .head { fill: var(--amber); stroke: none; }
+
+  .result-wrap { display: flex; flex-direction: column; align-items: center; }
+  .result {
+    width: 62%;
+    max-width: 150px;
+    background: linear-gradient(135deg, var(--ndvi-1), var(--ndvi-2) 50%, var(--ndvi-3) 88%);
+    box-shadow: 0 0 0 1px var(--amber), 0 10px 26px -14px #000;
+  }
+  .result .outline {
+    position: absolute; inset: 18% 20%;
+    border: 1.5px solid var(--amber);
+    border-radius: 2px;
+  }
+  .result .n {
+    position: absolute; top: 4px; right: 5px;
+    font-family: var(--mono);
+    font-size: .58rem;
+    color: var(--ground);
+    background: var(--amber);
+    padding: 0 4px;
+    border-radius: 3px;
+    font-weight: 700;
+  }
+  .result-cap {
+    margin-top: .55rem;
+    font-family: var(--mono);
+    font-size: .68rem;
+    color: var(--ink-dim);
+    text-align: center;
+  }
+  .result-cap b { color: var(--ink); }
+
+  /* ---- the n=6 explainer callout ---- */
+  .note {
+    margin-top: 1.1rem;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: .9rem;
+    align-items: start;
+    background: #0e1713;
+    border: 1px solid var(--edge);
+    border-left: 3px solid var(--amber);
+    border-radius: 8px;
+    padding: .95rem 1.1rem;
+  }
+  .note .q {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 1.4rem;
+    color: var(--amber);
+    line-height: 1;
+    padding-top: .1rem;
+  }
+  .note p { margin: 0; font-size: .92rem; color: var(--ink-dim); }
+  .note p + p { margin-top: .5rem; }
+  .note strong { color: var(--ink); font-weight: 640; }
+  .note code {
+    font-family: var(--mono);
+    font-size: .84em;
+    color: var(--chloro);
+    background: #12201a;
+    padding: .05em .35em;
+    border-radius: 4px;
+  }
+
+  /* ---- footer legend ---- */
+  .legend {
+    margin-top: 2.4rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: .8rem;
+  }
+  .legend .item {
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+    padding: .8rem .9rem;
+    background: var(--panel);
+  }
+  .legend .k {
+    font-family: var(--mono);
+    font-size: .72rem;
+    color: var(--amber);
+    letter-spacing: .05em;
+    margin-bottom: .3rem;
+  }
+  .legend .v { font-size: .85rem; color: var(--ink-dim); }
+
+  .foot {
+    margin-top: 2.2rem;
+    font-family: var(--mono);
+    font-size: .7rem;
+    color: var(--ink-faint);
+    letter-spacing: .04em;
+  }
+
+  @media (max-width: 620px) {
+    .stage { grid-template-columns: 1fr; gap: .5rem; }
+    .mod { padding-top: 0; }
+    .composite { grid-template-columns: 1fr; }
+    .arrow-col svg { transform: rotate(90deg); }
+    .note { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="page">
+  <div class="wrap">
+
+    <p class="eyebrow">gee_animation · pipeline</p>
+    <h1>From satellite passes to an<br><span class="accent">annotated NDVI timelapse</span></h1>
+    <p class="lede">A config-driven pipeline. Each module has one job and takes Earth Engine as an injected dependency. Data flows top&#8209;to&#8209;bottom — a <code>config.yaml</code> in, an <code>MP4 + GIF + per-month PNGs</code> out.</p>
+
+    <div class="rule"></div>
+
+    <div class="spine">
+
+      <!-- 1 -->
+      <div class="stage">
+        <div class="mod">config.py<span class="fn">RunConfig.from_yaml()</span></div>
+        <div class="body">
+          <h3>Read &amp; validate the run</h3>
+          <p>Dates, AOI, sensor, index, cloud thresholds, viz range and screen preset are parsed and checked — pure, no network. Bad input fails here, before any EE call.</p>
+          <div class="produces">produces → <b>RunConfig</b></div>
+        </div>
+      </div>
+
+      <div class="link" aria-hidden="true"><svg viewBox="0 0 20 26"><path d="M10 0 V20"/><path class="head" d="M4 18 L10 26 L16 18 Z"/></svg></div>
+
+      <!-- 2 -->
+      <div class="stage">
+        <div class="mod">auth.py<span class="fn">init(project)</span></div>
+        <div class="body">
+          <h3>Authenticate Earth Engine</h3>
+          <p><code>ee.Initialize</code> against project <code>hnee-331218</code>; prompts <code>ee.Authenticate()</code> and retries once on failure.</p>
+          <div class="produces">produces → <b>live EE session</b></div>
+        </div>
+      </div>
+
+      <div class="link" aria-hidden="true"><svg viewBox="0 0 20 26"><path d="M10 0 V20"/><path class="head" d="M4 18 L10 26 L16 18 Z"/></svg></div>
+
+      <!-- 3 -->
+      <div class="stage">
+        <div class="mod">aoi.py<span class="fn">parse() · frame_bbox</span></div>
+        <div class="body">
+          <h3>Build the geometry</h3>
+          <p>A bbox, GeoJSON, or shapefile becomes an <code>ee.Geometry</code>. The <strong>region</strong> is the area of interest; a buffered <strong>frame</strong> box is what actually gets rendered around it.</p>
+          <div class="produces">produces → <b>region geom</b> · <b>frame geom</b></div>
+        </div>
+      </div>
+
+      <div class="link" aria-hidden="true"><svg viewBox="0 0 20 26"><path d="M10 0 V20"/><path class="head" d="M4 18 L10 26 L16 18 Z"/></svg></div>
+
+      <!-- 4 -->
+      <div class="stage">
+        <div class="mod">collection.py<span class="fn">build(cfg, geom)</span></div>
+        <div class="body">
+          <h3>Filter &amp; cloud-mask the archive</h3>
+          <p>Pulls Sentinel-2 (or Landsat), keeps scenes overlapping the frame in the date range, drops cloudy scenes via the SCL/QA mask and the AOI cloud threshold, then adds the index band — e.g. <code>NDVI = (B8−B4)/(B8+B4)</code>.</p>
+          <div class="produces">produces → <b>ImageCollection</b> (masked, +index)</div>
+        </div>
+      </div>
+
+      <div class="link" aria-hidden="true"><svg viewBox="0 0 20 26"><path d="M10 0 V20"/><path class="head" d="M4 18 L10 26 L16 18 Z"/></svg></div>
+
+      <!-- 5 — FOCUS: the compositing step -->
+      <div class="stage focus">
+        <div class="mod">compositing.py<span class="fn">monthly_median()</span></div>
+        <div class="body">
+          <span class="tag">your question, answered here</span>
+          <h3>Collapse each month to one median frame</h3>
+          <p>Scenes are tagged with their <code>YYYY-MM</code> and counted. For every month, <strong>all of that month's cloud-filtered scenes are stacked and reduced pixel-wise with <code>.median()</code></strong> into a single <code>Frame(label, image, n_scenes)</code>. Empty months are skipped; <code>min_scenes</code> gates thin months.</p>
+
+          <div class="composite">
+            <div>
+              <p class="stack-label">6 scenes · July 2022</p>
+              <div class="scenes">
+                <div class="scene s1"><span class="date">07-03</span></div>
+                <div class="scene s2"><span class="date">07-08</span></div>
+                <div class="scene s3"><span class="date">07-13</span></div>
+                <div class="scene s4"><span class="date">07-18</span></div>
+                <div class="scene s5"><span class="date">07-23</span></div>
+                <div class="scene s6"><span class="date">07-28</span></div>
+              </div>
+            </div>
+
+            <div class="arrow-col" aria-hidden="true">
+              <span class="op">per-pixel<br>median</span>
+              <svg viewBox="0 0 46 22"><path d="M0 11 H38"/><path class="head" d="M36 5 L46 11 L36 17 Z"/></svg>
+            </div>
+
+            <div class="result-wrap">
+              <div class="result">
+                <span class="n">n = 6</span>
+                <span class="outline" title="amber region outline"></span>
+              </div>
+              <p class="result-cap"><b>1 Frame</b><br>clouds voted out</p>
+            </div>
+          </div>
+
+          <div class="note">
+            <div class="q" aria-hidden="true">6?</div>
+            <div>
+              <p><strong>Yes — <code>n = 6</code> means six source scenes were combined into that month's composite</strong>, not one image shown six times.</p>
+              <p>The subtlety: <code>n</code> counts scenes <em>overlapping</em> the month. Each output pixel is the median of only its <em>cloud-free</em> observations, so a heavily-clouded pixel may draw on fewer than 6 values — and where <strong>zero</strong> clear values remain, that pixel is the AOI cloud fraction recorded downstream.</p>
+            </div>
+          </div>
+
+          <div class="produces" style="margin-top:.9rem">produces → <b>list[Frame]</b> — one per non-empty month</div>
+        </div>
+      </div>
+
+      <div class="link" aria-hidden="true"><svg viewBox="0 0 20 26"><path d="M10 0 V20"/><path class="head" d="M4 18 L10 26 L16 18 Z"/></svg></div>
+
+      <!-- 6 -->
+      <div class="stage">
+        <div class="mod">render.py<span class="fn">render(frames, geom)</span></div>
+        <div class="body">
+          <h3>Style every frame &amp; encode</h3>
+          <p>Per frame: fetch the thumbnail at native resolution → colorize with a <strong>fixed</strong> palette and range (comparable across the animation) → paint no-data pixels neutral grey → draw month label, colorbar and amber region outline → Lanczos-upscale to the screen preset → write PNG. Frames assemble to <code>MP4 + GIF</code>.</p>
+          <div class="produces">produces → <b>out/&lt;name&gt;/…mp4 · .gif · _YYYY-MM.png</b></div>
+        </div>
+      </div>
+
+      <div class="link" aria-hidden="true"><svg viewBox="0 0 20 26"><path d="M10 0 V20"/><path class="head" d="M4 18 L10 26 L16 18 Z"/></svg></div>
+
+      <!-- 7 -->
+      <div class="stage">
+        <div class="mod">metadata.py<span class="fn">write_frame_metadata()</span></div>
+        <div class="body">
+          <h3>Log per-frame cloud metadata</h3>
+          <p>For each frame, measures the share of the AOI with no cloud-free value — <code>aoi_cloud_fraction = 1 − clear</code> — and stores it with <code>n_scenes</code> in a SQLite <code>frame_clouds</code> table. Cloud is measured <strong>inside the AOI</strong>, not over the whole scene.</p>
+          <div class="produces">produces → <b>out/&lt;name&gt;/metadata.db</b></div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="legend">
+      <div class="item">
+        <div class="k">n_scenes</div>
+        <div class="v">Scenes stacked into the month's median. <b>Higher = more chances to see through clouds.</b></div>
+      </div>
+      <div class="item">
+        <div class="k">median (not mean)</div>
+        <div class="v">Robust to outliers — a bright cloud or dark shadow in one scene is outvoted rather than averaged in.</div>
+      </div>
+      <div class="item">
+        <div class="k">fixed viz range</div>
+        <div class="v">Same <code style="font-family:var(--mono);color:var(--chloro)">min/max</code> + palette every frame, so colour means the same thing all animation long.</div>
+      </div>
+      <div class="item">
+        <div class="k">injected EE</div>
+        <div class="v">Every module takes <code style="font-family:var(--mono);color:var(--chloro)">ee_module</code> as a dependency — testable with no network.</div>
+      </div>
+    </div>
+
+    <p class="foot">gee_animation · Sentinel-2 / Landsat → monthly median → annotated NDVI timelapse · HNEE</p>
+
+  </div>
+</div>

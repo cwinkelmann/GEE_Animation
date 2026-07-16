@@ -21,16 +21,19 @@ class FakeImage:
 class FakeFiltered:
     def __init__(self, count):
         self._count = count
-    def size(self):
-        return types.SimpleNamespace(getInfo=lambda: self._count)
     def median(self):
         return FakeImage("median")
 
 
 class FakeCollection:
-    """Records filterDate calls; returns configured counts per month."""
+    """Fakes the two calls monthly_median makes: aggregate the present months in
+    one shot (via map + aggregate_array), then filterDate(month).median()."""
     def __init__(self, counts_by_start):
         self.counts = counts_by_start
+    def map(self, fn):
+        yms = [start[:7] for start, n in self.counts.items() for _ in range(n)]
+        return types.SimpleNamespace(
+            aggregate_array=lambda prop: types.SimpleNamespace(getInfo=lambda: yms))
     def filterDate(self, start, end):
         return FakeFiltered(self.counts.get(start, 0))
 
@@ -39,10 +42,17 @@ def _fake_ee():
     return types.SimpleNamespace()
 
 
-def test_monthly_median_skips_empty_months():
+def test_monthly_median_skips_empty_months_and_reports_scene_counts():
     cfg = types.SimpleNamespace(start="2022-01-01", end="2022-04-01")
     coll = FakeCollection({"2022-01-01": 5, "2022-02-01": 0, "2022-03-01": 3})
     frames = monthly_median(coll, cfg, ee_module=_fake_ee())
-    labels = [f.label for f in frames]
-    assert labels == ["2022-01", "2022-03"]   # Feb skipped (0 images)
-    assert all(isinstance(f, Frame) for f in frames)
+    assert [(f.label, f.n_scenes) for f in frames] == [("2022-01", 5), ("2022-03", 3)]
+    assert all(isinstance(f, Frame) for f in frames)   # Feb skipped (0 images)
+
+
+def test_monthly_median_respects_min_scenes():
+    # min_scenes=4 -> the 3-scene March median is dropped (median-of-few, not trusted)
+    cfg = types.SimpleNamespace(start="2022-01-01", end="2022-04-01", min_scenes=4)
+    coll = FakeCollection({"2022-01-01": 5, "2022-02-01": 0, "2022-03-01": 3})
+    frames = monthly_median(coll, cfg, ee_module=_fake_ee())
+    assert [(f.label, f.n_scenes) for f in frames] == [("2022-01", 5)]

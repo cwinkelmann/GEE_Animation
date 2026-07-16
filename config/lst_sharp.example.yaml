@@ -1,0 +1,20 @@
+# Landsat "lst_sharp" = NDVI-sharpened LST (an approximation) over the WNE AOIs.
+# NOT the real ECOSTRESS mission (which is LA-only in Earth Engine and barely
+# reaches this AOI's latitude) — see the README note.
+name: wne_lst_sharp
+project: hnee-331218
+
+aoi:
+  frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 20
+
+sensor: landsat
+index: lst_sharp
+start: "2022-05-01"
+end: "2022-09-01"
+cadence: monthly
+max_cloud_percent: 60
+draw_region: true
+render: { fps: 3, scale: 30, dimensions: 768, crs: auto }   # crs auto -> square pixels
+viz: { min: 10, max: 40 }   # summer LST range (registry default 0..40 for full-year)

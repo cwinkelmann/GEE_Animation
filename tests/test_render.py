@@ -1,12 +1,15 @@
 from pathlib import Path
 import numpy as np
 import types
+from PIL import Image
 from gee_animation.render import (
     add_colorbar,
     annotate,
     apply_nodata,
     assemble,
+    draw_scale_bar,
     render,
+    _nice_distance,
 )
 from gee_animation.compositing import Frame
 
@@ -15,7 +18,7 @@ def _cfg(tmp_path, name="anim", fps=2):
     return types.SimpleNamespace(
         name=name, out_dir=str(tmp_path),
         index="ndvi", viz_min=-0.2, viz_max=0.9, palette=["#000000", "#ffffff"],
-        fps=fps, scale=20, dimensions=64,
+        fps=fps, scale=20, dimensions=64, frame_aoi={"bbox": [0, 0, 1, 1]},
     )
 
 
@@ -123,6 +126,118 @@ def test_render_skips_region_overlay_when_disabled(tmp_path, monkeypatch):
     render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)  # must not raise
 
 
+def test_info_text_shows_formula_and_bands():
+    from gee_animation.render import _info_text, draw_info_bar
+    cfg = types.SimpleNamespace(index="ndvi")
+    txt = _info_text(cfg)
+    assert txt.startswith("NDVI = (NIR - Red)") and "bands: NIR, Red" in txt
+    # composite: bands but no formula
+    assert _info_text(types.SimpleNamespace(index="cir")) == "CIR   bands: R<-NIR, G<-Red, B<-Green"
+    # and the bar draws onto the top strip
+    rgb = np.zeros((60, 200, 3), np.uint8)
+    out = draw_info_bar(rgb, txt)
+    assert out[:12, :].sum() > 0 and out[30:, :].sum() == 0
+
+
+def test_render_projects_overlay_and_resolves_crs_when_auto(tmp_path, monkeypatch):
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.crs = "auto"
+    cfg.draw_region = True
+    cfg.frame_aoi = {"bbox": [13.90, 52.99, 13.92, 53.00]}   # Brandenburg
+    cfg.region_aoi = {"bbox": [13.905, 52.993, 13.915, 52.998]}
+    captured = {}
+    monkeypatch.setattr(r, "draw_region",
+                        lambda rgb, bounds, rings, **k: (captured.update(bounds=bounds) or rgb))
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
+
+    render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+    assert cfg.crs == "EPSG:32633"                    # "auto" resolved to UTM 33N
+    assert captured["bounds"][0] > 100_000            # overlay bounds are UTM metres, not degrees
+
+
+def test_output_spec_match_and_aspect():
+    from gee_animation.render import _output_spec
+    assert _output_spec(types.SimpleNamespace(preset=None), (200, 100)) is None
+    # match: canvas takes the frame aspect, long edge = preset, imagery fills it
+    cfg = types.SimpleNamespace(preset="1080p", aspect="match", upscale="lanczos")
+    assert _output_spec(cfg, (200, 100))[:4] == (1920, 960, 1920, 960)
+    # 16:9 canvas with a wider (2.0) frame -> width-limited, letterboxed top/bottom
+    cfg = types.SimpleNamespace(preset="4k", aspect="16:9", upscale="lanczos")
+    cw, ch, pw, ph, _ = _output_spec(cfg, (200, 100))
+    assert (cw, ch, pw, ph) == (3840, 2160, 3840, 1920)   # 1920 < 2160 -> bars top/bottom
+
+
+def test_letterbox_centers_on_canvas():
+    from gee_animation.render import _letterbox
+    rgb = np.full((50, 100, 3), 200, np.uint8)
+    out = _letterbox(rgb, 120, 80)
+    assert out.shape == (80, 120, 3)
+    assert tuple(out[40, 60]) == (200, 200, 200)   # centre = imagery
+    assert tuple(out[2, 2]) == (0, 0, 0)           # corner = letterbox background
+
+
+def test_render_preset_outputs_target_resolution(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.preset, cfg.aspect, cfg.upscale = "720p", "16:9", "lanczos"
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((30, 40)), np.ones((30, 40), dtype=bool)
+
+    paths = render([Frame("2022-01", object(), 3)], cfg, fetch=fake_fetch, geometry=None)
+    png = next(p for p in paths if p.suffix == ".png")
+    assert np.asarray(Image.open(png)).shape[:2] == (720, 1280)   # 720p 16:9 canvas
+
+
+def test_nice_distance_rounds_to_1_2_5_decades():
+    assert _nice_distance(2500) == 2000      # 2 km
+    assert _nice_distance(800) == 500        # 500 m
+    assert _nice_distance(140) == 100        # 100 m
+    assert _nice_distance(9000) == 5000      # 5 km
+
+
+def test_draw_scale_bar_labels_and_marks_frame():
+    # ~111 km wide frame; a quarter of that -> a 20 km "nice" bar.
+    rgb = np.zeros((120, 240, 3), np.uint8)
+    out = draw_scale_bar(rgb, 111320.0)
+    assert out.shape == rgb.shape and out.dtype == np.uint8
+    assert out.sum() > 0                                  # bar/label drawn
+    # drawn in the bottom-right quadrant, not the top-left
+    assert out[:60, :120].sum() == 0
+    assert out[60:, 120:].sum() > 0
+
+
+def test_draw_scale_bar_skips_tiny_frames():
+    rgb = np.zeros((8, 8, 3), np.uint8)
+    out = draw_scale_bar(rgb, 111320.0)
+    assert out.sum() == 0                                 # too small: no-op
+
+
+def test_utm_epsg_and_resolve_crs():
+    from gee_animation.render import _utm_epsg, _resolve_crs
+    assert _utm_epsg(13.9, 53.0) == "EPSG:32633"          # Brandenburg -> UTM 33N
+    assert _utm_epsg(-122.4, 37.8) == "EPSG:32610"        # San Francisco -> UTM 10N
+    assert _utm_epsg(13.9, -53.0) == "EPSG:32733"         # southern hemisphere
+    cfg = types.SimpleNamespace(crs="auto")
+    assert _resolve_crs(cfg, (13.0, 52.9, 14.0, 53.1)) == "EPSG:32633"
+    assert _resolve_crs(types.SimpleNamespace(crs=None), (13, 52, 14, 53)) is None
+    assert _resolve_crs(types.SimpleNamespace(crs="EPSG:3035"), None) == "EPSG:3035"
+
+
+def test_project_gives_metric_bounds_and_square_pixels():
+    from gee_animation.render import _project, _frame_width_m
+    # a ~1 km square AOI at 53N: in EPSG:4326 the lon span is compressed by cos(53),
+    # but in UTM the ground width and height should be ~equal (square pixels).
+    b = (13.900, 52.995, 13.910, 53.005)
+    pb, pr = _project(b, [[(13.9, 53.0), (13.91, 53.0)]], "EPSG:32633")
+    w_m = pb[2] - pb[0]; h_m = pb[3] - pb[1]
+    assert 600 < w_m < 800 and 1050 < h_m < 1200          # metres, not degrees
+    assert len(pr) == 1 and len(pr[0]) == 2               # rings projected too
+    assert _frame_width_m(b, pb, "EPSG:32633") == pb[2] - pb[0]
+
+
 def test_assemble_encodes_mp4_for_odd_dimension_frames(tmp_path):
     # libx264 requires even width AND height; frames from arbitrary AOIs are
     # often odd (e.g. 768x577). The MP4 must still be produced, not dropped.
@@ -148,6 +263,82 @@ def test_assemble_falls_back_to_gif_when_mp4_fails(tmp_path, monkeypatch):
     assert paths[0].exists()
 
 
+def _thermal_cfg(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.sensor, cfg.index = "landsat", "lst"
+    cfg.frame_aoi = {"bbox": [0.0, 0.0, 0.01, 0.01]}   # ~1.11 km frame
+    cfg.dimensions = 768
+    cfg.allow_upsample = False
+    return cfg
+
+
+def _tiny_fetch(image, cfg, geometry=None):
+    return np.zeros((8, 8)), np.ones((8, 8), dtype=bool)
+
+
+def test_render_caps_dimensions_to_native_resolution(tmp_path, caplog):
+    import logging
+    cfg = _thermal_cfg(tmp_path)
+    with caplog.at_level(logging.WARNING):
+        render([Frame("2022-06", object(), 4)], cfg, fetch=_tiny_fetch, geometry=None)
+    # ~1113 m / 100 m native -> 11 px; the 768 request is capped (no silent upsample)
+    assert cfg.dimensions == 11
+    assert "capping fetch dimensions" in caplog.text
+
+
+def test_render_allow_upsample_keeps_dimensions_but_warns(tmp_path, caplog):
+    import logging
+    cfg = _thermal_cfg(tmp_path)
+    cfg.allow_upsample = True
+    with caplog.at_level(logging.WARNING):
+        render([Frame("2022-06", object(), 4)], cfg, fetch=_tiny_fetch, geometry=None)
+    assert cfg.dimensions == 768                        # honoured, not capped
+    assert "upsamples" in caplog.text
+
+
+def test_render_preset_caps_fetch_to_native_despite_allow_upsample(tmp_path):
+    # with a screen preset, the fetch stays native (avoids blocky server upsampling) —
+    # the preset does the smooth client-side upscale — even if allow_upsample is set
+    cfg = _thermal_cfg(tmp_path)
+    cfg.allow_upsample = True
+    cfg.preset, cfg.aspect, cfg.upscale = "1080p", "match", "lanczos"
+    render([Frame("2022-06", object(), 4)], cfg, fetch=_tiny_fetch, geometry=None)
+    assert cfg.dimensions == 11                         # capped to native, not 768
+
+
+def test_render_annotates_scene_count_when_present(tmp_path, monkeypatch):
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    labels = []
+    monkeypatch.setattr(r, "annotate", lambda rgb, label: (labels.append(label) or rgb))
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
+
+    render([Frame("2022-06", object(), 7)], cfg, fetch=fake_fetch, geometry=None)
+    assert labels == ["2022-06  n=7"]                  # scene count shown on the frame
+
+
+def test_render_composite_passes_rgb_through_without_colorbar(tmp_path):
+    # rgb/cir fetch returns an H×W×3 colour array; render must NOT colorize it,
+    # and must not draw a palette colorbar (composites have no palette).
+    cfg = _cfg(tmp_path, name="rgbtest")
+    cfg.index = "rgb"
+    cfg.palette = []                                   # composite: no palette
+
+    def fake_fetch(image, cfg, geometry=None):
+        rgb = np.full((90, 140, 3), 123, dtype=float)
+        return rgb, np.ones((90, 140), dtype=bool)
+
+    paths = render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+    png = next(p for p in paths if p.suffix == ".png")
+    arr = np.asarray(Image.open(png))
+    # a central pixel (clear of the top info bar, bottom label bar and scale bar)
+    # keeps the exact composite value — proof it was passed through, not palettized
+    assert tuple(arr[45, 70]) == (123, 123, 123)
+    assert any(p.suffix == ".gif" and p.exists() for p in paths)
+
+
 def test_render_pipeline_with_injected_fetch(tmp_path):
     cfg = _cfg(tmp_path)
     # fetch returns a tiny (ndvi_array, valid_mask) tuple per frame
@@ -158,6 +349,10 @@ def test_render_pipeline_with_injected_fetch(tmp_path):
     frames = [Frame("2022-01", object()), Frame("2022-02", object())]
     paths = render(frames, cfg, fetch=fake_fetch, geometry=None)
     assert any(p.suffix == ".gif" and p.exists() for p in paths)
+    # one downloadable PNG per frame, named {name}_{label}.png
+    pngs = [p for p in paths if p.suffix == ".png"]
+    assert [p.name for p in pngs] == ["anim_2022-01.png", "anim_2022-02.png"]
+    assert all(p.exists() and p.stat().st_size > 0 for p in pngs)
 
 
 def _cfg_ns():

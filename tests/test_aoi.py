@@ -79,6 +79,21 @@ def test_parse_shapefile(tmp_path):
     assert geom.spec[1]["type"] in ("Polygon", "MultiPolygon")
 
 
+def test_frame_bbox_from_region_buffers_and_bounds():
+    from gee_animation.aoi import frame_bbox_from_region
+    rec = {}
+    class FakeBounds:
+        def coordinates(self):
+            return types.SimpleNamespace(
+                getInfo=lambda: [[[0.0, 0.0], [2.0, 0.0], [2.0, 3.0], [0.0, 3.0], [0.0, 0.0]]])
+    class FakeGeom:
+        def buffer(self, m): rec["buffer"] = m; return self
+        def bounds(self): rec["bounds"] = True; return FakeBounds()
+    bbox = frame_bbox_from_region(FakeGeom(), 500)
+    assert rec["buffer"] == 500 and rec["bounds"] is True
+    assert bbox == [0.0, 0.0, 2.0, 3.0]
+
+
 def test_parse_requires_something():
     ee = _fake_ee()
     with pytest.raises(ValueError, match="aoi"):

@@ -1,7 +1,47 @@
-"""Pure NDVI + colour-ramp helpers (no Earth Engine dependency)."""
+"""Pure NDVI + colour-ramp + thermal-sharpening helpers (no Earth Engine)."""
 from __future__ import annotations
 
 import numpy as np
+
+
+def _block_mean(arr: np.ndarray, factor: int) -> np.ndarray:
+    """Mean over non-overlapping factor×factor blocks -> the coarse grid."""
+    h, w = arr.shape
+    hc, wc = h // factor, w // factor
+    return arr[:hc * factor, :wc * factor].reshape(hc, factor, wc, factor).mean(axis=(1, 3))
+
+
+def _linfit(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+    """Least-squares (slope, offset) for y = a·x + b over finite pairs."""
+    m = np.isfinite(x) & np.isfinite(y)
+    x, y = x[m], y[m]
+    if len(x) < 2 or np.ptp(x) == 0:          # no usable gradient -> flat fit
+        return 0.0, (float(y.mean()) if len(y) else 0.0)
+    a, b = np.polyfit(x, y, 1)
+    return float(a), float(b)
+
+
+def distrad_sharpen(lst_coarse: np.ndarray, predictor_fine: np.ndarray,
+                    factor: int) -> np.ndarray:
+    """Thermal sharpening (TsHARP / DisTrad; Kustas 2003, Agam 2007).
+
+    Fit ``LST = a·predictor + b`` at the coarse scale (per scene), apply it at the
+    fine predictor scale, then add the coarse residual back (nearest / piecewise
+    constant) so the sharpened field **aggregates back to ``lst_coarse`` exactly** —
+    a temperature, not just a texture. This residual correction is the step the old
+    hand-tuned slope lacked.
+
+    ``lst_coarse`` is (H, W); ``predictor_fine`` is (H·factor, W·factor); returns the
+    fine-grid sharpened LST.
+    """
+    lst_coarse = np.asarray(lst_coarse, dtype=float)
+    predictor_fine = np.asarray(predictor_fine, dtype=float)
+    pred_coarse = _block_mean(predictor_fine, factor)
+    a, b = _linfit(pred_coarse.ravel(), lst_coarse.ravel())
+    residual_coarse = lst_coarse - (a * pred_coarse + b)
+    residual_fine = np.repeat(np.repeat(residual_coarse, factor, 0), factor, 1)
+    fh, fw = residual_fine.shape
+    return a * predictor_fine[:fh, :fw] + b + residual_fine
 
 
 def ndvi(nir: np.ndarray, red: np.ndarray) -> np.ndarray:

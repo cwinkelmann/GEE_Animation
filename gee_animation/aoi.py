@@ -46,3 +46,11 @@ def parse(aoi_cfg: dict, ee_module=ee):
     if aoi_cfg.get("bbox"):
         return ee_module.Geometry.Rectangle(list(aoi_cfg["bbox"]))
     raise ValueError("aoi must define 'bbox', 'geojson', or 'shapefile'")
+
+
+def frame_bbox_from_region(region_geom, buffer_m, ee_module=ee):
+    """[minLon, minLat, maxLon, maxLat] of `region_geom` buffered by `buffer_m` metres."""
+    ring = region_geom.buffer(buffer_m).bounds().coordinates().getInfo()[0]
+    xs = [pt[0] for pt in ring]
+    ys = [pt[1] for pt in ring]
+    return [min(xs), min(ys), max(xs), max(ys)]
