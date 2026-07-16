@@ -7,9 +7,12 @@ _REFL_INDICES = frozenset({"sentinel2", "landsat", "modis"})
 
 
 def test_registry_contents():
-    assert set(P.SENSORS) == {"sentinel2", "landsat", "modis"}
+    assert set(P.SENSORS) == {"sentinel2", "landsat", "modis", "modis_lst"}
     assert set(P.INDICES) == {"ndvi", "lst", "lst_smw", "evi", "ndwi", "ndmi",
-                              "rgb", "cir", "lst_sharp"}
+                              "rgb", "cir", "lst_sharp", "lst_modis"}
+    assert P.INDICES["lst_modis"].sensors == frozenset({"modis_lst"})   # MODIS-only LST
+    assert P.SENSORS["modis_lst"].scene_cloud_property is None          # no per-scene cloud
+    assert "lst_modis" in P.THERMAL_INDICES
     assert P.INDICES["lst_smw"].sensors == frozenset({"landsat"})   # Ermida 2020 SMW LST
     assert P.INDICES["rgb"].composite and P.INDICES["cir"].composite
     assert P.INDICES["ndvi"].formula == "(NIR - Red) / (NIR + Red)"   # overlay metadata
@@ -32,6 +35,7 @@ def test_native_scale_m_per_product():
     assert P.native_scale_m("sentinel2", "ndvi") == 10
     assert P.native_scale_m("sentinel2", "ndmi") == 20     # 20 m SWIR band
     assert P.native_scale_m("modis", "ndvi") == 500
+    assert P.native_scale_m("modis_lst", "lst_modis") == 1000   # MOD11A1 1 km thermal
 
 
 def test_get_product_ok():
@@ -136,6 +140,61 @@ def test_modis_reflectance_maps_bands_and_scales():
         "sur_refl_b06", "sur_refl_b07")
     assert rec["multiply"] == 0.0001
     assert "add" not in rec   # MOD09 scale is purely multiplicative
+
+
+def test_get_product_modis_lst():
+    sensor, index = P.get_product("modis_lst", "lst_modis")
+    assert sensor.name == "modis_lst" and index.name == "lst_modis"
+
+
+def test_lst_modis_kelvin_to_celsius_and_keeps_time():
+    rec = {}
+    class FakeResult:
+        def rename(self, n): rec["rename"] = n; return self
+        def set(self, k, v): rec["set"] = (k, v); return "lst_band"
+    class FakeBand:
+        def multiply(self, v): rec["multiply"] = v; return self
+        def subtract(self, v): rec["subtract"] = v; return FakeResult()
+    class FakeImg:
+        def select(self, b): rec["select"] = b; return FakeBand()
+        def get(self, k): rec["get"] = k; return "TS"
+    out = P.INDICES["lst_modis"].compute(None, FakeImg(), ee_module=None)
+    assert rec["select"] == "LST_Day_1km"
+    assert rec["multiply"] == 0.02 and rec["subtract"] == 273.15   # scale then K->C
+    assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
+    assert out == "lst_band"
+
+
+def test_modis_lst_mask_clouds_keeps_good_quality_qc():
+    rec = {}
+    class FakeQC:
+        def bitwiseAnd(self, m): rec["and"] = m; return self
+        def lte(self, v): rec["lte"] = v; return "GOODMASK"
+    class FakeImg:
+        def select(self, b): rec["select"] = b; return FakeQC()
+        def updateMask(self, m): rec["mask"] = m; return "masked"
+    out = P.SENSORS["modis_lst"].mask_clouds(FakeImg())
+    assert rec["select"] == "QC_Day" and rec["and"] == 3 and rec["lte"] == 1
+    assert out == "masked"
+
+
+def test_modis_lst_cloud_band_flags_missing_lst():
+    rec = {}
+    class FakeMaskChain:
+        def Not(self): rec["not"] = True; return self
+        def rename(self, n): rec["rename"] = n; return "cloud"
+    class FakeBand:
+        def mask(self): rec["mask"] = True; return FakeMaskChain()
+    class FakeImg:
+        def select(self, b): rec["select"] = b; return FakeBand()
+    out = P.SENSORS["modis_lst"].cloud_band(FakeImg())
+    assert rec["select"] == "LST_Day_1km" and rec["mask"] and rec["not"]
+    assert rec["rename"] == "cloud" and out == "cloud"
+
+
+def test_modis_lst_has_no_reflectance():
+    with pytest.raises(NotImplementedError, match="thermal"):
+        P.SENSORS["modis_lst"].reflectance("img")
 
 
 def test_modis_mask_and_cloud_band_use_state_bits():

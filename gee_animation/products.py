@@ -101,6 +101,37 @@ def _modis_reflectance(image, ee_module=ee):
     return image.select(list(_MODIS_ALIASES[0]), list(_MODIS_ALIASES[1])).multiply(0.0001)
 
 
+# --- MODIS LST (MOD11A1 Terra daily, 1 km) ----------------------------------
+# A separate data product from MOD09 reflectance (different bands + QA), so it needs
+# its own sensor entry. Daily revisit fills the cloud-locked months Landsat's 16-day
+# repeat misses — at the cost of a coarse 1 km native resolution.
+_MOD11_TERRA = "MODIS/061/MOD11A1"
+
+
+def _modis_lst_mask_clouds(image, ee_module=ee):
+    # QC_Day mandatory-QA bits 0-1: 0 good, 1 produced/other-quality, 2-3 not produced.
+    # LST is only retrieved under clear sky, so the band is already masked over cloud;
+    # this additionally drops the "not produced" pixels.
+    good = image.select("QC_Day").bitwiseAnd(3).lte(1)
+    return image.updateMask(good)
+
+
+def _modis_lst_cloud_band(image, ee_module=ee):
+    # No LST retrieval == cloud/no-data: 1 where LST_Day_1km is masked.
+    return image.select("LST_Day_1km").mask().Not().rename("cloud")
+
+
+def _no_reflectance(image, ee_module=ee):
+    raise NotImplementedError("modis_lst is a thermal sensor; it has no reflectance bands")
+
+
+def _lst_modis(sensor, image, ee_module=ee):
+    # MOD11 LST_Day_1km: uint16, scale 0.02, in kelvin -> degrees Celsius.
+    return (image.select("LST_Day_1km").multiply(0.02).subtract(273.15)
+            .rename(INDEX_BAND)
+            .set("system:time_start", image.get("system:time_start")))
+
+
 # --- Index computations -----------------------------------------------------
 # NOTE: deriving a new image (select/band-math/rename) drops the source metadata,
 # so `system:time_start` must be copied forward or monthly compositing's
@@ -234,17 +265,19 @@ SENSORS = {
                       _landsat_mask_clouds, _landsat_cloud_band, _landsat_reflectance),
     "modis": Sensor("modis", _merged("MODIS/061/MOD09A1"), None,
                     _modis_mask_clouds, _modis_cloud_band, _modis_reflectance),
+    "modis_lst": Sensor("modis_lst", _merged(_MOD11_TERRA), None,
+                        _modis_lst_mask_clouds, _modis_lst_cloud_band, _no_reflectance),
 }
 
 # Reflectance-based indices work on any sensor that exposes the band aliases.
 _REFL = frozenset({"sentinel2", "landsat", "modis"})
 
-# Thermal (LST) indices — Landsat-only; drive the L8/L9 mission default and the
-# 100 m native scale.
-THERMAL_INDICES = frozenset({"lst", "lst_smw", "lst_sharp"})
+# Thermal (LST) indices. The Landsat ones drive the L8/L9 mission default and the
+# 100 m native scale; lst_modis is a MODIS product (its own sensor + 1 km native).
+THERMAL_INDICES = frozenset({"lst", "lst_smw", "lst_sharp", "lst_modis"})
 
 # Coarsest-relevant native ground sampling (metres) per sensor, with overrides.
-_SENSOR_NATIVE_M = {"sentinel2": 10, "landsat": 30, "modis": 500}
+_SENSOR_NATIVE_M = {"sentinel2": 10, "landsat": 30, "modis": 500, "modis_lst": 1000}
 _S2_20M_INDICES = frozenset({"ndmi"})   # uses the 20 m SWIR band
 
 
@@ -302,6 +335,13 @@ INDICES["lst_smw"] = Index("lst_smw", frozenset({"landsat"}),
                            build_collection=smw_lst.landsat_collection,
                            bands="TOA Tb, NIR, Red, Green, QA",
                            formula="A*Tb/e + B/e + C  (Ermida 2020 SMW)")
+
+# MODIS LST (MOD11A1 Terra daily, 1 km) — coarse but ~daily, so it fills the
+# cloud-locked months Landsat's 16-day revisit misses.
+INDICES["lst_modis"] = Index("lst_modis", frozenset({"modis_lst"}),
+                             (0.0, 40.0, _LST_PALETTE), _lst_modis,
+                             bands="MOD11A1 LST_Day_1km (1 km, daily)",
+                             formula="LST_Day_1km * 0.02 - 273.15 [C]")
 
 
 def get_product(sensor: str, index: str):
