@@ -152,3 +152,77 @@ def test_build_app_constructs():
     pytest.importorskip("gradio")
     app = gui.build_app()
     assert app is not None
+
+
+def _make_run(d, name, months, mp4=True, gif=True):
+    """Create a rendered-run layout: <name>.mp4/.gif + <name>_<month>.png frames."""
+    d = Path(d)
+    d.mkdir(parents=True, exist_ok=True)
+    if mp4:
+        (d / f"{name}.mp4").write_bytes(b"v")
+    if gif:
+        (d / f"{name}.gif").write_bytes(b"g")
+    for m in months:
+        (d / f"{name}_{m}.png").write_bytes(b"x")
+
+
+def test_list_previous_runs_finds_flat_and_nested(tmp_path):
+    _make_run(tmp_path, "wne_lst", ["2022-01", "2022-02"])          # flat: out/wne_lst.mp4
+    _make_run(tmp_path / "run10yr", "big", ["2015-01"])             # nested subdir
+    runs = gui.list_previous_runs(str(tmp_path))
+    labels = [l for l, _ in runs]
+    values = [v for _, v in runs]
+    assert any(l.startswith("wne_lst ") and "2 frames" in l for l in labels)
+    assert any(l.startswith("run10yr/big") and "(1 frame)" in l for l in labels)
+    assert any(v.endswith("wne_lst.mp4") for v in values)          # value = media path
+    assert any(v.endswith("run10yr/big.mp4") for v in values)
+
+
+def test_list_previous_runs_does_not_grab_sibling_prefix(tmp_path):
+    _make_run(tmp_path, "wne_lst", ["2022-01"])                    # 1 frame
+    _make_run(tmp_path, "wne_lst_smw", ["2022-01", "2022-02"])     # shares the folder
+    labels = [l for l, _ in gui.list_previous_runs(str(tmp_path))]
+    assert any(l.startswith("wne_lst ") and "(1 frame)" in l for l in labels)
+    assert any(l.startswith("wne_lst_smw ") and "(2 frames)" in l for l in labels)
+
+
+def test_list_previous_runs_missing_base_returns_empty(tmp_path):
+    assert gui.list_previous_runs(str(tmp_path / "nope")) == []
+
+
+def test_load_previous_run_returns_media_frames_and_zip(tmp_path):
+    d = tmp_path / "run"
+    _make_run(d, "a", ["2022-01", "2022-02"])
+    mp4, gif, frames, zip_path, status = gui.load_previous_run(str(d / "a.mp4"))
+    assert mp4.endswith("a.mp4") and gif.endswith("a.gif")
+    assert len(frames) == 2 and all(f.endswith(".png") for f in frames)
+    assert zip_path and Path(zip_path).exists()
+    with zipfile.ZipFile(zip_path) as zf:
+        assert len(zf.namelist()) == 2
+    assert "Loaded **a**" in status and "2 frame" in status and "2022-01 → 2022-02" in status
+
+
+def test_load_previous_run_enriches_status_from_metadata(tmp_path):
+    from gee_animation import metadata
+    d = tmp_path / "run"
+    _make_run(d, "a", ["2022-01", "2022-02"])
+    metadata.write_db(d / "metadata.db", {"name": "a", "sensor": "landsat", "index": "lst"},
+                      [("2022-01", 3, 0.1, 20.0), ("2022-02", 4, 0.0, 24.0)])
+    *_, status = gui.load_previous_run(str(d / "a.mp4"))
+    assert "2 months 2022-01→2022-02 in metadata" in status
+    assert "mean value 22.0" in status and "range 20.0…24.0" in status   # over aoi_mean
+
+
+def test_load_previous_run_without_metadata_and_gif_only(tmp_path):
+    d = tmp_path / "run"
+    _make_run(d, "a", ["2022-07"], mp4=False)                      # gif only, no metadata.db
+    val = [v for l, v in gui.list_previous_runs(str(tmp_path))][0]
+    assert val.endswith("a.gif")
+    mp4, gif, frames, _, status = gui.load_previous_run(val)
+    assert mp4 is None and gif.endswith("a.gif")
+    assert "metadata" not in status and "Loaded **a**" in status
+
+
+def test_load_previous_run_requires_selection():
+    with pytest.raises(ValueError, match="select a previous run"):
+        gui.load_previous_run(None)

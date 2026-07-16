@@ -7,6 +7,8 @@ tests) load without the optional `gui` extra.
 from __future__ import annotations
 
 import os
+import re
+import sqlite3
 import tempfile
 import types
 import zipfile
@@ -50,6 +52,98 @@ _SCALE = {"modis": 500}
 # the container), else the shipped WNE AOI, else None (docs/ isn't in the image).
 _WNE_AOI = Path(__file__).resolve().parent.parent / "docs" / "aoi" / "wne" / "wne.geojson"
 DEFAULT_AOI = os.environ.get("GEE_DEFAULT_AOI") or (str(_WNE_AOI) if _WNE_AOI.exists() else None)
+
+# Where previously-rendered runs live (overridable for a mounted output volume).
+OUTPUT_DIR = os.environ.get("GEE_OUTPUT_DIR", "out")
+_MONTH_RE = re.compile(r"\d{4}-\d{2}")   # a frame stem is "<name>_YYYY-MM"
+
+
+def _run_frames(run_dir: Path, name: str) -> list:
+    """Per-month frame PNGs for animation `name` in `run_dir`, sorted by month.
+
+    A frame is exactly ``<name>_<YYYY-MM>.png`` — the strict suffix match keeps a
+    run named ``wne_lst`` from grabbing ``wne_lst_smw``'s frames in a shared folder.
+    """
+    frames = []
+    for p in run_dir.glob(f"{name}_*.png"):
+        if _MONTH_RE.fullmatch(p.stem[len(name) + 1:]):
+            frames.append(p)
+    return sorted(frames)
+
+
+def list_previous_runs(base_dir=None) -> list:
+    """``[(label, media_path)]`` for every rendered animation found under `base_dir`.
+
+    A run is any ``.mp4``/``.gif`` (mp4 preferred) below the base directory, keyed by
+    its folder + basename so both the flat layout (``out/wne_lst.mp4``) and per-run
+    subdirs (``out/wne_lst_smw_10yr/…mp4``) are discovered. Each label carries the run
+    path relative to the base plus its frame count; the value is the media file path,
+    which ``load_previous_run`` reads back. Returns ``[]`` if the base is absent.
+    """
+    base = Path(base_dir or OUTPUT_DIR)
+    if not base.exists():
+        return []
+    media = {}   # (dir, name) -> media Path, mp4 overriding gif
+    for p in base.rglob("*.gif"):
+        media[(p.parent, p.stem)] = p
+    for p in base.rglob("*.mp4"):
+        media[(p.parent, p.stem)] = p
+    runs = []
+    for (d, name), m in sorted(media.items(), key=lambda kv: str(kv[1])):
+        n = len(_run_frames(d, name))
+        rel = (d / name).relative_to(base)
+        runs.append((f"{rel}  ({n} frame{'' if n == 1 else 's'})", str(m)))
+    return runs
+
+
+def _metadata_summary(db_path: Path, name: str):
+    """One-line summary of a run's metadata.db rows (frames, span, value range), or None."""
+    try:
+        con = sqlite3.connect(str(db_path))
+        try:
+            row = con.execute(
+                "SELECT COUNT(*), MIN(month), MAX(month), AVG(aoi_mean), "
+                "MIN(aoi_mean), MAX(aoi_mean), AVG(aoi_cloud_fraction) "
+                "FROM frame_clouds WHERE name=?", (name,)).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    if not row or not row[0]:
+        return None
+    n, m0, m1, tavg, tmin, tmax, cloud = row
+    bits = [f"{n} months {m0}→{m1} in metadata"]
+    if tavg is not None:
+        bits.append(f"mean value {tavg:.1f} (range {tmin:.1f}…{tmax:.1f})")
+    if cloud is not None:
+        bits.append(f"avg AOI cloud {cloud * 100:.0f}%")
+    return "; ".join(bits)
+
+
+def load_previous_run(media_path):
+    """Reload a rendered run for display — ``(mp4, gif, frame_pngs, frames_zip, status)``.
+
+    Reads the media file, its sibling per-month frames, zips them, and derives a status
+    line (enriched from ``metadata.db`` when present). No Earth Engine, no network — it
+    mirrors ``run_animation``'s output shape so it drives the same UI components.
+    """
+    if not media_path:
+        raise ValueError("select a previous run to load")
+    media = Path(media_path)
+    run_dir, name = media.parent, media.stem
+    mp4 = run_dir / f"{name}.mp4"
+    gif = run_dir / f"{name}.gif"
+    frames = _run_frames(run_dir, name)
+    frame_pngs = [str(p) for p in frames]
+    frames_zip = _zip_frames(frame_pngs, run_dir, name) if frame_pngs else None
+    status = [f"Loaded **{name}** — {len(frames)} frame(s)"]
+    if frames:
+        status.append(f"({frames[0].stem[len(name) + 1:]} → {frames[-1].stem[len(name) + 1:]})")
+    summary = _metadata_summary(run_dir / "metadata.db", name)
+    if summary:
+        status.append(f"· {summary}")
+    return (str(mp4) if mp4.exists() else None, str(gif) if gif.exists() else None,
+            frame_pngs, frames_zip, " ".join(status) + ".")
 
 
 def indices_for(sensor: str) -> list:
@@ -165,6 +259,13 @@ def build_app():
             "cloud-filtered region; the animation frame is its bounding box expanded "
             "by the buffer below."
         )
+        with gr.Accordion("📂 Load a previous animation", open=False):
+            with gr.Row():
+                prev = gr.Dropdown(list_previous_runs(), label="Previously rendered runs "
+                                   f"(from {OUTPUT_DIR}/)", scale=4)
+                refresh = gr.Button("🔄 Refresh", scale=1)
+                load = gr.Button("Load", variant="secondary", scale=1)
+            refresh.click(lambda: gr.update(choices=list_previous_runs()), None, prev)
         with gr.Row():
             with gr.Column():
                 aoi_file = gr.File(
@@ -226,6 +327,15 @@ def build_app():
         go.click(_go,
                  [aoi_file, buffer_m, sensor, index, start, end, region_cloud, fps, dims, project],
                  [video, gif, gallery, frames_zip, status, chart])
+
+        # Load a previously-rendered run into the same output widgets (no Earth Engine).
+        def _load(sel):
+            try:
+                mp4, gif_path, frame_pngs, zip_path, msg = load_previous_run(sel)
+                return mp4, gif_path, frame_pngs, zip_path, msg, None
+            except Exception as exc:   # surface a friendly message in the UI
+                return None, None, None, None, f"**Error:** {exc}", None
+        load.click(_load, [prev], [video, gif, gallery, frames_zip, status, chart])
     return app
 
 
