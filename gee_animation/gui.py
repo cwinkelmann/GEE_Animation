@@ -208,7 +208,7 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
         max_cloud_percent=float(max_cloud_percent),
         region_max_cloud_percent=float(region_max_cloud_percent),
         viz_min=viz_min, viz_max=viz_max, palette=palette,
-        fps=int(fps), scale=_SCALE.get(sensor, 30), dimensions=int(dimensions),
+        fps=float(fps), scale=_SCALE.get(sensor, 30), dimensions=int(dimensions),
         out_dir=str(out_dir), draw_region=True,
     )
 

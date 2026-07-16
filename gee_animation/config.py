@@ -32,7 +32,7 @@ class RunConfig:
     viz_min: float
     viz_max: float
     palette: list[str]
-    fps: int
+    fps: float          # frames/sec; fractional allowed (e.g. 0.5 = 2 s per frame)
     scale: float
     dimensions: int
     # Render CRS (from render.crs). None => EPSG:4326 (plate carrée). "auto" => UTM
@@ -101,7 +101,7 @@ class RunConfig:
                 # explicit [] is preserved so validate() still rejects it); the
                 # composite default is None -> [].
                 palette=list(_p) if (_p := viz.get("palette", d_pal)) is not None else [],
-                fps=int(render["fps"]),
+                fps=float(render["fps"]),
                 scale=float(render["scale"]),
                 dimensions=int(render["dimensions"]),
                 crs=render.get("crs"),

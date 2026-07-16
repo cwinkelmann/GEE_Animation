@@ -208,24 +208,28 @@ def _region_rings(aoi_cfg: dict) -> list:
 
 
 def draw_region(rgb: np.ndarray, bounds: tuple, rings: list,
-                color=REGION_OUTLINE_RGB, width: int = 2) -> np.ndarray:
+                color=REGION_OUTLINE_RGB, width: int = 2, casing=(0, 0, 0)) -> np.ndarray:
     """Draw region polygon outlines onto an RGB frame.
 
     `bounds` is the frame extent (minLon, minLat, maxLon, maxLat); the EE thumbnail
     is rendered in linear EPSG:4326 over this extent, so lon/lat map to pixels
-    linearly (top row = maxLat).
+    linearly (top row = maxLat). Each ring is drawn as a dark `casing` under the bright
+    `color` core, so the outline stays visible on any background — including the amber
+    core over hot (yellow/red) LST pixels, where it would otherwise vanish.
     """
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img)
     h, w = rgb.shape[:2]
     width = max(width, round(h / 430))   # scale the outline for high-res output
+    cw = width + 2 * max(1, width // 2 + 1)   # dark casing is wider than the core
     minx, miny, maxx, maxy = bounds
     dx = (maxx - minx) or 1.0
     dy = (maxy - miny) or 1.0
     for ring in rings:
         pts = [((lon - minx) / dx * w, (maxy - lat) / dy * h) for lon, lat in ring]
         if len(pts) >= 2:
-            draw.line(pts, fill=color, width=width)
+            draw.line(pts, fill=casing, width=cw)     # dark halo (visible on light areas)
+            draw.line(pts, fill=color, width=width)   # bright core (visible on dark areas)
     return np.asarray(img)
 
 

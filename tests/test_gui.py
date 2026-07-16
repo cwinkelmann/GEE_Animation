@@ -91,7 +91,7 @@ def test_run_animation_builds_config_and_threads_geometry(tmp_path):
     assert cfg.frame_aoi == {"bbox": [0.0, 0.0, 2.0, 2.0]}     # from frame_bbox(region, buffer)
     assert cfg.region_aoi == {"geojson": str(aoi)}
     assert captured["buffer"] == 1500.0
-    assert cfg.viz_min == -0.2 and cfg.viz_max == 0.9          # NDVI default viz
+    assert cfg.viz_min == -1.0 and cfg.viz_max == 1.0          # NDVI default viz (definitional -1..1)
     assert cfg.scale == 30 and cfg.region_max_cloud_percent == 15
     assert mp4.endswith("o.mp4") and gif.endswith("o.gif")
     # per-frame PNGs are offered for download, bundled into a single zip

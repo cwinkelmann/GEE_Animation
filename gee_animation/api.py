@@ -91,7 +91,7 @@ def _to_region_aoi(region) -> dict:
 
 
 def animate(region, *, sensor="landsat", index="lst", start, end,
-            buffer_m=1000.0, preset="1080p", aspect="match", fps=6,
+            buffer_m=1000.0, preset="1080p", aspect="match", fps=2,
             region_max_cloud_percent=60.0, max_cloud_percent=80.0,
             out_dir="out", project="hnee-331218", name=None, write_metadata=True,
             deps=DEFAULT_DEPS) -> Animation:
@@ -119,7 +119,7 @@ def animate(region, *, sensor="landsat", index="lst", start, end,
         max_cloud_percent=float(max_cloud_percent),
         region_max_cloud_percent=float(region_max_cloud_percent),
         viz_min=viz_min, viz_max=viz_max, palette=list(palette) if palette else [],
-        fps=int(fps), scale=_SCALE.get(sensor, 30), dimensions=768,
+        fps=float(fps), scale=_SCALE.get(sensor, 30), dimensions=768,
         preset=preset, aspect=aspect, upscale="lanczos", out_dir=out_dir,
         draw_region=True, metadata=bool(write_metadata))
 

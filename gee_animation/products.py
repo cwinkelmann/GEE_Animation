@@ -296,29 +296,30 @@ def native_scale_m(sensor: str, index: str) -> int:
     return _SENSOR_NATIVE_M.get(sensor, 30)
 
 INDICES = {
+    # Normalized-difference indices span their definitional -1..1 range.
     "ndvi": Index("ndvi", _REFL,
-                  (-0.2, 0.9, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _ndvi,
+                  (-1.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _ndvi,
                   bands="NIR, Red", formula="(NIR - Red) / (NIR + Red)"),
     "lst": Index("lst", frozenset({"landsat"}),
-                 (0.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
+                 (-10.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
                  _lst, bands="Thermal (ST_B6/ST_B10)",
                  formula="ST_B * 0.00341802 + 149.0 - 273.15 [C]"),
     "evi": Index("evi", _REFL,
-                 (0.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _evi,
+                 (-1.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _evi,
                  bands="NIR, Red, Blue",
                  formula="2.5*(NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1)"),
     "ndwi": Index("ndwi", _REFL,
-                  (-0.3, 0.6, ["#a1622f", "#f6e8c3", "#2166ac"]), _ndwi,
+                  (-1.0, 1.0, ["#a1622f", "#f6e8c3", "#2166ac"]), _ndwi,
                   bands="Green, NIR", formula="(Green - NIR) / (Green + NIR)"),
     "ndmi": Index("ndmi", _REFL,
-                  (-0.5, 0.8, ["#8c510a", "#f6e8c3", "#01665e"]), _ndmi,
+                  (-1.0, 1.0, ["#8c510a", "#f6e8c3", "#01665e"]), _ndmi,
                   bands="NIR, SWIR1", formula="(NIR - SWIR1) / (NIR + SWIR1)"),
     "rgb": Index("rgb", _REFL, (0.0, 0.3, None), _rgb,
                  bands="Red, Green, Blue", composite=True),
     "cir": Index("cir", _REFL, (0.0, 0.3, None), _cir,
                  bands="R<-NIR, G<-Red, B<-Green", composite=True),
     "lst_sharp": Index("lst_sharp", frozenset({"landsat"}),
-                       (0.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
+                       (-10.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
                        _lst_sharp, bands="Thermal(100m) + NIRv(30m)",
                        formula="TsHARP: fit LST~NIRv @100m, apply @30m, +coarse residual"),
 }
@@ -331,7 +332,7 @@ _LST_PALETTE = ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"
 from . import smw_lst  # noqa: E402  (deferred to break the import cycle)
 
 INDICES["lst_smw"] = Index("lst_smw", frozenset({"landsat"}),
-                           (0.0, 40.0, _LST_PALETTE), smw_lst.compute,
+                           (-10.0, 40.0, _LST_PALETTE), smw_lst.compute,
                            build_collection=smw_lst.landsat_collection,
                            bands="TOA Tb, NIR, Red, Green, QA",
                            formula="A*Tb/e + B/e + C  (Ermida 2020 SMW)")
@@ -339,7 +340,7 @@ INDICES["lst_smw"] = Index("lst_smw", frozenset({"landsat"}),
 # MODIS LST (MOD11A1 Terra daily, 1 km) — coarse but ~daily, so it fills the
 # cloud-locked months Landsat's 16-day revisit misses.
 INDICES["lst_modis"] = Index("lst_modis", frozenset({"modis_lst"}),
-                             (0.0, 40.0, _LST_PALETTE), _lst_modis,
+                             (-10.0, 40.0, _LST_PALETTE), _lst_modis,
                              bands="MOD11A1 LST_Day_1km (1 km, daily)",
                              formula="LST_Day_1km * 0.02 - 273.15 [C]")
 
