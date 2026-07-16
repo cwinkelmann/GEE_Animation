@@ -19,6 +19,11 @@ def _fake_deps(tmp_path, captured, frames=None):
         (tmp_path / f"{cfg.name}.mp4").write_bytes(b"\x00\x00mp4")
         return [tmp_path / f"{cfg.name}.mp4", tmp_path / f"{cfg.name}.gif", *pngs]
 
+    def render_chart(series, name, index, out_dir):
+        p = tmp_path / f"{name}_chart.png"
+        p.write_bytes(b"chart")
+        return str(p)
+
     return types.SimpleNamespace(
         parse=lambda a: ("geom", tuple(sorted(a))),
         frame_bbox=lambda region, m: (captured.__setitem__("buffer", m) or [0.0, 0.0, 2.0, 2.0]),
@@ -27,6 +32,8 @@ def _fake_deps(tmp_path, captured, frames=None):
         anomaly=lambda frames_, cfg, f, r, build: frames_,
         metadata=lambda frames_, cfg, region: str(tmp_path / "metadata.db"),
         render=render,
+        timeseries=lambda frames_, region, frame, scale: [(f.label, 0.7, 0.4) for f in frames_],
+        render_chart=render_chart,
     )
 
 
@@ -42,6 +49,31 @@ def test_animate_sets_preset_and_returns_paths(tmp_path):
     assert anim.mp4.endswith("landsat_lst.mp4") and len(anim.frames) == 2
     assert anim.metadata_db.endswith("metadata.db")
     assert "2 frames" in anim.status and "1080p" in anim.status
+    # the object now carries the inside/outside series + a chart path
+    assert anim.series == [("2023-06", 0.7, 0.4), ("2023-07", 0.7, 0.4)]
+    assert anim.chart.endswith("landsat_lst_chart.png")
+    assert (tmp_path / "landsat_lst_series.csv").exists()   # series persisted alongside
+
+
+def test_animate_composite_skips_chart(tmp_path):
+    captured = {}
+    anim = api.animate([0, 0, 1, 1], sensor="sentinel2", index="rgb",
+                       start="2023-01-01", end="2023-06-01", out_dir=str(tmp_path),
+                       deps=_fake_deps(tmp_path, captured))
+    # rgb/cir have no INDEX band -> no series/chart
+    assert anim.series == [] and anim.chart is None
+
+
+def test_animation_metadata_reads_db(tmp_path):
+    from gee_animation import metadata
+    db = tmp_path / "metadata.db"
+    metadata.write_db(db, {"name": "landsat_lst", "sensor": "landsat", "index": "lst"},
+                      [("2023-06", 3, 0.1, 22.0), ("2023-07", 4, 0.0, 25.0)])
+    anim = api.Animation(name="landsat_lst", mp4=None, gif=None, frames=[],
+                         metadata_db=str(db), status="")
+    rows = anim.metadata()
+    assert [r["month"] for r in rows] == ["2023-06", "2023-07"]
+    assert rows[0]["aoi_mean"] == 22.0 and rows[1]["n_scenes"] == 4
 
 
 def test_animate_bbox_region_and_buffer(tmp_path):

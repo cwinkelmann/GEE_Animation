@@ -14,12 +14,50 @@ from __future__ import annotations
 
 import base64
 import types
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import anomaly, aoi, collection, compositing, metadata, render
+from . import anomaly, aoi, charts, collection, compositing, metadata, render
 from .config import RunConfig
 from .products import INDICES, get_product
+
+
+def _render_chart(series, name, index, out_dir) -> str | None:
+    """Render an inside-vs-outside-AOI line chart to ``<out_dir>/<name>_chart.png``.
+
+    Returns the path, or ``None`` if there's nothing to plot or matplotlib is absent
+    (matplotlib is a lazy import — the ``series`` data is attached to the Animation
+    regardless, so a missing chart never loses information).
+    """
+    if not any(i is not None or o is not None for _, i, o in series):
+        return None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        return None
+    months = [m for m, _, _ in series]
+    nan = float("nan")
+    inside = [nan if i is None else i for _, i, _ in series]
+    outside = [nan if o is None else o for _, _, o in series]
+    x = list(range(len(months)))
+    fig, ax = plt.subplots(figsize=(9, 3.2), dpi=130)
+    ax.plot(x, inside, "-o", ms=3, lw=1.5, color="#2a7a2a", label="inside AOI")
+    ax.plot(x, outside, "-s", ms=3, lw=1.5, color="#a1622f", label="outside AOI")
+    step = max(1, len(months) // 12)
+    ax.set_xticks(x[::step])
+    ax.set_xticklabels(months[::step], rotation=45, ha="right", fontsize=7)
+    ax.set_ylabel(index.upper())
+    ax.set_title(f"{index.upper()} — inside vs outside the AOI", fontsize=11)
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8, loc="best")
+    fig.tight_layout()
+    path = str(Path(out_dir) / f"{name}_chart.png")
+    fig.savefig(path)
+    plt.close(fig)
+    return path
+
 
 # Pipeline seams, injectable for network-free tests. NOTE: no `init` here — auth is a
 # separate, explicit step the caller runs once.
@@ -31,6 +69,8 @@ DEFAULT_DEPS = types.SimpleNamespace(
     anomaly=anomaly.apply,
     render=render.render,
     metadata=metadata.write_frame_metadata,
+    timeseries=charts.inside_outside_timeseries,
+    render_chart=_render_chart,
 )
 
 # Region-cloud / index scale used for the AOI cloud filter + metadata (per sensor GSD).
@@ -39,27 +79,57 @@ _SCALE = {"sentinel2": 10, "landsat": 30, "modis": 500, "modis_lst": 1000}
 
 @dataclass
 class Animation:
-    """Result of :func:`animate` — paths plus inline notebook display."""
+    """Result of :func:`animate`.
+
+    Carries the output paths (`mp4`, `gif`, `frames`, `metadata_db`), the inside-vs-
+    outside-AOI `series` and its rendered `chart` PNG, and retrieval helpers. Renders
+    inline in Colab/Jupyter (video + chart) via ``_repr_html_``.
+    """
     name: str
     mp4: str | None
     gif: str | None
     frames: list
     metadata_db: str | None
     status: str
+    series: list = field(default_factory=list)   # [(month, inside_mean, outside_mean)]
+    chart: str | None = None                       # path to the inside/outside chart PNG
+
+    def metadata(self) -> list:
+        """Per-frame metadata rows from `metadata_db` (month, n_scenes, cloud, mean).
+
+        Returns a list of dicts (empty if no metadata was written). Lets you pull the
+        numbers back out of the run later without re-querying Earth Engine.
+        """
+        if not (self.metadata_db and Path(self.metadata_db).exists()):
+            return []
+        import sqlite3
+        con = sqlite3.connect(self.metadata_db)
+        try:
+            cur = con.execute(
+                "SELECT month, n_scenes, aoi_cloud_fraction, aoi_clear_fraction, aoi_mean "
+                "FROM frame_clouds WHERE name=? ORDER BY month", (self.name,))
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        finally:
+            con.close()
+
+    def _b64(self, path):
+        return base64.b64encode(Path(path).read_bytes()).decode()
 
     def _repr_html_(self) -> str:
-        """Inline <video> with the MP4 base64-embedded so it plays in Colab/Jupyter."""
+        """Inline video + inside/outside chart, both base64-embedded (plays in Colab)."""
+        parts = [f'<p style="font:14px system-ui;margin:.2em 0">{self.status}</p>']
         if self.mp4 and Path(self.mp4).exists():
-            b64 = base64.b64encode(Path(self.mp4).read_bytes()).decode()
-            media = (f'<video controls autoplay loop muted playsinline '
-                     f'style="max-width:100%;border-radius:8px" '
-                     f'src="data:video/mp4;base64,{b64}"></video>')
+            parts.append(f'<video controls autoplay loop muted playsinline '
+                         f'style="max-width:100%;border-radius:8px" '
+                         f'src="data:video/mp4;base64,{self._b64(self.mp4)}"></video>')
         elif self.gif and Path(self.gif).exists():
-            b64 = base64.b64encode(Path(self.gif).read_bytes()).decode()
-            media = f'<img style="max-width:100%;border-radius:8px" src="data:image/gif;base64,{b64}">'
-        else:
-            media = ""
-        return f'<div><p style="font:14px system-ui;margin:.2em 0">{self.status}</p>{media}</div>'
+            parts.append(f'<img style="max-width:100%;border-radius:8px" '
+                         f'src="data:image/gif;base64,{self._b64(self.gif)}">')
+        if self.chart and Path(self.chart).exists():
+            parts.append(f'<img style="max-width:100%;margin-top:6px" '
+                         f'src="data:image/png;base64,{self._b64(self.chart)}">')
+        return "<div>" + "".join(parts) + "</div>"
 
 
 def _to_region_aoi(region) -> dict:
@@ -94,7 +164,7 @@ def animate(region, *, sensor="landsat", index="lst", start, end,
             buffer_m=1000.0, preset="1080p", aspect="match", fps=2,
             region_max_cloud_percent=60.0, max_cloud_percent=80.0,
             out_dir="out", project="hnee-331218", name=None, write_metadata=True,
-            deps=DEFAULT_DEPS) -> Animation:
+            chart=True, deps=DEFAULT_DEPS) -> Animation:
     """Build one animation in a single call. Authenticate first via ``auth.init``.
 
     `region` is a GeoJSON path/dict, a ``.shp`` path, or a ``[w, s, e, n]`` bbox. The
@@ -132,10 +202,21 @@ def animate(region, *, sensor="landsat", index="lst", start, end,
     db = deps.metadata(frames, cfg, region_geom) if write_metadata else None
     paths = deps.render(frames, cfg, geometry=frame_geom)
 
+    # Inside-vs-outside-AOI series + chart (single-band indices only; composites have
+    # no INDEX band to reduce). Attached to the Animation for later retrieval.
+    series, chart_path = [], None
+    if chart and not INDICES[index].composite:
+        series = deps.timeseries(frames, region_geom, frame_geom, cfg.scale)
+        chart_path = deps.render_chart(series, name, index, out_dir)
+        import csv
+        with open(Path(out_dir) / f"{name}_series.csv", "w", newline="") as f:
+            csv.writer(f).writerows([("month", "inside", "outside"), *series])
+
     mp4 = next((str(p) for p in paths if str(p).endswith(".mp4")), None)
     gif = next((str(p) for p in paths if str(p).endswith(".gif")), None)
     frame_pngs = [str(p) for p in paths if str(p).endswith(".png")]
     status = (f"{name}: {len(frames)} frames "
               f"({frames[0].label} → {frames[-1].label}) at {preset or 'native'}.")
     return Animation(name=name, mp4=mp4, gif=gif, frames=frame_pngs,
-                     metadata_db=str(db) if db else None, status=status)
+                     metadata_db=str(db) if db else None, status=status,
+                     series=series, chart=chart_path)
