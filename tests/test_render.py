@@ -229,13 +229,102 @@ def test_render_projects_overlay_and_resolves_crs_when_auto(tmp_path, monkeypatc
 def test_output_spec_match_and_aspect():
     from gee_animation.render import _output_spec
     assert _output_spec(types.SimpleNamespace(preset=None), (200, 100)) is None
-    # match: canvas takes the frame aspect, long edge = preset, imagery fills it
+    # match: canvas takes the frame aspect, long edge = preset. The imagery no longer
+    # fills the canvas — the two label margins are subtracted from the place box.
     cfg = types.SimpleNamespace(preset="1080p", aspect="match", upscale="lanczos")
-    assert _output_spec(cfg, (200, 100))[:4] == (1920, 960, 1920, 960)
+    assert _output_spec(cfg, (200, 100))[:4] == (1920, 960, 1598, 799)
     # 16:9 canvas with a wider (2.0) frame -> width-limited, letterboxed top/bottom
     cfg = types.SimpleNamespace(preset="4k", aspect="16:9", upscale="lanczos")
     cw, ch, pw, ph, _ = _output_spec(cfg, (200, 100))
-    assert (cw, ch, pw, ph) == (3840, 2160, 3840, 1920)   # 1920 < 2160 -> bars top/bottom
+    assert (cw, ch, pw, ph) == (3840, 2160, 3598, 1799)   # 1799+180+179 <= 2160
+
+
+def test_output_spec_accounts_for_margins():
+    # Trap: _output_spec sizes the canvas from the imagery aspect. If the label
+    # margins were padded on afterwards, an aspect: "16:9" request would yield
+    # something taller than 16:9 — they must come out of the place box instead.
+    from gee_animation.render import _output_spec, _margins
+    for aoi_wh in ((200, 100), (100, 200), (160, 90)):
+        cfg = types.SimpleNamespace(preset="1080p", aspect="16:9", upscale="lanczos")
+        cw, ch, pw, ph, _ = _output_spec(cfg, aoi_wh)
+        assert (cw, ch) == (1920, 1080)                    # canvas is exactly 16:9
+        assert ch / cw == 9 / 16
+        # imagery + both margins fits the canvas, and keeps the imagery aspect
+        assert ph + sum(_margins(ph)) <= ch
+        assert pw <= cw
+        assert abs(pw / ph - aoi_wh[0] / aoi_wh[1]) < 0.02
+
+
+def test_margins_match_the_bar_height_of_the_padded_frame():
+    # The margin must be exactly the bar height draw_info_bar/annotate derive from the
+    # PADDED height, or the bars leave a bare strip / creep back over the imagery.
+    from gee_animation.render import _margins
+    for imagery_h in (1, 8, 90, 119, 120, 131, 132, 200, 577, 799, 1080, 1799, 2160):
+        top_h, bottom_h = _margins(imagery_h)
+        bar_h = max(12, (imagery_h + top_h + bottom_h) // 12)
+        assert (top_h, bottom_h) == (bar_h + 1, bar_h), imagery_h
+
+
+def test_add_margins_keeps_imagery_unoccluded():
+    from gee_animation.render import add_margins
+    rgb = np.random.default_rng(0).integers(0, 255, (30, 40, 3), dtype=np.uint8)
+    out = add_margins(rgb, 7, 11)
+    assert out.shape == (30 + 7 + 11, 40, 3) and out.dtype == np.uint8
+    assert np.array_equal(out[7:7 + 30], rgb)      # imagery byte-identical, not covered
+    assert out[:7].sum() == 0 and out[-11:].sum() == 0   # margins are blank background
+    assert np.array_equal(add_margins(rgb, 0, 0), rgb)   # nothing to add -> untouched
+
+
+def test_render_draws_label_bars_in_the_margins_not_over_the_imagery(tmp_path):
+    # The whole point of the margins: a uniform frame must survive the info bar and
+    # the month label untouched, with both bars confined to the added strips.
+    from gee_animation.render import _margins
+    h, w = 200, 200
+    cfg = _cfg(tmp_path, name="bars")
+    cfg.index = "rgb"                                  # composite: no colorbar overlay
+    cfg.palette = []
+    cfg.frame_aoi = None                               # and no scale bar
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.full((h, w, 3), 123, dtype=float), np.ones((h, w), dtype=bool)
+
+    paths = render([Frame("2022-01", object(), 5)], cfg, fetch=fake_fetch, geometry=None)
+    arr = np.asarray(Image.open(next(p for p in paths if p.suffix == ".png")))
+    top_h, bottom_h = _margins(h)
+    assert arr.shape[:2] == (h + top_h + bottom_h, w)
+    assert np.all(arr[top_h:top_h + h] == 123)         # every imagery pixel untouched
+    assert arr[:top_h].sum() > 0 and arr[-bottom_h:].sum() > 0   # both labels drawn
+
+
+def test_render_keeps_region_outline_on_imagery_when_margins_added(tmp_path):
+    # Trap: draw_region maps lon/lat linearly across the WHOLE array. Run after the
+    # margins are added, the outline silently slides *up* by half a margin inside the
+    # imagery — still a plausible-looking outline, just over the wrong pixels. It must
+    # therefore be drawn on pure imagery, before any padding exists.
+    from gee_animation.render import _margins, REGION_OUTLINE_RGB
+    h = w = 200
+    cfg = _cfg(tmp_path, name="ring")
+    cfg.draw_region = True
+    cfg.frame_aoi = {"bbox": [0.0, 0.0, 1.0, 1.0]}
+    cfg.region_aoi = {"bbox": [0.25, 0.25, 0.75, 0.75]}
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((h, w)), np.ones((h, w), dtype=bool)
+
+    paths = render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+    arr = np.asarray(Image.open(next(p for p in paths if p.suffix == ".png")))
+    top_h, bottom_h = _margins(h)
+    assert arr.shape[:2] == (h + top_h + bottom_h, w)   # margins added, imagery whole
+
+    core = np.all(arr == np.asarray(REGION_OUTLINE_RGB, np.uint8), axis=-1)
+    rows = np.nonzero(core.any(axis=1))[0]
+    assert rows.size, "sanity: the amber outline core must be on the frame"
+    # lat 0.75 is a quarter down the *imagery*, which starts at row top_h
+    assert abs(int(rows.min()) - (top_h + h // 4)) <= 1
+    assert abs(int(rows.max()) - (top_h + 3 * h // 4)) <= 1
+    # ...and nowhere near where mapping across the padded array would have put it
+    wrong_top = round(0.25 * (h + top_h + bottom_h))
+    assert not np.any(np.abs(rows - wrong_top) <= 2)
 
 
 def test_letterbox_centers_on_canvas():

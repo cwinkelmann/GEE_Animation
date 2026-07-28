@@ -205,6 +205,37 @@ def _info_text(cfg) -> str:
     return f"{head}   bands: {bands}" if bands else head
 
 
+def _margins(imagery_h: int) -> tuple:
+    """(top_h, bottom_h) label margins to pad imagery `imagery_h` px tall with.
+
+    `draw_info_bar`/`annotate` pick their bar height as `max(12, h // 12)` of the
+    array they are handed — which is the *padded* array — so the margin has to equal
+    that height: ``m == max(12, (imagery_h + top_h + bottom_h) // 12)``.
+    ``imagery_h // 10`` is the exact solution, under the same 12 px floor. The top
+    margin carries one extra pixel because PIL's `rectangle` includes its bottom
+    edge: without it the info bar's last row would tint the imagery's first row.
+    """
+    m = max(12, imagery_h // 10)
+    return m + 1, m
+
+
+def add_margins(rgb: np.ndarray, top_h: int, bottom_h: int, bg=LETTERBOX_RGB) -> np.ndarray:
+    """Grow the frame by blank margins above and below, imagery unchanged in between.
+
+    The label bars used to be painted *over* the imagery (~17 % of every frame
+    hidden). They are now drawn into these margins instead, so nothing is occluded —
+    `draw_info_bar` and `annotate` stay shape-preserving and simply receive the
+    already-padded array.
+    """
+    if top_h <= 0 and bottom_h <= 0:
+        return rgb
+    h, w = rgb.shape[:2]
+    out = np.empty((h + top_h + bottom_h, w, 3), dtype=np.uint8)
+    out[:] = np.asarray(bg, dtype=np.uint8)
+    out[top_h:top_h + h] = rgb.astype(np.uint8)
+    return out
+
+
 def draw_info_bar(rgb: np.ndarray, text: str) -> np.ndarray:
     """Draw a translucent top bar naming the bands used and the formula (if any)."""
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
@@ -454,11 +485,11 @@ def draw_scale_bar(rgb: np.ndarray, frame_width_m: float, target_frac: float = 0
 
     draw = ImageDraw.Draw(img, "RGBA")
     font, lw = _annot_scale(h)
-    bar_h = max(12, h // 12)          # bottom label bar height (see annotate)
     margin, tick = max(6, w // 100), max(4, h // 80)
     x1 = w - margin
     x0 = x1 - bar_px
-    y = h - bar_h - margin            # sit just above the bottom month-label bar
+    y = h - margin                    # `rgb` is the imagery rect; the month-label bar
+                                      # lives in the margin added below it, not here
     tb = draw.textbbox((0, 0), label, font=font)
     tw, th = tb[2] - tb[0], tb[3] - tb[1]
     pad = max(4, h // 200)
@@ -471,11 +502,28 @@ def draw_scale_bar(rgb: np.ndarray, frame_width_m: float, target_frac: float = 0
     return np.asarray(img)
 
 
+def _fit_margins(pw: int, ph: int, ch: int, aoi_aspect: float) -> tuple:
+    """Shrink the imagery place box so imagery + both label margins still fits `ch`.
+
+    The margins are part of the output, so they have to come *out of* the canvas the
+    preset asked for; adding them afterwards would make an `aspect: "16:9"` render
+    taller than 16:9. `_margins` together are ~1/5 of the imagery height, so 10/12 of
+    the canvas height is the analytic starting guess and the loop only trims the odd
+    pixel — or a little more on the small canvases where the 12 px floor dominates.
+    """
+    ph = min(ph, max(1, ch * 10 // 12))
+    while ph > 1 and ph + sum(_margins(ph)) > ch:
+        ph -= 1
+    return max(1, min(pw, round(ph * aoi_aspect))), ph
+
+
 def _output_spec(cfg, imagery_wh):
     """Screen-output layout, or None if no render.preset.
 
     Returns (canvas_w, canvas_h, place_w, place_h, method): the frame (native aspect)
-    is upscaled to place_*, then letterboxed onto the canvas at the requested aspect.
+    is upscaled to place_*, gains a label margin above and below, then is letterboxed
+    onto the canvas at the requested aspect. The margins are subtracted from the place
+    box here (see `_fit_margins`) so the canvas keeps exactly the requested aspect.
     """
     preset = getattr(cfg, "preset", None)
     if not preset:
@@ -490,16 +538,18 @@ def _output_spec(cfg, imagery_wh):
             cw, ch = long_edge, max(1, round(long_edge / aoi_aspect))
         else:
             ch, cw = long_edge, max(1, round(long_edge * aoi_aspect))
-        return cw, ch, cw, ch, method
-    target = ASPECTS[aspect]
-    if target >= 1:
-        cw, ch = long_edge, max(1, round(long_edge / target))
+        pw, ph = cw, ch
     else:
-        ch, cw = long_edge, max(1, round(long_edge * target))
-    if aoi_aspect > target:                 # frame wider than canvas -> width-limited
-        pw, ph = cw, max(1, round(cw / aoi_aspect))
-    else:
-        ph, pw = ch, max(1, round(ch * aoi_aspect))
+        target = ASPECTS[aspect]
+        if target >= 1:
+            cw, ch = long_edge, max(1, round(long_edge / target))
+        else:
+            ch, cw = long_edge, max(1, round(long_edge * target))
+        if aoi_aspect > target:             # frame wider than canvas -> width-limited
+            pw, ph = cw, max(1, round(cw / aoi_aspect))
+        else:
+            ph, pw = ch, max(1, round(ch * aoi_aspect))
+    pw, ph = _fit_margins(pw, ph, ch, aoi_aspect)
     return cw, ch, pw, ph, method
 
 
@@ -617,12 +667,9 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                 output = _output_spec(cfg, (rgb.shape[1], rgb.shape[0]))
             if output:
                 rgb = _upscale_rgb(rgb, output[2], output[3], output[4])
-        n = getattr(frame, "n_scenes", None)
-        rgb = annotate(rgb, f"{frame.label}  n={n}" if n is not None else frame.label)
-        top_h = max(12, rgb.shape[0] // 12)          # height of the top info bar
-        if not composite:                            # colorbar needs a palette
-            rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4)
-        rgb = draw_info_bar(rgb, info_text)
+        # Georeferenced overlays go on first, while the array is still pure imagery:
+        # draw_region maps lon/lat linearly across the *whole* array, so drawing it
+        # once the label margins exist would silently slide the outline off its pixels.
         if draw_overlay:
             # The rings, bounds and frame size are identical every frame, so the
             # (comparatively expensive) supersampled masks are built once here on the
@@ -633,6 +680,15 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
             rgb = draw_region(rgb, proj_bounds, proj_rings, width=region_width, masks=region_masks)
         if bounds is not None:
             rgb = draw_scale_bar(rgb, frame_width_m)
+        # Now grow the canvas and let the (shape-preserving) bar drawers fill the new
+        # top/bottom strips, so the labels sit beside the imagery instead of over it.
+        top_h, bottom_h = _margins(rgb.shape[0])
+        rgb = add_margins(rgb, top_h, bottom_h)
+        rgb = draw_info_bar(rgb, info_text)
+        n = getattr(frame, "n_scenes", None)
+        rgb = annotate(rgb, f"{frame.label}  n={n}" if n is not None else frame.label)
+        if not composite:                            # colorbar needs a palette
+            rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4)   # just inside the imagery
         if output:
             rgb = _letterbox(rgb, output[0], output[1])
         rgb_frames.append(rgb)
