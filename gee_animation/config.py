@@ -1,6 +1,7 @@
 """Run configuration model: load and validate YAML into a RunConfig."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -9,7 +10,11 @@ import yaml
 
 from .products import INDICES, get_product
 
-SUPPORTED_CADENCES = {"monthly"}
+log = logging.getLogger(__name__)
+
+# semimonthly splits at the 1st/16th; 10day splits at the 1st/11th/21st (see
+# compositing._SPLIT_DAYS — bins stay aligned to calendar months).
+SUPPORTED_CADENCES = {"monthly", "semimonthly", "10day"}
 
 
 class ConfigError(ValueError):
@@ -139,6 +144,10 @@ class RunConfig:
             raise ConfigError(
                 f"unsupported cadence {self.cadence!r}; supported: {sorted(SUPPORTED_CADENCES)}"
             )
+        if self.cadence != "monthly" and self.sensor == "landsat":
+            log.warning(
+                "cadence %r with sensor 'landsat': Landsat's 16-day repeat leaves most "
+                "%s bins empty", self.cadence, self.cadence)
         for label, a in (("frame", self.frame_aoi), ("region", self.region_aoi)):
             if not (a.get("bbox") or a.get("geojson") or a.get("shapefile")):
                 raise ConfigError(
@@ -158,6 +167,12 @@ class RunConfig:
             raise ConfigError("render.region_line_width must be >= 1")
         if self.anomaly is not None:
             from .products import THERMAL_INDICES
+            if self.cadence != "monthly":
+                # anomaly divides a period mean by a *monthly* climatology σ; a
+                # sub-monthly slice would silently produce inflated z-scores.
+                raise ConfigError(
+                    f"anomaly requires cadence: monthly (got {self.cadence!r}); "
+                    "sub-monthly composites cannot be scored against a monthly climatology")
             if self.anomaly not in ("climatology", "reference"):
                 raise ConfigError(
                     f"unknown anomaly {self.anomaly!r}; use 'climatology' or 'reference'")

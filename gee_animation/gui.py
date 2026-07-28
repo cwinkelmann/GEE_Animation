@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path
 
 from . import anomaly, auth, aoi, charts, collection, compositing, render
-from .compositing import month_starts
+from .compositing import period_starts
 from .config import RunConfig
 from .products import INDICES, SENSORS, get_product
 
@@ -228,7 +228,7 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
     # [(month, inside, outside)] — index mean inside the AOI vs the surrounding frame.
     # Composites (rgb/cir) have no single INDEX band to reduce, so skip the chart.
     series = [] if composite else deps.timeseries(frames, region_geom, frame_geom, cfg.scale)
-    n_months = len(month_starts(str(start), str(end)))
+    n_months = len(period_starts(str(start), str(end), cfg.cadence))
     dropped = n_months - len(frames)
     status = (f"Rendered {len(frames)} of {n_months} months as {sensor} {index.upper()} "
               f"({frames[0].label} → {frames[-1].label}).")

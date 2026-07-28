@@ -35,6 +35,16 @@ def test_reference_anomaly_is_thermal_only(tmp_path):
     assert cfg.anomaly == "reference"
 
 
+def test_validate_rejects_anomaly_with_sub_monthly_cadence(tmp_path):
+    # anomaly divides a period mean by a *monthly* climatology sigma; a semimonthly
+    # slice would silently produce inflated z-scores, so this must be a hard reject.
+    body = _base(
+        "index: lst\nanomaly: climatology\nbaseline_years: [2015, 2024]\n"
+    ).replace("cadence: monthly", "cadence: semimonthly")
+    with pytest.raises(ConfigError, match="cadence"):
+        RunConfig.from_yaml(_write(tmp_path, body))
+
+
 def test_accepts_shapefile_aois(tmp_path):
     p = _write(tmp_path, """
         name: t
@@ -251,6 +261,28 @@ def test_rejects_unsupported_cadence(tmp_path):
     """)
     with pytest.raises(ConfigError, match="cadence"):
         RunConfig.from_yaml(p)
+
+
+def test_warns_on_sub_monthly_cadence_with_landsat(tmp_path, caplog):
+    # Landsat's 16-day repeat leaves most 10-day bins empty — warn, don't reject.
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi:
+          frame: {bbox: [0, 0, 1, 1]}
+          region: {bbox: [0, 0, 1, 1]}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: landsat
+        index: lst
+        cadence: 10day
+        max_cloud_percent: 60
+        render: {fps: 4, scale: 20, dimensions: 768}
+    """)
+    with caplog.at_level("WARNING"):
+        cfg = RunConfig.from_yaml(p)
+    assert cfg.cadence == "10day"
+    assert "landsat" in caplog.text.lower() and "10day" in caplog.text
 
 
 def test_rejects_viz_max_not_greater_than_min(tmp_path):
