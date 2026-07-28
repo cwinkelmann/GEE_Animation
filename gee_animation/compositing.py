@@ -7,14 +7,19 @@ from datetime import date, datetime, timezone
 
 import ee
 
-from .config import pool_span  # noqa: F401  back-compat re-export; moved to config.py
+from .config import pool_span
 
 log = logging.getLogger(__name__)
 
 # n_scenes = how many scenes went into the period's median (None if unknown, e.g. a
 # hand-built Frame in tests). A median-of-one is not softening anything, so this is
 # surfaced on every frame and gated by cfg.min_scenes.
-Frame = namedtuple("Frame", "label image n_scenes", defaults=(None,))
+#
+# source = where a pooled frame's imagery actually came from (a year, e.g. 2021, for
+# least_cloudy; a "y0–y1" range string for median), or None for a non-pooled frame.
+# Kept separate from `label` (the period key) because `label` also serves as the PNG
+# filename and the metadata `month` column — see pooled_composite.
+Frame = namedtuple("Frame", "label image n_scenes source", defaults=(None, None))
 
 # Day-of-month a period starts on, per cadence. Sub-monthly periods always split
 # within a calendar month (never span two), so every period nests inside exactly one
@@ -88,14 +93,20 @@ def _cloud_rank(clouds, i) -> float:
     return float("inf") if v is None else float(v)
 
 
+def _min_scenes(cfg) -> int:
+    """cfg.min_scenes, defaulting (and falling back on a falsy override) to 1."""
+    return int(getattr(cfg, "min_scenes", 1) or 1)
+
+
 def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
     """Cross-year "best month" frames: each period of [cfg.start, cfg.end) is filled
     from the SAME calendar period in ANY year of ``cfg.pool_years``.
 
     **Cosmetic mode.** A frame labelled 2022-05 may actually show May 2021, so the
     result is not a time series and must not be read as one. That is why every frame
-    label carries its source (``"2022-05 <- 2021"``) and `render._info_text` states
-    the pooled year range — an unlabelled pooled render is a misleading artefact.
+    carries its source in `Frame.source` (e.g. ``2021``) — `render()` composes it into
+    the drawn text (``"2022-05 ← 2021"``) and `render._info_text` states the pooled
+    year range — an unlabelled pooled render is a misleading artefact.
 
     ``cfg.pool_strategy``:
 
@@ -146,7 +157,7 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
             f"{len(clouds)} region_cloud_fraction values")
     dates = [datetime.fromtimestamp(t / 1000, tz=timezone.utc).date() for t in millis]
 
-    min_scenes = int(getattr(cfg, "min_scenes", 1) or 1)
+    min_scenes = _min_scenes(cfg)
     frames: list[Frame] = []
     for label, p_start, p_end in periods:
         month, first_day, last_day = _calendar_key(p_start, p_end)
@@ -174,11 +185,11 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
             # granule. Mosaicking that one instant's tiles restores full coverage and
             # still averages nothing across time.
             image = pooled.filterDate(millis[best], millis[best] + 1).mosaic()
-            source, n_scenes = str(dates[best].year), 1
-        # Mandatory provenance: the source year is part of the label, which render
-        # draws on every frame and writes into every frame's filename.
-        frames.append(Frame(label=f"{label} ← {source}", image=image,
-                            n_scenes=n_scenes))
+            source, n_scenes = dates[best].year, 1
+        # Mandatory provenance: the source is carried on the frame (not baked into
+        # `label`, which stays a clean period key used as filename/DB key); `render`
+        # composes it into the drawn text on every frame.
+        frames.append(Frame(label=label, image=image, n_scenes=n_scenes, source=source))
     return frames
 
 
@@ -203,7 +214,7 @@ def composite(collection, cfg) -> list[Frame]:
             if p_start <= d < p_end:
                 counts[label] += 1
                 break
-    min_scenes = int(getattr(cfg, "min_scenes", 1) or 1)
+    min_scenes = _min_scenes(cfg)
     frames: list[Frame] = []
     for label, p_start, p_end in periods:
         n = counts.get(label, 0)

@@ -4,8 +4,9 @@ from datetime import date, datetime, timezone
 import pytest
 
 from gee_animation.compositing import (
-    composite, month_starts, monthly_median, period_starts, pool_span,
+    _min_scenes, composite, month_starts, monthly_median, period_starts,
     pooled_composite, Frame)
+from gee_animation.config import pool_span
 
 
 def test_month_starts_spans_range():
@@ -207,22 +208,28 @@ def test_pooled_least_cloudy_mosaics_every_tile_of_the_winning_instant():
                              ("2022-05-11", 0.80, "C")])
     frames = _pooled(coll, _pool_cfg())
     assert frames[0].image.tag == "mosaic:A+B"       # both tiles contribute
-    assert frames[0].label == "2022-05 ← 2021"
+    assert frames[0].label == "2022-05"
+    assert frames[0].source == 2021
 
 
 def test_pooled_frame_label_names_source_year():
     # Mandatory provenance: a 2022-05 frame actually showing May 2021 must say so.
+    # `label` stays the clean period key (it also feeds the PNG filename and the
+    # metadata `month` column — see test_render.py / test_metadata.py); the source
+    # year lives in `Frame.source`, which `render()` composes into the drawn text.
     coll = PooledCollection([("2021-05-14", 0.10), ("2022-05-11", 0.80)])
     frames = _pooled(coll, _pool_cfg())
-    assert frames[0].label == "2022-05 ← 2021"
-    assert "2021" in frames[0].label
+    assert frames[0].label == "2022-05"
+    assert frames[0].source == 2021
 
 
 def test_pooled_label_always_carries_a_source_even_when_the_nominal_year_wins():
-    # The label is never bare, not even when the borrowed year IS the nominal one.
+    # The source is never bare/missing, not even when the borrowed year IS the
+    # nominal one.
     coll = PooledCollection([("2021-05-14", 0.90), ("2022-05-11", 0.05)])
     frames = _pooled(coll, _pool_cfg())
-    assert frames[0].label == "2022-05 ← 2022"
+    assert frames[0].label == "2022-05"
+    assert frames[0].source == 2022
 
 
 def test_pooled_least_cloudy_ignores_scenes_outside_the_pool_years():
@@ -230,7 +237,8 @@ def test_pooled_least_cloudy_ignores_scenes_outside_the_pool_years():
     coll = PooledCollection([("2019-05-02", 0.01, "OLD"), ("2021-05-14", 0.30, "IN")])
     frames = _pooled(coll, _pool_cfg())
     assert frames[0].image.tag == "mosaic:IN"
-    assert frames[0].label == "2022-05 ← 2021"
+    assert frames[0].label == "2022-05"
+    assert frames[0].source == 2021
 
 
 def test_pooled_least_cloudy_skips_scenes_with_no_region_cloud_fraction():
@@ -264,7 +272,8 @@ def test_pool_strategy_median_composites_all_years():
     assert len(frames) == 1
     assert frames[0].image.tag == "median:2021-05-14,2022-05-11"
     assert frames[0].n_scenes == 2
-    assert frames[0].label == "2022-05 ← 2021–2022"          # whole range, not one year
+    assert frames[0].label == "2022-05"
+    assert frames[0].source == "2021–2022"          # whole range, not one year
 
 
 def test_pool_strategy_median_filters_by_calendar_month_and_day_of_month():
@@ -315,6 +324,15 @@ def test_composite_delegates_to_pooled_composite_when_pool_years_is_set(monkeypa
     cfg = _pool_cfg()
     assert composite(coll, cfg) == ["POOLED"]
     assert seen == [(coll, cfg)]
+
+
+def test_min_scenes_defaults_to_1_and_treats_falsy_override_as_1():
+    # Shared by composite() and pooled_composite() so the two duplicated `int(getattr(
+    # cfg, "min_scenes", 1) or 1)` lines can't drift apart.
+    assert _min_scenes(types.SimpleNamespace()) == 1
+    assert _min_scenes(types.SimpleNamespace(min_scenes=None)) == 1
+    assert _min_scenes(types.SimpleNamespace(min_scenes=0)) == 1
+    assert _min_scenes(types.SimpleNamespace(min_scenes=3)) == 3
 
 
 def test_pool_span_is_none_without_pool_years_and_spans_whole_years_with():

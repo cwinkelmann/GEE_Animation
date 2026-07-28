@@ -22,6 +22,14 @@ def _cfg(tmp_path, name="anim", fps=2):
     )
 
 
+def test_bar_h_matches_draw_info_bar_and_annotate():
+    # draw_info_bar (top) and annotate (bottom) must stay the same height — extracted
+    # into one helper so the two call sites can't drift apart.
+    from gee_animation.render import _bar_h
+    assert _bar_h(120) == max(12, 120 // 12)
+    assert _bar_h(12) == 12                      # floor kicks in on tiny frames
+
+
 def test_annotate_keeps_shape_and_type():
     rgb = np.zeros((32, 32, 3), dtype=np.uint8)
     out = annotate(rgb, "2022-06")
@@ -116,13 +124,18 @@ def test_draw_region_respects_configured_line_width():
 
 
 def test_render_applies_region_overlay_when_enabled(tmp_path, monkeypatch):
+    # render() builds the overlay masks itself (and composites them via
+    # _composite_region) rather than routing through draw_region — see
+    # test_render_threads_region_line_width_into_draw_region for why.
     import gee_animation.render as r
     cfg = _cfg(tmp_path)
     cfg.draw_region = True
     cfg.frame_aoi = {"bbox": [0.0, 0.0, 1.0, 1.0]}
     cfg.region_aoi = {"bbox": [0.25, 0.25, 0.75, 0.75]}
     calls = []
-    monkeypatch.setattr(r, "draw_region", lambda rgb, bounds, rings, **kw: (calls.append((bounds, rings)) or rgb))
+    real_region_masks = r._region_masks
+    monkeypatch.setattr(r, "_region_masks", lambda bounds, rings, *a, **k: (
+        calls.append((bounds, rings)) or real_region_masks(bounds, rings, *a, **k)))
 
     def fake_fetch(image, cfg, geometry=None):
         return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
@@ -159,6 +172,9 @@ def test_render_builds_region_masks_once_across_frames(tmp_path, monkeypatch):
 
 
 def test_render_threads_region_line_width_into_draw_region(tmp_path, monkeypatch):
+    # render() passes cfg.region_line_width straight into the mask build (_region_masks),
+    # not through draw_region's `width=` (which, once masks exist, it never reads —
+    # see Fix 6 / render()'s comment above the overlay block).
     import gee_animation.render as r
     cfg = _cfg(tmp_path)
     cfg.draw_region = True
@@ -166,8 +182,9 @@ def test_render_threads_region_line_width_into_draw_region(tmp_path, monkeypatch
     cfg.region_aoi = {"bbox": [0.25, 0.25, 0.75, 0.75]}
     cfg.region_line_width = 7
     widths = []
-    monkeypatch.setattr(r, "draw_region",
-                        lambda rgb, bounds, rings, **kw: (widths.append(kw.get("width")) or rgb))
+    real_region_masks = r._region_masks
+    monkeypatch.setattr(r, "_region_masks", lambda bounds, rings, shape, width: (
+        widths.append(width) or real_region_masks(bounds, rings, shape, width)))
 
     def fake_fetch(image, cfg, geometry=None):
         return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
@@ -184,9 +201,9 @@ def test_render_skips_region_overlay_when_disabled(tmp_path, monkeypatch):
     cfg.region_aoi = {"bbox": [0, 0, 1, 1]}
 
     def boom(*a, **k):
-        raise AssertionError("draw_region should not be called when disabled")
+        raise AssertionError("_region_masks should not be called when disabled")
 
-    monkeypatch.setattr(r, "draw_region", boom)
+    monkeypatch.setattr(r, "_region_masks", boom)
 
     def fake_fetch(image, cfg, geometry=None):
         return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
@@ -215,8 +232,9 @@ def test_render_projects_overlay_and_resolves_crs_when_auto(tmp_path, monkeypatc
     cfg.frame_aoi = {"bbox": [13.90, 52.99, 13.92, 53.00]}   # Brandenburg
     cfg.region_aoi = {"bbox": [13.905, 52.993, 13.915, 52.998]}
     captured = {}
-    monkeypatch.setattr(r, "draw_region",
-                        lambda rgb, bounds, rings, **k: (captured.update(bounds=bounds) or rgb))
+    real_region_masks = r._region_masks
+    monkeypatch.setattr(r, "_region_masks", lambda bounds, rings, *a, **k: (
+        captured.update(bounds=bounds) or real_region_masks(bounds, rings, *a, **k)))
 
     def fake_fetch(image, cfg, geometry=None):
         return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
@@ -506,6 +524,31 @@ def test_render_annotates_scene_count_when_present(tmp_path, monkeypatch):
     assert labels == ["2022-06  n=7"]                  # scene count shown on the frame
 
 
+def test_render_composes_pooled_provenance_into_the_drawn_text(tmp_path, monkeypatch):
+    # Frame.label is the clean period key; Frame.source (added for pooled frames)
+    # carries where the imagery actually came from. render() must recombine them into
+    # the same drawn text as before ("2022-05 ← 2021  n=1"), folded down to a glyph
+    # Pillow's default font can draw, right where the string is composed.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    composed = []
+    orig_drawable = r._drawable
+    monkeypatch.setattr(r, "_drawable",
+                        lambda text: (composed.append(text) or orig_drawable(text)))
+    drawn = []
+    monkeypatch.setattr(r, "annotate", lambda rgb, label: (drawn.append(label) or rgb))
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
+
+    render([Frame("2022-05", object(), 1, 2021)], cfg, fetch=fake_fetch, geometry=None)
+    # what render composed, before folding: the real arrow, the source year, n=1
+    assert composed == ["2022-05 ← 2021  n=1"]
+    # what actually reaches Pillow: folded to a glyph the default font has
+    assert drawn == ["2022-05 <- 2021  n=1"]
+    assert "←" not in drawn[0]
+
+
 def test_render_composite_passes_rgb_through_without_colorbar(tmp_path):
     # rgb/cir fetch returns an H×W×3 colour array; render must NOT colorize it,
     # and must not draw a palette colorbar (composites have no palette).
@@ -540,6 +583,21 @@ def test_render_pipeline_with_injected_fetch(tmp_path):
     pngs = [p for p in paths if p.suffix == ".png"]
     assert [p.name for p in pngs] == ["anim_2022-01.png", "anim_2022-02.png"]
     assert all(p.exists() and p.stat().st_size > 0 for p in pngs)
+
+
+def test_render_pooled_frame_png_filename_is_the_clean_period_key(tmp_path):
+    # Frame.label (not the drawn provenance text) names the PNG file; a pooled frame's
+    # source year must not leak into it as "anim_2022-05 ← 2021.png" — that would be a
+    # filename with a space and U+2190, and it also has to match the DB `month` key
+    # (see test_metadata.py) so pooled and non-pooled runs collide correctly.
+    cfg = _cfg(tmp_path)
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
+
+    paths = render([Frame("2022-05", object(), 1, 2021)], cfg, fetch=fake_fetch, geometry=None)
+    pngs = [p for p in paths if p.suffix == ".png"]
+    assert [p.name for p in pngs] == [f"{cfg.name}_2022-05.png"]
 
 
 def _cfg_ns():
@@ -696,22 +754,26 @@ def test_fetch_thumbnail_selects_index_band(tmp_path):
 
 def test_info_text_states_the_pooled_year_range():
     # Pooled frames come from whichever year was clearest, so the provenance has to
-    # be drawn on the frame, not just live in the config.
+    # be drawn on the frame, not just live in the config. An ASCII hyphen, not an en
+    # dash: _info_text feeds draw_info_bar directly with no fold step (Pillow's
+    # default font has no en-dash glyph), so the fix has to be at the source.
     from gee_animation.render import _info_text
     plain = _info_text(types.SimpleNamespace(index="ndvi"))
     pooled = _info_text(types.SimpleNamespace(index="ndvi", pool_years=[2019, 2024]))
     assert "pooled years" not in plain
-    assert "pooled years 2019–2024" in pooled and "cosmetic" in pooled
+    assert "pooled years 2019-2024" in pooled and "cosmetic" in pooled
+    assert "–" not in pooled
 
 
 def test_pooled_label_source_year_is_drawn_not_a_notdef_box():
     # The bundled default font has no U+2190 glyph, so a raw "←" draws as an empty
-    # box. The drawn text folds it to "<-" while the Frame label keeps the real
-    # character (it is also the frame filename / metadata row).
+    # box. `_drawable` folds it to "<-"; `annotate`/`draw_info_bar` draw whatever text
+    # they are given verbatim, so callers (render(), for the pooled provenance string)
+    # must fold before calling them.
     from gee_animation.render import _drawable, annotate
     assert _drawable("2022-05 ← 2021") == "2022-05 <- 2021"
     assert _drawable("pooled years 2019–2024") == "pooled years 2019-2024"
     rgb = np.zeros((240, 800, 3), np.uint8)
-    with_year = annotate(rgb.copy(), "2022-05 ← 2021")
+    with_year = annotate(rgb.copy(), _drawable("2022-05 ← 2021"))
     without = annotate(rgb.copy(), "2022-05")
     assert not np.array_equal(with_year, without)      # the source year really lands

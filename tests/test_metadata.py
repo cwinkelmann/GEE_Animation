@@ -40,6 +40,17 @@ def test_frame_stats_reports_cloud_and_mean_over_aoi():
                     ("2022-09", 1, 1.0, None)]
 
 
+def test_frame_stats_uses_the_clean_period_key_for_a_pooled_frame():
+    # A pooled Frame carries its source year separately (Frame.source); frame_stats
+    # must key its row on the plain "YYYY-MM" period (frame.label), not a string with
+    # the provenance arrow baked in — that string is half of the DB's PRIMARY KEY
+    # (name, month), so an arrow-bearing month would desync pooled vs. non-pooled runs.
+    frames = [Frame("2022-05", _Img(0.9, 22.5), 1, 2021)]
+    rows = metadata.frame_stats(frames, "REGION", 30, mean_band="INDEX", ee_module=_fake_ee())
+    assert rows == [("2022-05", 1, 0.1, 22.5)]
+    assert "←" not in rows[0][0]
+
+
 def test_frame_stats_omits_mean_when_no_band():
     # composites (rgb/cir) pass mean_band=None -> aoi_mean is null
     rows = metadata.frame_stats([Frame("2022-07", _Img(0.9, 22.5), 3)],

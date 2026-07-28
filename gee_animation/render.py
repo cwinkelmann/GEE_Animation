@@ -41,10 +41,12 @@ def _font(px: int):
         return ImageFont.load_default()
 
 
-# Pillow's bundled default font has no glyph for these, and draws an empty notdef
-# box instead — which reads as a corrupted frame. Labels themselves keep the real
-# characters (they are also frame filenames and metadata rows); only the drawn text
-# is folded down. "2022-05 <- 2021" is still unambiguous provenance.
+# Pillow's bundled default font has no glyph for "←" (pooled-frame provenance arrow)
+# or "–" (en dash, e.g. a pooled year range), and draws an empty notdef box instead —
+# which reads as a corrupted frame. `Frame.label`/`.source` keep the real characters
+# (they also feed filenames and DB rows); only the composed *display* string that
+# `render()` hands to `annotate` is folded down. "2022-05 <- 2021" is still
+# unambiguous provenance.
 _DRAWABLE = {"←": "<-", "–": "-"}
 
 
@@ -223,7 +225,10 @@ def _info_text(cfg) -> str:
     text = f"{head}   bands: {bands}" if bands else head
     pool = getattr(cfg, "pool_years", None)
     if pool:
-        text += (f"   pooled years {int(pool[0])}–{int(pool[-1])} "
+        # Plain ASCII hyphen, not an en dash: this string is drawn straight into
+        # `draw_info_bar` with no fold step, and Pillow's default font has no en-dash
+        # glyph (see _DRAWABLE).
+        text += (f"   pooled years {int(pool[0])}-{int(pool[-1])} "
                  "(cosmetic: frames may be from different years)")
     return text
 
@@ -259,28 +264,45 @@ def add_margins(rgb: np.ndarray, top_h: int, bottom_h: int, bg=LETTERBOX_RGB) ->
     return out
 
 
+def _bar_h(h: int) -> int:
+    """Info/label bar height for a frame `h` px tall — shared by draw_info_bar and
+    annotate so the two bars stay the same height (see also _margins, which sizes the
+    padding around them to match; that is a related but distinct computation, see
+    _margins' docstring)."""
+    return max(12, h // 12)
+
+
 def draw_info_bar(rgb: np.ndarray, text: str) -> np.ndarray:
-    """Draw a translucent top bar naming the bands used and the formula (if any)."""
+    """Draw a translucent top bar naming the bands used and the formula (if any).
+
+    `text` is drawn as given — callers must pre-fold any character Pillow's default
+    font cannot render (see `_DRAWABLE`); `_info_text` itself never emits one.
+    """
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
     w, h = img.size
     font, _ = _annot_scale(h)
-    bar_h = max(12, h // 12)
+    bar_h = _bar_h(h)
     pad = max(1, h // 200)
     draw.rectangle([0, 0, w, bar_h], fill=(0, 0, 0, 140))
-    draw.text((max(4, w // 200), pad), _drawable(text), fill=(255, 255, 255, 255),
-              font=font)
+    draw.text((max(4, w // 200), pad), text, fill=(255, 255, 255, 255), font=font)
     return np.asarray(img)
 
 
 def annotate(rgb: np.ndarray, label: str) -> np.ndarray:
+    """Draw a translucent bottom bar with `label`.
+
+    `label` is drawn as given — callers must pre-fold any character Pillow's default
+    font cannot render (see `_DRAWABLE`); `render()` does this when composing the
+    pooled-frame provenance text.
+    """
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
     w, h = img.size
     font, _ = _annot_scale(h)
-    bar_h = max(12, h // 12)
+    bar_h = _bar_h(h)
     draw.rectangle([0, h - bar_h, w, h], fill=(0, 0, 0, 140))
-    draw.text((max(4, w // 200), h - bar_h + max(1, h // 200)), _drawable(label),
+    draw.text((max(4, w // 200), h - bar_h + max(1, h // 200)), label,
               fill=(255, 255, 255, 255), font=font)
     return np.asarray(img)
 
@@ -706,7 +728,9 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
             # in draw_region/_composite_region.
             if region_masks is None:
                 region_masks = _region_masks(proj_bounds, proj_rings, rgb.shape[:2], region_width)
-            rgb = draw_region(rgb, proj_bounds, proj_rings, width=region_width, masks=region_masks)
+            # masks is always non-None here, so draw_region would just forward straight
+            # to _composite_region without ever reading `width` — call it directly.
+            rgb = _composite_region(rgb, *region_masks, color=REGION_OUTLINE_RGB)
         if bounds is not None:
             rgb = draw_scale_bar(rgb, frame_width_m)
         # Now grow the canvas and let the (shape-preserving) bar drawers fill the new
@@ -715,7 +739,15 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         rgb = add_margins(rgb, top_h, bottom_h)
         rgb = draw_info_bar(rgb, info_text)
         n = getattr(frame, "n_scenes", None)
-        rgb = annotate(rgb, f"{frame.label}  n={n}" if n is not None else frame.label)
+        source = getattr(frame, "source", None)
+        # Compose the *display* string here: `frame.label` stays a clean period key
+        # (it is also the PNG filename and the metadata `month` column — see
+        # compositing.pooled_composite), so a pooled frame's provenance is appended
+        # only for drawing. Pillow's default font can't render "←", so the composed
+        # text is folded right here, in one place, before it reaches `annotate`.
+        display = f"{frame.label} ← {source}" if source is not None else frame.label
+        text = f"{display}  n={n}" if n is not None else display
+        rgb = annotate(rgb, _drawable(text))
         if not composite:                            # colorbar needs a palette
             rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4)   # just inside the imagery
         if output:
