@@ -80,7 +80,7 @@ def apply(frames, cfg, frame_geom, region_geom, build_fn, ee_module=ee):
     if mode == "climatology":
         y0, y1 = cfg.baseline_years
         base_cfg = replace(cfg, start=f"{y0}-01-01", end=f"{y1 + 1}-01-01", anomaly=None)
-        baseline = build_fn(base_cfg, frame_geom, region_geom, ee_module)
+        baseline = build_fn(base_cfg, frame_geom, region_geom, ee_module=ee_module)
         return climatology_anomaly(frames, baseline, ee_module)
     if mode == "reference":
         return reference_anomaly(frames, ee_module)

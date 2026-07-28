@@ -7,6 +7,8 @@ from datetime import date, datetime, timezone
 
 import ee
 
+from .config import pool_span  # noqa: F401  back-compat re-export; moved to config.py
+
 log = logging.getLogger(__name__)
 
 # n_scenes = how many scenes went into the period's median (None if unknown, e.g. a
@@ -55,20 +57,6 @@ def month_starts(start: str, end: str) -> list[str]:
     """Back-compat thin wrapper over period_starts(..., "monthly"): just the start
     strings, used by tests/test_compositing.py and gui.py's progress estimate."""
     return [p_start for _, p_start, _ in period_starts(start, end, "monthly")]
-
-
-def pool_span(cfg) -> tuple[str, str] | None:
-    """(start, end) covering every year in ``cfg.pool_years``, or None when
-    cross-year pooling is off.
-
-    ``collection.build`` widens its ``filterDate`` to this span so the pooled scenes
-    exist at all; :func:`pooled_composite` then buckets them by calendar period.
-    """
-    years = getattr(cfg, "pool_years", None)
-    if not years:
-        return None
-    y0, y1 = int(years[0]), int(years[-1])
-    return f"{y0}-01-01", f"{y1 + 1}-01-01"
 
 
 def _calendar_key(p_start_iso: str, p_end_iso: str) -> tuple[int, int, int]:

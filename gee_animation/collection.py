@@ -7,7 +7,7 @@ from dataclasses import is_dataclass, replace
 
 import ee
 
-from .compositing import pool_span
+from .config import pool_span
 from .products import THERMAL_INDICES, get_product
 
 log = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ def _with_dates(cfg, start: str, end: str):
     return clone
 
 
-def build(cfg, frame_geom, region_geom, apply_cloud_filters: bool = True, ee_module=ee):
+def build(cfg, frame_geom, region_geom, *, apply_cloud_filters: bool = True, ee_module=ee):
     """Build the (sensor, index) ImageCollection for `cfg`'s AOI/date range.
 
     `apply_cloud_filters=False` (default True) skips both the coarse scene-level

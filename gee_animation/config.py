@@ -243,3 +243,18 @@ class RunConfig:
         if not (spec and spec.composite) and not self.palette:
             # composites (rgb/cir) render 3 real bands, so they need no palette
             raise ConfigError("viz.palette must be non-empty")
+
+
+def pool_span(cfg) -> tuple[str, str] | None:
+    """(start, end) covering every year in ``cfg.pool_years``, or None when
+    cross-year pooling is off.
+
+    ``collection.build`` widens its ``filterDate`` to this span so the pooled scenes
+    exist at all; :func:`compositing.pooled_composite` then buckets them by calendar
+    period.
+    """
+    years = getattr(cfg, "pool_years", None)
+    if not years:
+        return None
+    y0, y1 = int(years[0]), int(years[-1])
+    return f"{y0}-01-01", f"{y1 + 1}-01-01"
