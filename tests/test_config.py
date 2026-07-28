@@ -440,3 +440,52 @@ def test_rejects_unknown_index_cleanly(tmp_path):
     """)
     with pytest.raises(ConfigError, match="index"):
         RunConfig.from_yaml(p)
+
+
+def test_pool_years_defaults_off_and_loads(tmp_path):
+    # absent -> off, and the strategy default is least_cloudy
+    plain = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert plain.pool_years is None and plain.pool_strategy == "least_cloudy"
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+        "index: ndvi\npool_years: [2019, 2024]\npool_strategy: median\n"
+        "missions: [L8, L9]\n")))
+    assert cfg.pool_years == [2019, 2024] and cfg.pool_strategy == "median"
+
+
+def test_validate_rejects_anomaly_with_pool_years(tmp_path):
+    # the anomaly baseline is itself multi-year, so a borrowed year would be scored
+    # against a climatology that already contains it
+    with pytest.raises(ConfigError, match="pool_years"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: lst\nanomaly: climatology\nbaseline_years: [2015, 2024]\n"
+            "pool_years: [2019, 2024]\n")))
+
+
+def test_validate_rejects_unknown_pool_strategy(tmp_path):
+    with pytest.raises(ConfigError, match="pool_strategy"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: ndvi\npool_years: [2019, 2024]\npool_strategy: sharpest\n")))
+
+
+def test_validate_rejects_malformed_pool_years(tmp_path):
+    with pytest.raises(ConfigError, match="pool_years"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: ndvi\npool_years: [2019]\n")))
+    with pytest.raises(ConfigError, match="precede"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: ndvi\npool_years: [2024, 2019]\n")))
+
+
+def test_pool_years_with_landsat_and_no_missions_warns(tmp_path, caplog):
+    # L7/L8/L9 differ radiometrically (and L7 is SLC-off), so pooled Landsat frames
+    # can step between missions — must warn, not silently proceed.
+    with caplog.at_level("WARNING"):
+        cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: ndvi\npool_years: [2019, 2024]\n")))       # _base is sensor: landsat
+    assert cfg.pool_years == [2019, 2024]
+    assert "missions" in caplog.text
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: ndvi\npool_years: [2019, 2024]\nmissions: [L8, L9]\n")))
+    assert "missions" not in caplog.text

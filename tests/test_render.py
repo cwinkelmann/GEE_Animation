@@ -692,3 +692,26 @@ def test_fetch_thumbnail_selects_index_band(tmp_path):
     # selection is exercised by the integration test; unit-assert the band constant is INDEX:
     from gee_animation.products import INDEX_BAND
     assert INDEX_BAND == "INDEX"
+
+
+def test_info_text_states_the_pooled_year_range():
+    # Pooled frames come from whichever year was clearest, so the provenance has to
+    # be drawn on the frame, not just live in the config.
+    from gee_animation.render import _info_text
+    plain = _info_text(types.SimpleNamespace(index="ndvi"))
+    pooled = _info_text(types.SimpleNamespace(index="ndvi", pool_years=[2019, 2024]))
+    assert "pooled years" not in plain
+    assert "pooled years 2019–2024" in pooled and "cosmetic" in pooled
+
+
+def test_pooled_label_source_year_is_drawn_not_a_notdef_box():
+    # The bundled default font has no U+2190 glyph, so a raw "←" draws as an empty
+    # box. The drawn text folds it to "<-" while the Frame label keeps the real
+    # character (it is also the frame filename / metadata row).
+    from gee_animation.render import _drawable, annotate
+    assert _drawable("2022-05 ← 2021") == "2022-05 <- 2021"
+    assert _drawable("pooled years 2019–2024") == "pooled years 2019-2024"
+    rgb = np.zeros((240, 800, 3), np.uint8)
+    with_year = annotate(rgb.copy(), "2022-05 ← 2021")
+    without = annotate(rgb.copy(), "2022-05")
+    assert not np.array_equal(with_year, without)      # the source year really lands

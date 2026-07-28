@@ -41,6 +41,19 @@ def _font(px: int):
         return ImageFont.load_default()
 
 
+# Pillow's bundled default font has no glyph for these, and draws an empty notdef
+# box instead — which reads as a corrupted frame. Labels themselves keep the real
+# characters (they are also frame filenames and metadata rows); only the drawn text
+# is folded down. "2022-05 <- 2021" is still unambiguous provenance.
+_DRAWABLE = {"←": "<-", "–": "-"}
+
+
+def _drawable(text: str) -> str:
+    for src, dst in _DRAWABLE.items():
+        text = text.replace(src, dst)
+    return text
+
+
 def _annot_scale(h: int):
     """(font, line_width) proportional to frame height so overlays read at any size.
 
@@ -197,12 +210,22 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4) -> np.ndarray:
 
 
 def _info_text(cfg) -> str:
-    """One-line 'INDEX = formula   bands: …' describing how the frame was made."""
+    """One-line 'INDEX = formula   bands: …' describing how the frame was made.
+
+    Under cross-year pooling (`cfg.pool_years`) it also states the pooled year range:
+    frames then come from whichever year had the clearest scene, so the provenance
+    has to be on the frame itself, not only in the config.
+    """
     meta = _index_meta(cfg)
     name = getattr(cfg, "index", "").upper()
     head = f"{name} = {meta.formula}" if (meta and meta.formula) else name
     bands = meta.bands if meta else ""
-    return f"{head}   bands: {bands}" if bands else head
+    text = f"{head}   bands: {bands}" if bands else head
+    pool = getattr(cfg, "pool_years", None)
+    if pool:
+        text += (f"   pooled years {int(pool[0])}–{int(pool[-1])} "
+                 "(cosmetic: frames may be from different years)")
+    return text
 
 
 def _margins(imagery_h: int) -> tuple:
@@ -245,7 +268,8 @@ def draw_info_bar(rgb: np.ndarray, text: str) -> np.ndarray:
     bar_h = max(12, h // 12)
     pad = max(1, h // 200)
     draw.rectangle([0, 0, w, bar_h], fill=(0, 0, 0, 140))
-    draw.text((max(4, w // 200), pad), text, fill=(255, 255, 255, 255), font=font)
+    draw.text((max(4, w // 200), pad), _drawable(text), fill=(255, 255, 255, 255),
+              font=font)
     return np.asarray(img)
 
 
@@ -256,7 +280,7 @@ def annotate(rgb: np.ndarray, label: str) -> np.ndarray:
     font, _ = _annot_scale(h)
     bar_h = max(12, h // 12)
     draw.rectangle([0, h - bar_h, w, h], fill=(0, 0, 0, 140))
-    draw.text((max(4, w // 200), h - bar_h + max(1, h // 200)), label,
+    draw.text((max(4, w // 200), h - bar_h + max(1, h // 200)), _drawable(label),
               fill=(255, 255, 255, 255), font=font)
     return np.asarray(img)
 

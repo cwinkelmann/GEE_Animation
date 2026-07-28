@@ -1,10 +1,13 @@
 """Build a cloud-masked (sensor, index) ImageCollection with an INDEX band."""
 from __future__ import annotations
 
+import copy
 import logging
+from dataclasses import is_dataclass, replace
 
 import ee
 
+from .compositing import pool_span
 from .products import THERMAL_INDICES, get_product
 
 log = logging.getLogger(__name__)
@@ -46,6 +49,15 @@ def add_region_cloud_fraction(image, region, scale, cloud_band, ee_module=ee):
     return image.set("region_cloud_fraction", frac)
 
 
+def _with_dates(cfg, start: str, end: str):
+    """A copy of `cfg` with start/end replaced (dataclass or plain namespace)."""
+    if is_dataclass(cfg):
+        return replace(cfg, start=start, end=end)
+    clone = copy.copy(cfg)
+    clone.start, clone.end = start, end
+    return clone
+
+
 def build(cfg, frame_geom, region_geom, apply_cloud_filters: bool = True, ee_module=ee):
     """Build the (sensor, index) ImageCollection for `cfg`'s AOI/date range.
 
@@ -56,6 +68,14 @@ def build(cfg, frame_geom, region_geom, apply_cloud_filters: bool = True, ee_mod
     the filtered path would have judged them by.
     """
     sensor, index = get_product(cfg.sensor, cfg.index)
+    span = pool_span(cfg)
+    if span is not None:
+        # Cross-year "best month" mode: the candidate scenes live outside
+        # [cfg.start, cfg.end), so widen the date range to every pooled year here —
+        # compositing.pooled_composite then buckets them by calendar period, ignoring
+        # the year. Replacing start/end (rather than special-casing the filterDate
+        # below) also reaches the index-supplied `build_collection` path.
+        cfg = _with_dates(cfg, *span)
     if getattr(index, "build_collection", None) is not None:
         # Index supplies its own (already date/bounds-filtered) source collection,
         # e.g. lst_smw's satellite-aware Landsat+TOA join.

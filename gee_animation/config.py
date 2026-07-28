@@ -16,6 +16,9 @@ log = logging.getLogger(__name__)
 # compositing._SPLIT_DAYS — bins stay aligned to calendar months).
 SUPPORTED_CADENCES = {"monthly", "semimonthly", "10day"}
 
+# Cross-year "best month" pooling (see compositing.pooled_composite).
+POOL_STRATEGIES = {"least_cloudy", "median"}
+
 
 class ConfigError(ValueError):
     """Raised when a run configuration is invalid."""
@@ -56,6 +59,12 @@ class RunConfig:
     # ERA5 air temp (thermal only). None => raw values.
     anomaly: str = None
     baseline_years: list = None
+    # Cross-year "best month" pooling (from top-level `pool_years` / `pool_strategy`).
+    # [firstYear, lastYear] inclusive: each period is filled from the same calendar
+    # period in ANY of those years, so a "2022-05" frame may show May 2021. Cosmetic
+    # only — every frame is labelled with its source year. None => off (default).
+    pool_years: list = None
+    pool_strategy: str = "least_cloudy"
     # Write per-frame AOI cloud fraction to <out_dir>/metadata.db (a reduceRegion per
     # frame, so opt-in).
     metadata: bool = False
@@ -124,6 +133,8 @@ class RunConfig:
                                    if render.get("region_line_width") is not None else None),
                 anomaly=anomaly,
                 baseline_years=raw.get("baseline_years"),
+                pool_years=raw.get("pool_years"),
+                pool_strategy=str(raw.get("pool_strategy") or "least_cloudy"),
                 metadata=bool(raw.get("metadata", False)),
                 missions=raw.get("missions"),
                 min_scenes=int(raw.get("min_scenes", 1)),
@@ -181,6 +192,33 @@ class RunConfig:
             if self.anomaly == "climatology" and not (
                     isinstance(self.baseline_years, (list, tuple)) and len(self.baseline_years) == 2):
                 raise ConfigError("anomaly: climatology needs baseline_years: [firstYear, lastYear]")
+        if self.pool_strategy not in POOL_STRATEGIES:
+            raise ConfigError(
+                f"unknown pool_strategy {self.pool_strategy!r}; "
+                f"use one of {sorted(POOL_STRATEGIES)}")
+        if self.pool_years is not None:
+            if self.anomaly is not None:
+                # The climatology baseline is itself multi-year, so a pooled frame
+                # would score a borrowed year against a mean that already contains it.
+                raise ConfigError(
+                    "pool_years cannot be combined with anomaly: the anomaly baseline "
+                    "is itself multi-year, so a frame borrowed from another year would "
+                    "be scored against a climatology that already includes it")
+            if not (isinstance(self.pool_years, (list, tuple))
+                    and len(self.pool_years) == 2):
+                raise ConfigError("pool_years must be [firstYear, lastYear]")
+            try:
+                y0, y1 = int(self.pool_years[0]), int(self.pool_years[1])
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(f"pool_years must be two years: {exc}") from exc
+            if y1 < y0:
+                raise ConfigError(
+                    f"pool_years last year ({y1}) must not precede the first ({y0})")
+            if self.sensor == "landsat" and not self.missions:
+                log.warning(
+                    "pool_years with sensor 'landsat' and no `missions` whitelist: "
+                    "L7/L8/L9 differ radiometrically and L7 is SLC-off, so pooled "
+                    "frames can step between missions; set e.g. missions: [L8, L9]")
         if self.preset or self.aspect or self.upscale != "lanczos":
             from .render import ASPECTS, PRESETS, UPSCALE_METHODS
             if self.preset and self.preset.lower() not in PRESETS and not str(self.preset).isdigit():

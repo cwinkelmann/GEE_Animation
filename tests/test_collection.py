@@ -143,3 +143,37 @@ def test_build_without_cloud_filters_keeps_all_scenes(monkeypatch):
     assert filters == [("filter", ("inList", "mission", ["L8", "L9"]))]
     # region_cloud_fraction is still computed (add_region_cloud_fraction's map runs)
     assert ("map",) in calls
+
+
+def test_build_widens_the_date_range_to_the_pooled_years(monkeypatch):
+    # Cross-year "best month" mode: the candidate scenes live outside [start, end),
+    # so build must filterDate over every pooled year (compositing then buckets them
+    # by calendar period). Without pool_years the range is untouched.
+    def _run(pool_years):
+        calls = []
+        class FakeColl:
+            def filterDate(self, s, e): calls.append(("filterDate", s, e)); return self
+            def filterBounds(self, g): return self
+            def filter(self, f): return self
+            def map(self, fn): return self
+        class FakeSensor:
+            name = "sentinel2"; scene_cloud_property = None
+            def collection(self, ee_module=None): return FakeColl()
+            def cloud_band(self, image, ee_module=None): return image
+            def mask_clouds(self, image, ee_module=None): return image
+        class FakeIndex:
+            def compute(self, sensor, image, ee_module=None): return image
+        monkeypatch.setattr(C, "get_product", lambda s, i: (FakeSensor(), FakeIndex()))
+        ee = types.SimpleNamespace(Filter=types.SimpleNamespace(
+            lt=lambda name, val: ("lt", name, val)))
+        cfg = types.SimpleNamespace(sensor="sentinel2", index="ndvi", missions=None,
+                                    start="2022-05-01", end="2022-08-01",
+                                    max_cloud_percent=60, region_max_cloud_percent=10,
+                                    scale=20, pool_years=pool_years)
+        C.build(cfg, "FRAME", "REGION", ee_module=ee)
+        # cfg itself must not be mutated — callers keep using the nominal range
+        assert (cfg.start, cfg.end) == ("2022-05-01", "2022-08-01")
+        return calls
+
+    assert _run([2019, 2024]) == [("filterDate", "2019-01-01", "2025-01-01")]
+    assert _run(None) == [("filterDate", "2022-05-01", "2022-08-01")]
