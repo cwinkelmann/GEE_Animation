@@ -141,6 +141,42 @@ def test_viz_block_overrides_defaults(tmp_path):
     assert cfg.viz_min == 5 and cfg.viz_max == 35 and cfg.palette == ["#000000", "#ffffff"]
 
 
+def test_crs_defaults_to_auto_when_yaml_omits_it(tmp_path):
+    # Regression guard: an absent render.crs key must NOT pass an explicit
+    # None into RunConfig (which would override the dataclass default).
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi: {frame: {bbox: [0,0,1,1]}, region: {bbox: [0,0,1,1]}}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: sentinel2
+        index: ndvi
+        cadence: monthly
+        max_cloud_percent: 60
+        render: {fps: 4, scale: 20, dimensions: 768}
+    """)
+    cfg = RunConfig.from_yaml(p)
+    assert cfg.crs == "auto"
+
+
+def test_explicit_crs_in_yaml_is_preserved(tmp_path):
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi: {frame: {bbox: [0,0,1,1]}, region: {bbox: [0,0,1,1]}}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: sentinel2
+        index: ndvi
+        cadence: monthly
+        max_cloud_percent: 60
+        render: {fps: 4, scale: 20, dimensions: 768, crs: "EPSG:4326"}
+    """)
+    cfg = RunConfig.from_yaml(p)
+    assert cfg.crs == "EPSG:4326"
+
+
 def test_rejects_unsupported_sensor_index_pair(tmp_path):
     p = _write(tmp_path, """
         name: t

@@ -24,3 +24,4 @@ render:
   fps: 4
   scale: 20                 # metres/pixel (informational; dimensions drives size)
   dimensions: 768           # max width/height of each frame (drives thumbnail size)
+  crs: auto                 # UTM from AOI centroid -> square pixels + correct scale bar

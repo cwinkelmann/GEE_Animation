@@ -35,9 +35,11 @@ class RunConfig:
     fps: float          # frames/sec; fractional allowed (e.g. 0.5 = 2 s per frame)
     scale: float
     dimensions: int
-    # Render CRS (from render.crs). None => EPSG:4326 (plate carrée). "auto" => UTM
-    # zone from the AOI centroid (square pixels; correct scale bar on both axes).
-    crs: str = None
+    # Render CRS (from render.crs). Default "auto" => UTM zone from the AOI
+    # centroid (square pixels; correct scale bar on both axes). Explicit
+    # crs: "EPSG:4326" restores the old plate-carrée behaviour (stretched at
+    # latitude; not recommended).
+    crs: str = "auto"
     # Screen-output controls (from render.*). preset => output long-edge (4k/1440p/
     # 1080p/720p or an int); aspect => canvas aspect (match/16:9/4:3/1:1/21:9);
     # upscale => interpolation used to enlarge the native-resolution frame.
@@ -104,7 +106,7 @@ class RunConfig:
                 fps=float(render["fps"]),
                 scale=float(render["scale"]),
                 dimensions=int(render["dimensions"]),
-                crs=render.get("crs"),
+                crs=render.get("crs") or "auto",
                 preset=(str(render["preset"]) if render.get("preset") is not None else None),
                 aspect=render.get("aspect"),
                 upscale=str(render.get("upscale", "lanczos")),

@@ -25,3 +25,4 @@ render:
   fps: 4
   scale: 10
   dimensions: 768
+  crs: auto
