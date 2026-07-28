@@ -108,3 +108,38 @@ def test_build_skips_coarse_filter_when_no_scene_cloud_property(monkeypatch):
     filters = [c for c in calls if c[0] == "filter"]
     # only the region-fraction lt filter — no coarse lte filter
     assert filters == [("filter", ("lt", "region_cloud_fraction", 0.1))]
+
+
+def test_build_without_cloud_filters_keeps_all_scenes(monkeypatch):
+    # apply_cloud_filters=False (used by inventory.py to see the unfiltered
+    # candidate set): neither the coarse scene-level filter nor the in-region
+    # fraction filter should run, but region_cloud_fraction must still be computed
+    # (the inventory needs it to judge each scene).
+    calls = []
+    class FakeColl:
+        def filterDate(self, s, e): calls.append(("filterDate", s, e)); return self
+        def filterBounds(self, g): calls.append(("filterBounds", g)); return self
+        def filter(self, f): calls.append(("filter", f)); return self
+        def map(self, fn): calls.append(("map",)); return self
+    class FakeSensor:
+        name = "landsat"; scene_cloud_property = "CLOUD_COVER"
+        def collection(self, ee_module=None): calls.append(("collection",)); return FakeColl()
+        def cloud_band(self, image, ee_module=None): return image
+        def mask_clouds(self, image, ee_module=None): return image
+    class FakeIndex:
+        def compute(self, sensor, image, ee_module=None): return image
+    monkeypatch.setattr(C, "get_product", lambda s, i: (FakeSensor(), FakeIndex()))
+    ee = types.SimpleNamespace(
+        Filter=types.SimpleNamespace(
+            lte=lambda name, val: ("lte", name, val),
+            lt=lambda name, val: ("lt", name, val),
+            inList=lambda prop, vals: ("inList", prop, vals)))
+    cfg = types.SimpleNamespace(sensor="landsat", index="lst", missions=None,
+                                start="2022-01-01", end="2022-02-01",
+                                max_cloud_percent=60, region_max_cloud_percent=10, scale=20)
+    C.build(cfg, "FRAME", "REGION", apply_cloud_filters=False, ee_module=ee)
+    filters = [c for c in calls if c[0] == "filter"]
+    # only the mission filter survives — no coarse lte, no region-fraction lt
+    assert filters == [("filter", ("inList", "mission", ["L8", "L9"]))]
+    # region_cloud_fraction is still computed (add_region_cloud_fraction's map runs)
+    assert ("map",) in calls

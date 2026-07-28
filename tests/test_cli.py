@@ -65,6 +65,42 @@ def test_run_debug_month_exports_scenes_and_skips_animation(tmp_path):
     assert out == [tmp_path / "debug"]
 
 
+def test_run_inventory_flag_writes_inventory_and_skips_animation(tmp_path):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        "name: t\nproject: p\n"
+        "aoi:\n  frame: {bbox: [0,0,1,1]}\n  region: {bbox: [0,0,1,1]}\n"
+        "  region_max_cloud_percent: 10\n"
+        'start: "2022-01-01"\nend: "2022-03-01"\n'
+        "sensor: sentinel2\ncadence: monthly\nmax_cloud_percent: 60\n"
+        'ndvi: {min: -0.2, max: 0.9, palette: ["#000000","#ffffff"]}\n'
+        "render: {fps: 2, scale: 20, dimensions: 64}\n"
+    )
+    calls = []
+    deps = types.SimpleNamespace(
+        init=lambda project: calls.append(("init", project)),
+        parse=lambda aoi: "FRAME" if not calls or calls[-1][0] != "parse" else "REGION",
+        build=lambda *a, **k: calls.append(("build",)),      # must NOT be called
+        inventory=lambda cfg, f, r: (calls.append(("inventory",)) or tmp_path / "t_inventory.csv"),
+    )
+    out = run(str(cfg_path), deps=deps, inventory=True)
+    assert ("inventory",) in calls
+    assert not any(c[0] == "build" for c in calls)      # animation path skipped
+    assert out == [tmp_path / "t_inventory.csv"]
+
+
+def test_main_dashdash_inventory_passes_flag_through(monkeypatch):
+    import gee_animation.cli as c
+    seen = {}
+    def fake_run(path, deps=None, **kwargs):
+        seen.update(kwargs)
+        return [Path("out/t_inventory.csv")]
+    monkeypatch.setattr(c, "run", fake_run)
+    rc = main(["--config", "whatever.yaml", "--inventory"])
+    assert rc == 0
+    assert seen == {"inventory": True}
+
+
 def test_run_raises_when_no_frames(tmp_path):
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(

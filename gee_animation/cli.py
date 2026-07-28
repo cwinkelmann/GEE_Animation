@@ -6,7 +6,7 @@ import sys
 import types
 from pathlib import Path
 
-from . import anomaly, auth, aoi, collection, compositing, debug, metadata, render
+from . import anomaly, auth, aoi, collection, compositing, debug, inventory, metadata, render
 from .config import RunConfig, ConfigError
 
 DEFAULT_DEPS = types.SimpleNamespace(
@@ -18,10 +18,11 @@ DEFAULT_DEPS = types.SimpleNamespace(
     metadata=metadata.write_frame_metadata,
     render=render.render,
     debug=debug.export_month_scenes,
+    inventory=inventory.write_inventory,
 )
 
 
-def run(config_path: str, deps=DEFAULT_DEPS) -> list[Path]:
+def run(config_path: str, deps=DEFAULT_DEPS, inventory: bool = False) -> list[Path]:
     cfg = RunConfig.from_yaml(config_path)
     deps.init(cfg.project)
     frame_geom = deps.parse(cfg.frame_aoi)
@@ -29,6 +30,10 @@ def run(config_path: str, deps=DEFAULT_DEPS) -> list[Path]:
     if getattr(cfg, "debug_month", None):
         # Debug mode: export one month's input scenes + median, not the animation.
         return [deps.debug(cfg, frame_geom, region_geom, cfg.debug_month)]
+    if inventory:
+        # Inventory mode: list every candidate scene + rejection reason, not the
+        # animation (request #7 — why smoother transitions aren't possible).
+        return [deps.inventory(cfg, frame_geom, region_geom)]
     coll = deps.build(cfg, frame_geom, region_geom)
     frames = deps.monthly_median(coll, cfg)
     if not frames:
@@ -44,9 +49,13 @@ def run(config_path: str, deps=DEFAULT_DEPS) -> list[Path]:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="gee-animation")
     parser.add_argument("--config", required=True, help="path to config.yaml")
+    parser.add_argument("--inventory", action="store_true",
+                        help="write a per-scene usable/rejected inventory CSV "
+                             "(<out_dir>/<name>_inventory.csv) instead of rendering")
     args = parser.parse_args(argv)
+    kwargs = {"inventory": True} if args.inventory else {}
     try:
-        paths = run(args.config)
+        paths = run(args.config, **kwargs)
     except (ConfigError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -46,7 +46,15 @@ def add_region_cloud_fraction(image, region, scale, cloud_band, ee_module=ee):
     return image.set("region_cloud_fraction", frac)
 
 
-def build(cfg, frame_geom, region_geom, ee_module=ee):
+def build(cfg, frame_geom, region_geom, apply_cloud_filters: bool = True, ee_module=ee):
+    """Build the (sensor, index) ImageCollection for `cfg`'s AOI/date range.
+
+    `apply_cloud_filters=False` (default True) skips both the coarse scene-level
+    cloud filter and the in-region cloud-fraction filter, while still computing
+    `region_cloud_fraction` on every scene — this is what `inventory.py` needs to
+    see the full unfiltered candidate set, with the same per-scene cloud metadata
+    the filtered path would have judged them by.
+    """
     sensor, index = get_product(cfg.sensor, cfg.index)
     if getattr(index, "build_collection", None) is not None:
         # Index supplies its own (already date/bounds-filtered) source collection,
@@ -65,14 +73,16 @@ def build(cfg, frame_geom, region_geom, ee_module=ee):
     # Coarse scene-level cloud pre-filter — only sensors that carry a per-scene
     # cloud metadata property (S2, Landsat); MODIS has none, so skip it and rely
     # on the in-region QA cloud-fraction filter below.
-    if sensor.scene_cloud_property is not None:
+    if apply_cloud_filters and sensor.scene_cloud_property is not None:
         coll = coll.filter(
             ee_module.Filter.lte(sensor.scene_cloud_property, cfg.max_cloud_percent))
+    coll = coll.map(lambda img: add_region_cloud_fraction(
+        img, region_geom, cfg.scale, sensor.cloud_band, ee_module))
+    if apply_cloud_filters:
+        coll = coll.filter(
+            ee_module.Filter.lt("region_cloud_fraction", cfg.region_max_cloud_percent / 100.0))
     coll = (
         coll
-        .map(lambda img: add_region_cloud_fraction(
-            img, region_geom, cfg.scale, sensor.cloud_band, ee_module))
-        .filter(ee_module.Filter.lt("region_cloud_fraction", cfg.region_max_cloud_percent / 100.0))
         .map(lambda img: sensor.mask_clouds(img, ee_module))
         .map(lambda img: index.compute(sensor, img, ee_module))
     )
