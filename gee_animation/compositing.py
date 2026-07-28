@@ -5,8 +5,6 @@ import logging
 from collections import Counter, namedtuple
 from datetime import date, datetime, timezone
 
-import ee
-
 log = logging.getLogger(__name__)
 
 # n_scenes = how many scenes went into the period's median (None if unknown, e.g. a
@@ -57,12 +55,14 @@ def month_starts(start: str, end: str) -> list[str]:
     return [p_start for _, p_start, _ in period_starts(start, end, "monthly")]
 
 
-def composite(collection, cfg, ee_module=ee) -> list[Frame]:
+def composite(collection, cfg) -> list[Frame]:
     # Find which periods actually have imagery in ONE server-side call: fetch every
     # scene's system:time_start and bucket it into cadence periods client-side. The
     # naive alternative — a `filterDate(period).size().getInfo()` per period —
     # issues one round-trip per period, each re-evaluating the whole (cloud-filtered)
     # collection, and does not scale to multi-year ranges or finer cadences.
+    # (No `ee_module` param: unlike the old tag-then-aggregate implementation, nothing
+    # here calls into the `ee` API — bucketing is pure Python over the fetched millis.)
     cadence = getattr(cfg, "cadence", "monthly")
     periods = period_starts(cfg.start, cfg.end, cadence)
     millis = collection.aggregate_array("system:time_start").getInfo()

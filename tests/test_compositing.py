@@ -70,14 +70,10 @@ class FakeCollection:
         return FakeFiltered(self.counts.get(start, 0))
 
 
-def _fake_ee():
-    return types.SimpleNamespace()
-
-
 def test_monthly_median_skips_empty_months_and_reports_scene_counts():
     cfg = types.SimpleNamespace(start="2022-01-01", end="2022-04-01")
     coll = FakeCollection({"2022-01-01": 5, "2022-02-01": 0, "2022-03-01": 3})
-    frames = monthly_median(coll, cfg, ee_module=_fake_ee())
+    frames = monthly_median(coll, cfg)
     assert [(f.label, f.n_scenes) for f in frames] == [("2022-01", 5), ("2022-03", 3)]
     assert all(isinstance(f, Frame) for f in frames)   # Feb skipped (0 images)
 
@@ -86,14 +82,14 @@ def test_monthly_median_respects_min_scenes():
     # min_scenes=4 -> the 3-scene March median is dropped (median-of-few, not trusted)
     cfg = types.SimpleNamespace(start="2022-01-01", end="2022-04-01", min_scenes=4)
     coll = FakeCollection({"2022-01-01": 5, "2022-02-01": 0, "2022-03-01": 3})
-    frames = monthly_median(coll, cfg, ee_module=_fake_ee())
+    frames = monthly_median(coll, cfg)
     assert [(f.label, f.n_scenes) for f in frames] == [("2022-01", 5)]
 
 
 def test_composite_labels_sub_monthly_periods_with_dates():
     cfg = types.SimpleNamespace(start="2022-01-01", end="2022-02-01", cadence="semimonthly")
     coll = FakeCollection({"2022-01-01": 3, "2022-01-16": 2})
-    frames = composite(coll, cfg, ee_module=_fake_ee())
+    frames = composite(coll, cfg)
     assert [(f.label, f.n_scenes) for f in frames] == [
         ("2022-01-01", 3), ("2022-01-16", 2),
     ]
@@ -111,5 +107,5 @@ def test_composite_issues_a_single_getInfo_round_trip():
 
     cfg = types.SimpleNamespace(start="2022-01-01", end="2022-04-01")
     coll = CountingCollection({"2022-01-01": 5, "2022-02-01": 0, "2022-03-01": 3})
-    composite(coll, cfg, ee_module=_fake_ee())
+    composite(coll, cfg)
     assert calls == ["system:time_start"]
