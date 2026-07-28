@@ -123,10 +123,12 @@ def _colorbar_ticks(vmin: float, vmax: float, units: str) -> list:
     labels.
     """
     ticks = [(vmin, f"{vmin:g}", "l", False)]
-    if vmin < 0 < vmax:
+    zero_shown = vmin < 0 < vmax
+    if zero_shown:
         ticks.append((0.0, "0", "m", False))
     vmid = (vmin + vmax) / 2.0
-    ticks.append((vmid, f"{vmid:g}", "m", True))
+    if not (zero_shown and vmid == 0.0):   # avoid a duplicate "0" tick (e.g. -3..3)
+        ticks.append((vmid, f"{vmid:g}", "m", True))
     max_label = f"{vmax:g} {units}" if units else f"{vmax:g}"
     ticks.append((vmax, max_label, "r", False))
     return ticks
