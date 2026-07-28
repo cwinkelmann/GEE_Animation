@@ -38,18 +38,34 @@ def _period_label(iso_date: str, periods) -> str | None:
     return None
 
 
-def _judge(sensor, cfg, scene_cloud_pct, region_cloud_pct) -> tuple[bool, str]:
-    """(usable, reason) for one scene, in the same order `collection.build` filters:
-    the coarse scene-level cloud property first, then the in-region cloud fraction.
-    Mirrors real Earth Engine `Filter.lt` semantics, where a missing (null) property
-    fails the filter rather than passing it."""
+def _judge(sensor, cfg, scene_cloud_pct, region_cloud_frac) -> tuple[bool, str]:
+    """(usable, reason) for one scene, in the same order AND with the same boundary
+    semantics `collection.build` applies:
+
+    - scene-level cloud property: `Filter.lte(prop, max_cloud_percent)` keeps the
+      scene, so the negation that rejects it is strictly `>`.
+    - in-region cloud fraction: `Filter.lt("region_cloud_fraction", threshold)` keeps
+      the scene, so the negation that rejects it is `>=` — a scene sitting exactly
+      on the threshold is dropped by the real filter, not kept.
+
+    `region_cloud_frac` is the RAW (unrounded) 0..1 fraction, and the `>=` check is
+    done against it before any display rounding — rounding first (e.g. a raw 0.1004
+    display-rounds to "10.0%") would judge some at-threshold scenes as usable when
+    the real filter rejects them, and vice versa. Only the reason string's percentage
+    is rounded, for display.
+
+    A missing (None) region fraction (scene fully masked in-region, reduceRegion
+    empty) mirrors real EE `Filter.lt` semantics against a null property: the filter
+    fails (does not evaluate true), so the scene is excluded, not passed.
+    """
     if (sensor.scene_cloud_property is not None and scene_cloud_pct is not None
             and scene_cloud_pct > cfg.max_cloud_percent):
         return False, f"scene cloud {scene_cloud_pct:.0f}% > {cfg.max_cloud_percent:.0f}%"
-    if region_cloud_pct is None:
+    if region_cloud_frac is None:
         return False, "region cloud fraction unavailable (scene fully masked)"
-    if region_cloud_pct > cfg.region_max_cloud_percent:
-        return False, f"region cloud {region_cloud_pct:.0f}% > {cfg.region_max_cloud_percent:.0f}%"
+    if region_cloud_frac >= cfg.region_max_cloud_percent / 100.0:
+        return False, (f"region cloud {region_cloud_frac * 100:.0f}% >= "
+                       f"{cfg.region_max_cloud_percent:.0f}%")
     return True, ""
 
 
@@ -94,9 +110,11 @@ def scene_inventory(cfg, frame_geom, region_geom, build=_build, ee_module=ee) ->
             continue
         scene_cloud = None if scene_clouds is None else scene_clouds[i]
         region_frac = region_clouds[i]
+        # Judge against the raw fraction (see _judge's docstring); round only for
+        # the record's display column.
         region_cloud_pct = None if region_frac is None else round(region_frac * 100, 1)
         mission = missions[i] if missions is not None else sensor.name
-        usable, reason = _judge(sensor, cfg, scene_cloud, region_cloud_pct)
+        usable, reason = _judge(sensor, cfg, scene_cloud, region_frac)
         records.append(SceneRecord(
             period_label=label, date=iso, mission=mission,
             scene_cloud_pct=(None if scene_cloud is None else round(scene_cloud, 1)),

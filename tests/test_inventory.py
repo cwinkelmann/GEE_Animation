@@ -74,7 +74,7 @@ def test_scene_inventory_marks_rejected_scenes_with_reason(monkeypatch):
                                 ee_module=_fake_ee(calls))
     assert [r.usable for r in records] == [True, False]
     assert records[0].reason == ""
-    assert records[1].reason == "region cloud 34% > 10%"
+    assert records[1].reason == "region cloud 34% >= 10%"
     assert [r.period_label for r in records] == ["2022-01", "2022-01"]
     assert records[1].region_cloud_pct == 34.0
 
@@ -94,6 +94,65 @@ def test_scene_inventory_reports_scene_cloud_rejection(monkeypatch):
     assert records[0].reason == "scene cloud 72% > 60%"
 
 
+def test_scene_inventory_rejects_region_cloud_exactly_at_threshold(monkeypatch):
+    # collection.build's real filter is Filter.lt("region_cloud_fraction", threshold)
+    # -- KEEPS the scene only when strictly below threshold, so a scene sitting
+    # exactly ON the threshold (region_max_cloud_percent=10 -> raw fraction 0.10) is
+    # dropped by the real pipeline. A strict `>` comparison here would wrongly call
+    # it usable; this pins the `>=` fix.
+    sensor = FakeSensor("sentinel2", "CLOUDY_PIXEL_PERCENTAGE")
+    monkeypatch.setattr(I, "get_product", lambda s, i: (sensor, None))
+    coll = FakeCollection({
+        "system:time_start": [_ms("2022-01-05")],
+        "region_cloud_fraction": [0.10],
+        "CLOUDY_PIXEL_PERCENTAGE": [5.0],
+    })
+    records = I.scene_inventory(_cfg(region_max_cloud_percent=10), "FRAME", "REGION",
+                                build=lambda cfg, f, r, apply_cloud_filters=True, ee_module=None: coll,
+                                ee_module=_fake_ee([]))
+    assert records[0].usable is False
+    assert records[0].reason == "region cloud 10% >= 10%"
+
+
+def test_scene_inventory_judges_raw_region_fraction_not_the_rounded_display_value(monkeypatch):
+    # Both fractions display-round to "10.0%" at one decimal, but only one of them is
+    # actually >= the 0.10 threshold in the RAW value the real filter sees. Judging
+    # against the rounded display value (rather than the raw fraction) would get one
+    # of these two backwards.
+    sensor = FakeSensor("sentinel2", "CLOUDY_PIXEL_PERCENTAGE")
+    monkeypatch.setattr(I, "get_product", lambda s, i: (sensor, None))
+    coll = FakeCollection({
+        "system:time_start": [_ms("2022-01-05"), _ms("2022-01-06")],
+        "region_cloud_fraction": [0.0996, 0.1004],   # both round to 10.0% for display
+        "CLOUDY_PIXEL_PERCENTAGE": [5.0, 5.0],
+    })
+    records = I.scene_inventory(_cfg(region_max_cloud_percent=10), "FRAME", "REGION",
+                                build=lambda cfg, f, r, apply_cloud_filters=True, ee_module=None: coll,
+                                ee_module=_fake_ee([]))
+    assert [r.region_cloud_pct for r in records] == [10.0, 10.0]   # display value ties
+    assert [r.usable for r in records] == [True, False]            # raw value decides
+
+
+def test_scene_inventory_handles_missing_region_cloud_fraction(monkeypatch):
+    # A scene fully masked over the region (reduceRegion finds no valid pixel) comes
+    # back with region_cloud_fraction=None. Real EE Filter.lt against a null property
+    # does not evaluate true, so the real pipeline excludes the scene -- the
+    # inventory must report it as rejected, not silently usable.
+    sensor = FakeSensor("sentinel2", "CLOUDY_PIXEL_PERCENTAGE")
+    monkeypatch.setattr(I, "get_product", lambda s, i: (sensor, None))
+    coll = FakeCollection({
+        "system:time_start": [_ms("2022-01-05")],
+        "region_cloud_fraction": [None],
+        "CLOUDY_PIXEL_PERCENTAGE": [5.0],
+    })
+    records = I.scene_inventory(_cfg(), "FRAME", "REGION",
+                                build=lambda cfg, f, r, apply_cloud_filters=True, ee_module=None: coll,
+                                ee_module=_fake_ee([]))
+    assert records[0].usable is False
+    assert records[0].region_cloud_pct is None
+    assert records[0].reason == "region cloud fraction unavailable (scene fully masked)"
+
+
 def test_scene_inventory_handles_sensor_without_cloud_property(monkeypatch):
     # MODIS-style sensor: scene_cloud_property is None -> no aggregate_array for it,
     # and every record's scene_cloud_pct column is None (not raised).
@@ -109,7 +168,7 @@ def test_scene_inventory_handles_sensor_without_cloud_property(monkeypatch):
     assert [r.scene_cloud_pct for r in records] == [None, None]
     assert [r.mission for r in records] == ["modis", "modis"]
     assert [r.usable for r in records] == [True, False]
-    assert records[1].reason == "region cloud 50% > 10%"
+    assert records[1].reason == "region cloud 50% >= 10%"
 
 
 def test_scene_inventory_issues_a_single_getinfo(monkeypatch):
