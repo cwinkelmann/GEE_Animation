@@ -56,6 +56,9 @@ class RunConfig:
     metadata: bool = False
     out_dir: str = "out"
     draw_region: bool = True
+    # Region outline core width in px (from render.region_line_width). None => the
+    # current max(2, h/430) behaviour (see render.draw_region).
+    region_line_width: int = None
     # Optional Landsat mission whitelist (e.g. ["L8", "L9"]). None => sensor default
     # (thermal indices default to L8/L9; see collection.build).
     missions: list = None
@@ -112,6 +115,8 @@ class RunConfig:
                 upscale=str(render.get("upscale", "lanczos")),
                 out_dir=str(raw.get("out_dir", "out")),
                 draw_region=bool(raw.get("draw_region", True)),
+                region_line_width=(int(render["region_line_width"])
+                                   if render.get("region_line_width") is not None else None),
                 anomaly=anomaly,
                 baseline_years=raw.get("baseline_years"),
                 metadata=bool(raw.get("metadata", False)),
@@ -149,6 +154,8 @@ class RunConfig:
                     f"unknown missions {bad}; valid Landsat missions: {sorted(valid)}")
         if self.min_scenes < 1:
             raise ConfigError("min_scenes must be >= 1")
+        if self.region_line_width is not None and self.region_line_width < 1:
+            raise ConfigError("render.region_line_width must be >= 1")
         if self.anomaly is not None:
             from .products import THERMAL_INDICES
             if self.anomaly not in ("climatology", "reference"):

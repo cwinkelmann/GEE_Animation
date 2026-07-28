@@ -177,6 +177,27 @@ def test_explicit_crs_in_yaml_is_preserved(tmp_path):
     assert cfg.crs == "EPSG:4326"
 
 
+def test_region_line_width_defaults_to_none(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.region_line_width is None
+
+
+def test_region_line_width_read_from_render_block(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, region_line_width: 5}"))
+    cfg = RunConfig.from_yaml(p)
+    assert cfg.region_line_width == 5
+
+
+def test_rejects_non_positive_region_line_width(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, region_line_width: 0}"))
+    with pytest.raises(ConfigError, match="region_line_width"):
+        RunConfig.from_yaml(p)
+
+
 def test_rejects_unsupported_sensor_index_pair(tmp_path):
     p = _write(tmp_path, """
         name: t

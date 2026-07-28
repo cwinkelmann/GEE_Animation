@@ -90,6 +90,31 @@ def test_draw_region_maps_coords_and_draws_outline():
     assert out[50, 50].tolist() == [0, 0, 0]   # interior untouched (outline only)
 
 
+def test_draw_region_antialiases_diagonal_edges():
+    from gee_animation.render import draw_region
+    rgb = np.zeros((100, 100, 3), np.uint8)
+    bounds = (0.0, 0.0, 10.0, 10.0)
+    rings = [[(1, 1), (9, 9), (9, 1), (1, 1)]]   # includes a diagonal edge
+    out = draw_region(rgb, bounds, rings, color=(255, 0, 0), width=2)
+    red = out[..., 0]
+    # PIL's ImageDraw.line has no antialiasing, so a hard-line renderer only ever
+    # produces 0 or 255 on this channel; the supersampled-then-downsampled mask must
+    # produce in-between values along the diagonal edge.
+    assert np.any((red > 0) & (red < 255))
+
+
+def test_draw_region_respects_configured_line_width():
+    from gee_animation.render import draw_region
+    rgb = np.zeros((100, 100, 3), np.uint8)
+    bounds = (0.0, 0.0, 10.0, 10.0)
+    rings = [[(2, 2), (8, 2), (8, 8), (2, 8), (2, 2)]]
+    thin = draw_region(rgb.copy(), bounds, rings, color=(255, 0, 0), width=1)
+    thick = draw_region(rgb.copy(), bounds, rings, color=(255, 0, 0), width=5)
+    thin_px = int(np.sum(thin[..., 0] > 0))
+    thick_px = int(np.sum(thick[..., 0] > 0))
+    assert thick_px > thin_px
+
+
 def test_render_applies_region_overlay_when_enabled(tmp_path, monkeypatch):
     import gee_animation.render as r
     cfg = _cfg(tmp_path)
@@ -106,6 +131,49 @@ def test_render_applies_region_overlay_when_enabled(tmp_path, monkeypatch):
     assert len(calls) == 1
     assert calls[0][0] == (0.0, 0.0, 1.0, 1.0)
     assert calls[0][1] == [[(0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.25, 0.75), (0.25, 0.25)]]
+
+
+def test_render_builds_region_masks_once_across_frames(tmp_path, monkeypatch):
+    # The rings/bounds/frame size are identical every frame, so the (expensive,
+    # supersampled) mask construction must be paid once, not once per frame.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.draw_region = True
+    cfg.frame_aoi = {"bbox": [0.0, 0.0, 1.0, 1.0]}
+    cfg.region_aoi = {"bbox": [0.25, 0.25, 0.75, 0.75]}
+    calls = []
+    real_region_masks = r._region_masks
+
+    def counting_region_masks(*a, **k):
+        calls.append(1)
+        return real_region_masks(*a, **k)
+
+    monkeypatch.setattr(r, "_region_masks", counting_region_masks)
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
+
+    frames = [Frame("2022-01", object()), Frame("2022-02", object()), Frame("2022-03", object())]
+    render(frames, cfg, fetch=fake_fetch, geometry=None)
+    assert len(calls) == 1
+
+
+def test_render_threads_region_line_width_into_draw_region(tmp_path, monkeypatch):
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.draw_region = True
+    cfg.frame_aoi = {"bbox": [0.0, 0.0, 1.0, 1.0]}
+    cfg.region_aoi = {"bbox": [0.25, 0.25, 0.75, 0.75]}
+    cfg.region_line_width = 7
+    widths = []
+    monkeypatch.setattr(r, "draw_region",
+                        lambda rgb, bounds, rings, **kw: (widths.append(kw.get("width")) or rgb))
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
+
+    render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+    assert widths == [7]
 
 
 def test_render_skips_region_overlay_when_disabled(tmp_path, monkeypatch):

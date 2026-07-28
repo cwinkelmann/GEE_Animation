@@ -269,30 +269,81 @@ def _region_rings(aoi_cfg: dict) -> list:
     return _geom_rings(_aoi_geom_dict(aoi_cfg))
 
 
+def _region_ss(h: int) -> int:
+    """Supersampling factor for `_region_masks`: 4x up to ~1200 px tall frames, 2x
+    above — a 4K frame at 4x would allocate a ~130 MB single-channel mask."""
+    return 4 if h <= 1200 else 2
+
+
+def _region_masks(bounds: tuple, rings: list, shape: tuple, width: int) -> tuple:
+    """Antialiased (casing_mask, core_mask) — float32 arrays in `shape`, 0..1 alpha.
+
+    PIL's `ImageDraw.line` has no antialiasing, so every diagonal ring segment drawn
+    directly at frame resolution is a hard staircase. Instead each ring is drawn
+    hard-edged (using the existing lon/lat -> pixel mapping) into an `L`-mode canvas
+    at `_region_ss(h)`x the frame size, then LANCZOS-downsampled back down — the
+    downsample is what turns the staircase into a smooth, antialiased edge. The
+    supersampled line width carries a small fixed pad: LANCZOS attenuates a thin
+    line's peak value, and without the pad a nominal width=1 core would downsample to
+    a translucent (<255) centreline instead of a fully opaque one.
+    """
+    h, w = shape
+    width = max(width, round(h / 430))        # scale the outline for high-res output
+    cw = width + 2 * max(1, width // 2 + 1)   # dark casing is wider than the core
+    ss = _region_ss(h)
+    pad = max(1, ss // 2)
+    minx, miny, maxx, maxy = bounds
+    dx = (maxx - minx) or 1.0
+    dy = (maxy - miny) or 1.0
+
+    def _mask(line_width: int) -> np.ndarray:
+        big = Image.new("L", (w * ss, h * ss), 0)
+        draw = ImageDraw.Draw(big)
+        for ring in rings:
+            pts = [((lon - minx) / dx * w * ss, (maxy - lat) / dy * h * ss)
+                   for lon, lat in ring]
+            if len(pts) >= 2:
+                draw.line(pts, fill=255, width=line_width * ss + pad, joint="curve")
+        small = big.resize((w, h), Image.LANCZOS)
+        return np.asarray(small, dtype=np.float32) / 255.0
+
+    return _mask(cw), _mask(width)
+
+
+def _composite_region(rgb: np.ndarray, casing_mask: np.ndarray, core_mask: np.ndarray,
+                      color=REGION_OUTLINE_RGB, casing=(0, 0, 0)) -> np.ndarray:
+    """Alpha-composite the dark casing then the bright core through their masks.
+
+    Cheap (no drawing) — meant to be called once per frame against masks built once
+    by `_region_masks`, since the rings/bounds/frame size are identical every frame.
+    """
+    out = rgb.astype(np.float32)
+    for mask, rgb_color in ((casing_mask, casing), (core_mask, color)):
+        a = mask[..., None]
+        out = out * (1 - a) + np.asarray(rgb_color, dtype=np.float32) * a
+    return out.astype(np.uint8)
+
+
 def draw_region(rgb: np.ndarray, bounds: tuple, rings: list,
-                color=REGION_OUTLINE_RGB, width: int = 2, casing=(0, 0, 0)) -> np.ndarray:
+                color=REGION_OUTLINE_RGB, width: int = 2, casing=(0, 0, 0),
+                masks: tuple | None = None) -> np.ndarray:
     """Draw region polygon outlines onto an RGB frame.
 
     `bounds` is the frame extent (minLon, minLat, maxLon, maxLat); the EE thumbnail
     is rendered in linear EPSG:4326 over this extent, so lon/lat map to pixels
     linearly (top row = maxLat). Each ring is drawn as a dark `casing` under the bright
     `color` core, so the outline stays visible on any background — including the amber
-    core over hot (yellow/red) LST pixels, where it would otherwise vanish.
+    core over hot (yellow/red) LST pixels, where it would otherwise vanish. Edges are
+    antialiased via `_region_masks` (see there).
+
+    `masks`, if given, is a precomputed `(casing_mask, core_mask)` pair (from
+    `_region_masks`) to composite directly, skipping the (comparatively expensive)
+    supersampled draw — callers that draw many frames over the same rings/bounds/size
+    (e.g. `render()`) build the masks once and pass them to every call.
     """
-    img = Image.fromarray(rgb.astype(np.uint8), "RGB")
-    draw = ImageDraw.Draw(img)
-    h, w = rgb.shape[:2]
-    width = max(width, round(h / 430))   # scale the outline for high-res output
-    cw = width + 2 * max(1, width // 2 + 1)   # dark casing is wider than the core
-    minx, miny, maxx, maxy = bounds
-    dx = (maxx - minx) or 1.0
-    dy = (maxy - miny) or 1.0
-    for ring in rings:
-        pts = [((lon - minx) / dx * w, (maxy - lat) / dy * h) for lon, lat in ring]
-        if len(pts) >= 2:
-            draw.line(pts, fill=casing, width=cw)     # dark halo (visible on light areas)
-            draw.line(pts, fill=color, width=width)   # bright core (visible on dark areas)
-    return np.asarray(img)
+    if masks is None:
+        masks = _region_masks(bounds, rings, rgb.shape[:2], width)
+    return _composite_region(rgb, *masks, color=color, casing=casing)
 
 
 def _frame_span_m(bounds: tuple) -> float:
@@ -551,6 +602,8 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     composite = _is_composite(cfg)
     info_text = _info_text(cfg)
     output = None      # (cw, ch, pw, ph, method) screen layout, computed on frame 1
+    region_width = getattr(cfg, "region_line_width", None) or 2
+    region_masks = None   # (casing_mask, core_mask); built once below, then reused
     rgb_frames: list[np.ndarray] = []
     for frame in frames:
         arr, valid = fetch(frame.image, cfg, geometry)
@@ -571,7 +624,13 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
             rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4)
         rgb = draw_info_bar(rgb, info_text)
         if draw_overlay:
-            rgb = draw_region(rgb, proj_bounds, proj_rings)
+            # The rings, bounds and frame size are identical every frame, so the
+            # (comparatively expensive) supersampled masks are built once here on the
+            # first frame; every later frame only pays for the cheap alpha composite
+            # in draw_region/_composite_region.
+            if region_masks is None:
+                region_masks = _region_masks(proj_bounds, proj_rings, rgb.shape[:2], region_width)
+            rgb = draw_region(rgb, proj_bounds, proj_rings, width=region_width, masks=region_masks)
         if bounds is not None:
             rgb = draw_scale_bar(rgb, frame_width_m)
         if output:
