@@ -101,9 +101,16 @@ def build(cfg, frame_geom, region_geom, *, apply_cloud_filters: bool = True, ee_
     if apply_cloud_filters:
         coll = coll.filter(
             ee_module.Filter.lt("region_cloud_fraction", cfg.region_max_cloud_percent / 100.0))
+    # index.compute derives a brand-new image (select/band-math/rename), which drops
+    # every source property except the system:time_start each compute fn re-sets
+    # explicitly (see products.py's NOTE). copyProperties restores the rest —
+    # region_cloud_fraction, the sensor's scene cloud property, mission — so
+    # inventory.scene_inventory and compositing.pooled_composite can still read them
+    # back via aggregate_array() on the built collection.
     coll = (
         coll
         .map(lambda img: sensor.mask_clouds(img, ee_module))
-        .map(lambda img: index.compute(sensor, img, ee_module))
+        .map(lambda img: ee_module.Image(
+            index.compute(sensor, img, ee_module).copyProperties(img, img.propertyNames())))
     )
     return coll

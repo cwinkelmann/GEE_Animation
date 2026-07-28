@@ -2,6 +2,8 @@ import types
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from gee_animation import inventory as I
 
 
@@ -188,6 +190,25 @@ def test_scene_inventory_issues_a_single_getinfo(monkeypatch):
                                 ee_module=_fake_ee(calls))
     assert calls == ["getInfo"]
     assert [r.mission for r in records] == ["L8", "L9", "L8"]
+
+
+def test_scene_inventory_raises_runtime_error_on_length_mismatch(monkeypatch):
+    # Regression for the live-EE bug: index.compute derives a brand-new image and
+    # drops every property except system:time_start, so aggregate_array on a
+    # dropped property silently returns [] instead of one value per scene.
+    # scene_inventory must fail loudly (RuntimeError naming the property and both
+    # lengths), not index a short array and raise a bare IndexError.
+    sensor = FakeSensor("sentinel2", "CLOUDY_PIXEL_PERCENTAGE")
+    monkeypatch.setattr(I, "get_product", lambda s, i: (sensor, None))
+    coll = FakeCollection({
+        "system:time_start": [_ms("2022-01-05"), _ms("2022-01-20")],
+        "region_cloud_fraction": [],   # dropped -- length mismatch vs. 2 timestamps
+        "CLOUDY_PIXEL_PERCENTAGE": [5.0, 12.0],
+    })
+    with pytest.raises(RuntimeError, match="misaligned"):
+        I.scene_inventory(_cfg(), "FRAME", "REGION",
+                          build=lambda cfg, f, r, apply_cloud_filters=True, ee_module=None: coll,
+                          ee_module=_fake_ee([]))
 
 
 def test_write_inventory_writes_csv_and_logs_period_summary(tmp_path, monkeypatch, caplog):

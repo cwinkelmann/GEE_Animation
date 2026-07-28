@@ -102,6 +102,23 @@ def scene_inventory(cfg, frame_geom, region_geom, build=_build, ee_module=ee) ->
     scene_clouds = data.get("scene_cloud")
     missions = data.get("mission")
 
+    # Same guard as compositing.pooled_composite: aggregate_array silently returns []
+    # for a property no image in the collection carries, rather than erroring. Without
+    # this check a length mismatch would index scene_clouds[i]/region_clouds[i] out of
+    # range (IndexError) or, worse, silently attribute one scene's cloud value to
+    # another — the kind of wrong-data-in-a-stakeholder-report failure this module
+    # must never produce.
+    n = len(times)
+    for prop_name, arr in (
+        ("region_cloud_fraction", region_clouds),
+        (sensor.scene_cloud_property, scene_clouds),
+        ("mission", missions),
+    ):
+        if arr is not None and len(arr) != n:
+            raise RuntimeError(
+                f"scene inventory metadata is misaligned: {n} timestamps but "
+                f"{len(arr)} {prop_name} values")
+
     records: list[SceneRecord] = []
     for i, t in enumerate(times):
         iso = datetime.fromtimestamp(t / 1000, tz=timezone.utc).date().isoformat()
