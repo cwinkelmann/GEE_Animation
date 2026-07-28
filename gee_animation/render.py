@@ -113,6 +113,25 @@ def apply_nodata(rgb: np.ndarray, valid: np.ndarray, color=NODATA_RGB) -> np.nda
     return out
 
 
+def _colorbar_ticks(vmin: float, vmax: float, units: str) -> list:
+    """Ordered tick specs ``(value, label, anchor, droppable)`` for the colorbar.
+
+    min (left-anchored) and max (right-anchored, with units appended) always show.
+    An exact 0 is added only when the range straddles it (anomaly renders); it is
+    never dropped. The midpoint is always ticked but flagged droppable — the caller
+    may omit *just its label* when the ramp is too narrow for three non-overlapping
+    labels.
+    """
+    ticks = [(vmin, f"{vmin:g}", "l", False)]
+    if vmin < 0 < vmax:
+        ticks.append((0.0, "0", "m", False))
+    vmid = (vmin + vmax) / 2.0
+    ticks.append((vmid, f"{vmid:g}", "m", True))
+    max_label = f"{vmax:g} {units}" if units else f"{vmax:g}"
+    ticks.append((vmax, max_label, "r", False))
+    return ticks
+
+
 def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4) -> np.ndarray:
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
@@ -121,16 +140,57 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4) -> np.ndarray:
     bar_w = max(20, int(w * 0.4))
     bar_h = max(6, h // 20)
     x0, y0 = max(4, w // 200), y_offset
+    vmin, vmax = cfg.viz_min, cfg.viz_max
     ramp = colorize(
-        np.linspace(cfg.viz_min, cfg.viz_max, bar_w)[None, :],
-        cfg.viz_min, cfg.viz_max, cfg.palette,
+        np.linspace(vmin, vmax, bar_w)[None, :],
+        vmin, vmax, cfg.palette,
     )[0]  # (bar_w, 3)
     for i in range(bar_w):
         c = tuple(int(v) for v in ramp[i])
         draw.line([(x0 + i, y0), (x0 + i, y0 + bar_h)], fill=c)
     draw.rectangle([x0, y0, x0 + bar_w, y0 + bar_h], outline=(255, 255, 255, 255), width=lw)
-    draw.text((x0, y0 + bar_h + lw + 1), f"{cfg.index.upper()} {cfg.viz_min:g}..{cfg.viz_max:g}",
-              fill=(255, 255, 255, 255), font=font)
+
+    # Units: the index's own (e.g. "°C" for a thermal index); a climatology anomaly
+    # renders z-scores instead, so its unit overrides whatever the index carries.
+    meta = _index_meta(cfg)
+    units = "σ" if getattr(cfg, "anomaly", None) == "climatology" else (meta.units if meta else "")
+    ticks = _colorbar_ticks(vmin, vmax, units)
+
+    def _x(v: float) -> float:
+        span = (vmax - vmin) or 1.0
+        return x0 + (v - vmin) / span * bar_w
+
+    def _label_bounds(text: str, x: float, anchor: str) -> tuple:
+        tb = draw.textbbox((0, 0), text, font=font)
+        tw = tb[2] - tb[0]
+        if anchor == "l":
+            return x, x + tw
+        if anchor == "r":
+            return x - tw, x
+        return x - tw / 2, x + tw / 2
+
+    # A droppable (mid) label is measured against every other label, as
+    # draw_scale_bar measures its label with textbbox; skipped if it would overlap.
+    gap = max(2, lw * 2)
+    show_label = [True] * len(ticks)
+    for i, (v, label, anchor, droppable) in enumerate(ticks):
+        if not droppable:
+            continue
+        lo, hi = _label_bounds(label, _x(v), anchor)
+        show_label[i] = all(
+            hi + gap <= _label_bounds(o_label, _x(o_v), o_anchor)[0]
+            or lo - gap >= _label_bounds(o_label, _x(o_v), o_anchor)[1]
+            for j, (o_v, o_label, o_anchor, _od) in enumerate(ticks) if j != i
+        )
+
+    tick_top, tick_bot = y0 + bar_h, y0 + bar_h + lw + 2
+    text_y = tick_bot + 1
+    for i, (v, label, anchor, _droppable) in enumerate(ticks):
+        x = _x(v)
+        draw.line([(x, tick_top), (x, tick_bot)], fill=(255, 255, 255, 255), width=lw)
+        if show_label[i]:
+            lo, _hi = _label_bounds(label, x, anchor)
+            draw.text((lo, text_y), label, fill=(255, 255, 255, 255), font=font)
     return np.asarray(img)
 
 

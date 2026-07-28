@@ -255,6 +255,9 @@ class Index:
     formula: str = None
     # composite=True => a 3-band (R,G,B) visualization, not a 1-band palette index.
     composite: bool = False
+    # Physical unit of the index values (e.g. "°C" for thermal indices); "" if
+    # unitless (normalized-difference indices, composites). Shown on the colorbar.
+    units: str = ""
 
 
 SENSORS = {
@@ -303,7 +306,7 @@ INDICES = {
     "lst": Index("lst", frozenset({"landsat"}),
                  (-10.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
                  _lst, bands="Thermal (ST_B6/ST_B10)",
-                 formula="ST_B * 0.00341802 + 149.0 - 273.15 [C]"),
+                 formula="ST_B * 0.00341802 + 149.0 - 273.15 [C]", units="°C"),
     "evi": Index("evi", _REFL,
                  (-1.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _evi,
                  bands="NIR, Red, Blue",
@@ -321,7 +324,8 @@ INDICES = {
     "lst_sharp": Index("lst_sharp", frozenset({"landsat"}),
                        (-10.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
                        _lst_sharp, bands="Thermal(100m) + NIRv(30m)",
-                       formula="TsHARP: fit LST~NIRv @100m, apply @30m, +coarse residual"),
+                       formula="TsHARP: fit LST~NIRv @100m, apply @30m, +coarse residual",
+                       units="°C"),
 }
 
 
@@ -335,14 +339,14 @@ INDICES["lst_smw"] = Index("lst_smw", frozenset({"landsat"}),
                            (-10.0, 40.0, _LST_PALETTE), smw_lst.compute,
                            build_collection=smw_lst.landsat_collection,
                            bands="TOA Tb, NIR, Red, Green, QA",
-                           formula="A*Tb/e + B/e + C  (Ermida 2020 SMW)")
+                           formula="A*Tb/e + B/e + C  (Ermida 2020 SMW)", units="°C")
 
 # MODIS LST (MOD11A1 Terra daily, 1 km) — coarse but ~daily, so it fills the
 # cloud-locked months Landsat's 16-day revisit misses.
 INDICES["lst_modis"] = Index("lst_modis", frozenset({"modis_lst"}),
                              (-10.0, 40.0, _LST_PALETTE), _lst_modis,
                              bands="MOD11A1 LST_Day_1km (1 km, daily)",
-                             formula="LST_Day_1km * 0.02 - 273.15 [C]")
+                             formula="LST_Day_1km * 0.02 - 273.15 [C]", units="°C")
 
 
 def get_product(sensor: str, index: str):

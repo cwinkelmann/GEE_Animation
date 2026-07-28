@@ -376,6 +376,62 @@ def test_add_colorbar_preserves_shape_and_draws():
     assert out.sum() > 0
 
 
+def test_colorbar_draws_min_mid_max_ticks():
+    # Wide enough frame that min/mid/max labels don't collide, so all three tick
+    # marks (short vertical lines just below the ramp) are drawn distinctly.
+    w, h = 300, 80
+    rgb = np.zeros((h, w, 3), np.uint8)
+    cfg = types.SimpleNamespace(index="ndvi", viz_min=0.0, viz_max=10.0,
+                                palette=["#000000", "#ffffff"])
+    out = add_colorbar(rgb, cfg)
+
+    bar_w = max(20, int(w * 0.4))
+    bar_h = max(6, h // 20)
+    x0, y0 = max(4, w // 200), 4
+    x_min, x_mid, x_max = x0, x0 + bar_w // 2, x0 + bar_w
+    tick_row = y0 + bar_h + 1        # inside the tick zone, below the ramp's own border
+
+    assert out[tick_row, x_min].tolist() == [255, 255, 255]
+    assert out[tick_row, x_mid].tolist() == [255, 255, 255]
+    assert out[tick_row, x_max].tolist() == [255, 255, 255]
+    # a point strictly between ticks stays untouched background
+    assert out[tick_row, x0 + bar_w // 4].tolist() == [0, 0, 0]
+
+
+def test_colorbar_shows_units_for_thermal_index():
+    # Same numeric range/palette for both indices; only "lst" carries units, so
+    # the only pixel difference between the two renders is the appended "°C" glyphs.
+    def _cfg(index):
+        return types.SimpleNamespace(index=index, viz_min=15.0, viz_max=40.0,
+                                     palette=["#0000ff", "#ff0000"])
+    rgb = np.zeros((80, 300, 3), np.uint8)
+    lst_out = add_colorbar(rgb.copy(), _cfg("lst"))
+    ndvi_out = add_colorbar(rgb.copy(), _cfg("ndvi"))
+    assert not np.array_equal(lst_out, ndvi_out)
+    assert lst_out.sum() > ndvi_out.sum()          # extra "°C" ink on the thermal bar
+
+
+def test_colorbar_adds_zero_tick_only_when_range_spans_zero():
+    from gee_animation.render import _colorbar_ticks
+    spans = _colorbar_ticks(-3, 3, "")
+    absolute = _colorbar_ticks(15, 40, "")
+    assert (0.0, "0", "m", False) in spans
+    assert not any(label == "0" for _v, label, _a, _d in absolute)
+
+    # and the rendered (-3, 3) bar actually carries a tick at the 0 position
+    w, h = 300, 80
+    rgb = np.zeros((h, w, 3), np.uint8)
+    cfg = types.SimpleNamespace(index="lst", viz_min=-3.0, viz_max=3.0,
+                                palette=["#0000ff", "#ff0000"])
+    out = add_colorbar(rgb, cfg)
+    bar_w = max(20, int(w * 0.4))
+    bar_h = max(6, h // 20)
+    x0, y0 = max(4, w // 200), 4
+    x_zero = x0 + round((0.0 - (-3.0)) / (3.0 - (-3.0)) * bar_w)   # -3..3 -> 0 at centre
+    tick_row = y0 + bar_h + 1
+    assert out[tick_row, x_zero].tolist() == [255, 255, 255]
+
+
 def test_thumb_params_preserve_aspect_ratio():
     from gee_animation.render import _thumb_params
     cfg = _cfg(Path("."))  # _cfg provides viz_min/max, dimensions
