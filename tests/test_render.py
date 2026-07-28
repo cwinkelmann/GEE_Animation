@@ -229,10 +229,10 @@ def test_render_projects_overlay_and_resolves_crs_when_auto(tmp_path, monkeypatc
 def test_output_spec_match_and_aspect():
     from gee_animation.render import _output_spec
     assert _output_spec(types.SimpleNamespace(preset=None), (200, 100)) is None
-    # match: canvas takes the frame aspect, long edge = preset. The imagery no longer
-    # fills the canvas — the two label margins are subtracted from the place box.
+    # match: canvas takes the frame aspect, long edge = preset, imagery fills it —
+    # the label margins grow the canvas (960 + 97 + 96) rather than shrink the imagery
     cfg = types.SimpleNamespace(preset="1080p", aspect="match", upscale="lanczos")
-    assert _output_spec(cfg, (200, 100))[:4] == (1920, 960, 1598, 799)
+    assert _output_spec(cfg, (200, 100))[:4] == (1920, 1153, 1920, 960)
     # 16:9 canvas with a wider (2.0) frame -> width-limited, letterboxed top/bottom
     cfg = types.SimpleNamespace(preset="4k", aspect="16:9", upscale="lanczos")
     cw, ch, pw, ph, _ = _output_spec(cfg, (200, 100))
@@ -253,6 +253,36 @@ def test_output_spec_accounts_for_margins():
         assert ph + sum(_margins(ph)) <= ch
         assert pw <= cw
         assert abs(pw / ph - aoi_wh[0] / aoi_wh[1]) < 0.02
+
+
+def test_output_spec_match_grows_canvas_instead_of_shrinking_imagery(tmp_path):
+    # "match" (and the unset default, config.aspect is None) promises no ratio, so
+    # Trap 2 does not apply to it: the margins must grow the canvas rather than eat
+    # into the place box. Shrinking the imagery and adding side bars would work
+    # directly against the feedback this margin work exists to fix ("the framing is a
+    # little too tight") — and a "match" that letterboxes is not matching.
+    from gee_animation.render import _output_spec, _margins
+    for aspect in (None, "match"):
+        cfg = types.SimpleNamespace(preset="720p", aspect=aspect, upscale="lanczos")
+        cw, ch, pw, ph, _ = _output_spec(cfg, (200, 100))
+        assert (pw, ph) == (1280, 640)              # imagery at full preset size...
+        assert pw == cw                             # ...filling the width: no side bars
+        assert ch == ph + sum(_margins(ph))         # canvas grew by exactly the margins
+
+    # and end to end: a uniform frame reaches both canvas edges, margins outside it
+    cfg = _cfg(tmp_path, name="matchfill")
+    cfg.index, cfg.palette = "rgb", []              # composite: no colorbar overlay
+    cfg.frame_aoi = None                            # and no scale bar
+    cfg.preset, cfg.aspect, cfg.upscale = "480p", None, "lanczos"
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.full((50, 100, 3), 77, dtype=float), np.ones((50, 100), dtype=bool)
+
+    paths = render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+    arr = np.asarray(Image.open(next(p for p in paths if p.suffix == ".png")))
+    top_h, bottom_h = _margins(427)                 # 480p long edge 854, aspect 2.0
+    assert arr.shape[:2] == (427 + top_h + bottom_h, 854)
+    assert np.all(arr[top_h:top_h + 427] == 77)     # full-width imagery, nothing on it
 
 
 def test_margins_match_the_bar_height_of_the_padded_frame():

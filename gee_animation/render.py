@@ -522,8 +522,14 @@ def _output_spec(cfg, imagery_wh):
 
     Returns (canvas_w, canvas_h, place_w, place_h, method): the frame (native aspect)
     is upscaled to place_*, gains a label margin above and below, then is letterboxed
-    onto the canvas at the requested aspect. The margins are subtracted from the place
-    box here (see `_fit_margins`) so the canvas keeps exactly the requested aspect.
+    onto the canvas.
+
+    Where the label margins come from depends on whether an aspect was *requested*.
+    For an explicit aspect the canvas ratio is contractual, so the margins are taken
+    out of the place box (`_fit_margins`) — padding on top of a sized canvas would
+    make a "16:9" render taller than 16:9. For "match" (and the unset default) no
+    ratio was promised, so the canvas grows by the margins instead and the imagery
+    keeps its full preset size: a "match" that letterboxed would not be matching.
     """
     preset = getattr(cfg, "preset", None)
     if not preset:
@@ -535,20 +541,19 @@ def _output_spec(cfg, imagery_wh):
     aspect = getattr(cfg, "aspect", None)
     if not aspect or aspect == "match":     # canvas == frame aspect; imagery fills it
         if aoi_aspect >= 1:
-            cw, ch = long_edge, max(1, round(long_edge / aoi_aspect))
+            pw, ph = long_edge, max(1, round(long_edge / aoi_aspect))
         else:
-            ch, cw = long_edge, max(1, round(long_edge * aoi_aspect))
-        pw, ph = cw, ch
+            ph, pw = long_edge, max(1, round(long_edge * aoi_aspect))
+        return pw, ph + sum(_margins(ph)), pw, ph, method   # canvas grows, imagery doesn't
+    target = ASPECTS[aspect]
+    if target >= 1:
+        cw, ch = long_edge, max(1, round(long_edge / target))
     else:
-        target = ASPECTS[aspect]
-        if target >= 1:
-            cw, ch = long_edge, max(1, round(long_edge / target))
-        else:
-            ch, cw = long_edge, max(1, round(long_edge * target))
-        if aoi_aspect > target:             # frame wider than canvas -> width-limited
-            pw, ph = cw, max(1, round(cw / aoi_aspect))
-        else:
-            ph, pw = ch, max(1, round(ch * aoi_aspect))
+        ch, cw = long_edge, max(1, round(long_edge * target))
+    if aoi_aspect > target:                 # frame wider than canvas -> width-limited
+        pw, ph = cw, max(1, round(cw / aoi_aspect))
+    else:
+        ph, pw = ch, max(1, round(ch * aoi_aspect))
     pw, ph = _fit_margins(pw, ph, ch, aoi_aspect)
     return cw, ch, pw, ph, method
 
