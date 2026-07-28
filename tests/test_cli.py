@@ -138,3 +138,35 @@ def test_main_returns_one_on_error(monkeypatch, capsys):
     rc = main(["--config", "whatever.yaml"])
     assert rc == 1
     assert "No images" in capsys.readouterr().err
+
+
+def test_run_refuses_inventory_with_pool_years(tmp_path):
+    # The inventory buckets scenes by the nominal [start, end) calendar, so under
+    # cross-year pooling it would list scenes the run did NOT use and omit the ones it
+    # did — a report contradicting the animation it exists to explain. Refuse instead.
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        "name: t\nproject: p\n"
+        "aoi:\n  frame: {bbox: [0,0,1,1]}\n  region: {bbox: [0,0,1,1]}\n"
+        "  region_max_cloud_percent: 10\n"
+        'start: "2022-01-01"\nend: "2022-03-01"\n'
+        "sensor: sentinel2\ncadence: monthly\nmax_cloud_percent: 60\n"
+        "pool_years: [2019, 2024]\n"
+        "render: {fps: 2, scale: 20, dimensions: 64}\n"
+    )
+    calls = []
+    deps = types.SimpleNamespace(
+        init=lambda project: None,
+        parse=lambda aoi: "GEOM",
+        build=lambda *a, **k: calls.append(("build",)),
+        inventory=lambda cfg, f, r: calls.append(("inventory",)),   # must NOT be called
+    )
+    with pytest.raises(RuntimeError, match="pool_years"):
+        run(str(cfg_path), deps=deps, inventory=True)
+    assert calls == []
+    # without --inventory the same config renders normally
+    deps.monthly_median = lambda coll, cfg: ["f1"]
+    deps.build = lambda cfg, f, r: "COLL"
+    deps.anomaly = lambda frames, cfg, f, r, build: frames
+    deps.render = lambda frames, cfg, geometry=None: [tmp_path / "t.gif"]
+    assert run(str(cfg_path), deps=deps) == [tmp_path / "t.gif"]

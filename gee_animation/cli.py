@@ -31,6 +31,16 @@ def run(config_path: str, deps=DEFAULT_DEPS, inventory: bool = False) -> list[Pa
         # Debug mode: export one month's input scenes + median, not the animation.
         return [deps.debug(cfg, frame_geom, region_geom, cfg.debug_month)]
     if inventory:
+        if getattr(cfg, "pool_years", None):
+            # inventory buckets scenes by the nominal [start, end) calendar, while
+            # pooling draws them from other years entirely: the CSV would list scenes
+            # the run did not use and omit the ones it did. Refuse rather than ship a
+            # report that contradicts the animation it is meant to explain.
+            raise RuntimeError(
+                "--inventory does not support pool_years: the inventory buckets "
+                "scenes by the nominal date range, so it cannot describe frames "
+                "borrowed from other years. Drop pool_years to inventory the "
+                "candidate scenes.")
         # Inventory mode: list every candidate scene + rejection reason, not the
         # animation (request #7 — why smoother transitions aren't possible).
         return [deps.inventory(cfg, frame_geom, region_geom)]

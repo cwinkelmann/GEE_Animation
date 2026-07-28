@@ -1,6 +1,8 @@
 import types
 from datetime import date, datetime, timezone
 
+import pytest
+
 from gee_animation.compositing import (
     composite, month_starts, monthly_median, period_starts, pool_span,
     pooled_composite, Frame)
@@ -118,57 +120,61 @@ def test_composite_issues_a_single_getInfo_round_trip():
 class PooledCollection:
     """Fakes what pooled_composite touches: aggregate_array for timestamps and
     region_cloud_fraction, filterDate (both ISO strings and epoch-millis instants),
-    .first() for the single-scene pick and .filter()/.median() for the median pick.
+    .mosaic() for the single-instant pick and .filter()/.median() for the median pick.
 
-    `scenes` is [(iso_date, region_cloud_fraction)] in collection order.
+    `scenes` is [(iso_date, region_cloud_fraction[, tile])] in collection order; the
+    optional tile name lets a test put two granules on the SAME instant, which is what
+    an AOI spanning a tile boundary looks like.
     """
     def __init__(self, scenes, filters=None):
-        self.scenes = list(scenes)
+        self.scenes = [(s + ("t",))[:3] if len(s) < 3 else tuple(s) for s in scenes]
         self.filters = [] if filters is None else filters
 
-    def _rows(self):
-        return self.scenes
-
     def aggregate_array(self, prop):
-        key = {"system:time_start": lambda d, c: _millis(d),
-               "region_cloud_fraction": lambda d, c: c}[prop]
-        vals = [key(d, c) for d, c in self._rows()]
+        key = {"system:time_start": lambda d, c, t: _millis(d),
+               "region_cloud_fraction": lambda d, c, t: c}[prop]
+        vals = [key(*row) for row in self.scenes]
         return types.SimpleNamespace(getInfo=lambda: vals)
 
     def filterDate(self, start, end):
         if isinstance(start, str):
-            keep = [(d, c) for d, c in self._rows() if start <= d < end]
+            keep = [r for r in self.scenes if start <= r[0] < end]
         else:   # epoch millis instant
-            keep = [(d, c) for d, c in self._rows() if start <= _millis(d) < end]
-        return PooledCollection(keep, self.filters)
+            keep = [r for r in self.scenes if start <= _millis(r[0]) < end]
+        return type(self)(keep, self.filters)      # subclass overrides survive
 
     def filter(self, f):
         # Applies calendarRange the way EE does (inclusive both ends, year-agnostic),
         # so the median test really exercises the bucketing and not just bookkeeping.
         _kind, lo, hi, unit = f
         field = {"month": lambda d: d.month, "day_of_month": lambda d: d.day}[unit]
-        keep = [(d, c) for d, c in self._rows()
-                if lo <= field(date.fromisoformat(d)) <= hi]
-        return PooledCollection(keep, self.filters + [f])
+        keep = [r for r in self.scenes if lo <= field(date.fromisoformat(r[0])) <= hi]
+        return type(self)(keep, self.filters + [f])
 
     def _image(self, tag):
         img = FakeImage(tag)
         img.filters = list(self.filters)     # so tests can assert how it was bucketed
         return img
 
-    def first(self):
-        return self._image(f"scene:{self.scenes[0][0]}")
+    def mosaic(self):
+        return self._image("mosaic:" + "+".join(t for _d, _c, t in self.scenes))
 
     def median(self):
-        return self._image("median:" + ",".join(d for d, _ in self.scenes))
+        return self._image("median:" + ",".join(d for d, _c, _t in self.scenes))
 
 
 class FakeEE:
-    """Only the Filter.calendarRange constructor pooled_composite uses."""
+    """The two ee entry points pooled_composite uses: Filter.calendarRange, and
+    Dictionary(...).getInfo() batching every per-scene array into ONE round trip."""
     class Filter:
         @staticmethod
         def calendarRange(start, end, unit):
             return ("calendarRange", start, end, unit)
+
+    @staticmethod
+    def Dictionary(props):
+        return types.SimpleNamespace(
+            getInfo=lambda: {k: v.getInfo() for k, v in props.items()})
 
 
 def _pool_cfg(**kw):
@@ -178,20 +184,36 @@ def _pool_cfg(**kw):
     return types.SimpleNamespace(**base)
 
 
+def _pooled(coll, cfg):
+    """pooled_composite with EE faked at the ee_module seam (never live)."""
+    return pooled_composite(coll, cfg, ee_module=FakeEE)
+
+
 def test_pool_years_picks_least_cloudy_across_years():
     # May 2021 is 10% cloudy, May 2022 is 80% -> the 2021 scene wins, even though the
     # animation's nominal calendar is 2022.
-    coll = PooledCollection([("2021-05-14", 0.10), ("2022-05-11", 0.80)])
-    frames = composite(coll, _pool_cfg())
+    coll = PooledCollection([("2021-05-14", 0.10, "MAY21"), ("2022-05-11", 0.80, "MAY22")])
+    frames = _pooled(coll, _pool_cfg())
     assert len(frames) == 1
-    assert frames[0].image.tag == "scene:2021-05-14"
-    assert frames[0].n_scenes == 1          # one scene, nothing averaged
+    assert frames[0].image.tag == "mosaic:MAY21"
+    assert frames[0].n_scenes == 1          # one acquisition, nothing averaged in time
+
+
+def test_pooled_least_cloudy_mosaics_every_tile_of_the_winning_instant():
+    # S2/Landsat scenes are per-tile: an AOI spanning a tile boundary must receive
+    # BOTH granules of the chosen acquisition, or the frame comes back part no-data
+    # grey. Tiles A and B share one instant; the cloudier 2022 scene must lose.
+    coll = PooledCollection([("2021-05-14", 0.10, "A"), ("2021-05-14", 0.12, "B"),
+                             ("2022-05-11", 0.80, "C")])
+    frames = _pooled(coll, _pool_cfg())
+    assert frames[0].image.tag == "mosaic:A+B"       # both tiles contribute
+    assert frames[0].label == "2022-05 ← 2021"
 
 
 def test_pooled_frame_label_names_source_year():
     # Mandatory provenance: a 2022-05 frame actually showing May 2021 must say so.
     coll = PooledCollection([("2021-05-14", 0.10), ("2022-05-11", 0.80)])
-    frames = composite(coll, _pool_cfg())
+    frames = _pooled(coll, _pool_cfg())
     assert frames[0].label == "2022-05 ← 2021"
     assert "2021" in frames[0].label
 
@@ -199,29 +221,46 @@ def test_pooled_frame_label_names_source_year():
 def test_pooled_label_always_carries_a_source_even_when_the_nominal_year_wins():
     # The label is never bare, not even when the borrowed year IS the nominal one.
     coll = PooledCollection([("2021-05-14", 0.90), ("2022-05-11", 0.05)])
-    frames = composite(coll, _pool_cfg())
+    frames = _pooled(coll, _pool_cfg())
     assert frames[0].label == "2022-05 ← 2022"
 
 
 def test_pooled_least_cloudy_ignores_scenes_outside_the_pool_years():
     # 2019 is outside pool_years even if the widened collection still carries it.
-    coll = PooledCollection([("2019-05-02", 0.01), ("2021-05-14", 0.30)])
-    frames = composite(coll, _pool_cfg())
-    assert frames[0].image.tag == "scene:2021-05-14"
+    coll = PooledCollection([("2019-05-02", 0.01, "OLD"), ("2021-05-14", 0.30, "IN")])
+    frames = _pooled(coll, _pool_cfg())
+    assert frames[0].image.tag == "mosaic:IN"
     assert frames[0].label == "2022-05 ← 2021"
 
 
 def test_pooled_least_cloudy_skips_scenes_with_no_region_cloud_fraction():
     # A null fraction (scene fully masked over the region) must never win.
-    coll = PooledCollection([("2021-05-14", None), ("2022-05-11", 0.40)])
-    frames = composite(coll, _pool_cfg())
-    assert frames[0].image.tag == "scene:2022-05-11"
+    coll = PooledCollection([("2021-05-14", None, "MASKED"), ("2022-05-11", 0.40, "OK")])
+    frames = _pooled(coll, _pool_cfg())
+    assert frames[0].image.tag == "mosaic:OK"
+
+
+def test_pooled_rejects_misaligned_scene_metadata():
+    # Timestamps and cloud fractions are paired positionally; a short cloud list would
+    # rank scene i by scene j's value and then put the WRONG source year on the label.
+    # Detect that, never paper over it with an out-of-range fallback.
+    class Misaligned(PooledCollection):
+        def aggregate_array(self, prop):
+            out = super().aggregate_array(prop)
+            if prop == "region_cloud_fraction":
+                short = out.getInfo()[:-1]
+                return types.SimpleNamespace(getInfo=lambda: short)
+            return out
+
+    coll = Misaligned([("2021-05-14", 0.10), ("2022-05-11", 0.80)])
+    with pytest.raises(RuntimeError, match="misaligned"):
+        _pooled(coll, _pool_cfg())
 
 
 def test_pool_strategy_median_composites_all_years():
     coll = PooledCollection([("2021-05-14", 0.10), ("2022-05-11", 0.80),
                              ("2022-07-01", 0.10)])          # July: wrong month
-    frames = pooled_composite(coll, _pool_cfg(pool_strategy="median"), ee_module=FakeEE)
+    frames = _pooled(coll, _pool_cfg(pool_strategy="median"))
     assert len(frames) == 1
     assert frames[0].image.tag == "median:2021-05-14,2022-05-11"
     assert frames[0].n_scenes == 2
@@ -232,7 +271,7 @@ def test_pool_strategy_median_filters_by_calendar_month_and_day_of_month():
     coll = PooledCollection([("2021-05-14", 0.10), ("2022-05-11", 0.80)])
     cfg = _pool_cfg(pool_strategy="median", cadence="semimonthly",
                     start="2022-05-01", end="2022-05-16")
-    frames = pooled_composite(coll, cfg, ee_module=FakeEE)
+    frames = _pooled(coll, cfg)
     # 2022-05-01..2022-05-16 -> calendar slot "May, days 1..15", year-independent
     assert frames[0].image.filters == [("calendarRange", 5, 5, "month"),
                                        ("calendarRange", 1, 15, "day_of_month")]
@@ -240,27 +279,42 @@ def test_pool_strategy_median_filters_by_calendar_month_and_day_of_month():
 
 def test_pooled_skips_periods_below_min_scenes():
     coll = PooledCollection([("2021-05-14", 0.10), ("2022-05-11", 0.80)])
-    assert composite(coll, _pool_cfg(min_scenes=3)) == []
-    assert len(composite(coll, _pool_cfg(min_scenes=2))) == 1
+    assert _pooled(coll, _pool_cfg(min_scenes=3)) == []
+    assert len(_pooled(coll, _pool_cfg(min_scenes=2))) == 1
 
 
-def test_pooled_issues_constant_round_trips_not_one_per_frame():
-    # 12 frames, still two aggregate_array round trips (and none per scene).
-    calls = []
+def test_pooled_issues_one_round_trip_not_one_per_frame():
+    # 12 frames, still exactly ONE getInfo(): every per-scene array is batched into a
+    # single ee.Dictionary, which is also what makes their alignment structural.
+    round_trips = []
 
-    class Counting(PooledCollection):
-        def aggregate_array(self, prop):
-            calls.append(prop)
-            return super().aggregate_array(prop)
-        def filterDate(self, start, end):
-            out = super().filterDate(start, end)
-            return Counting(out.scenes, out.filters)
+    class CountingEE(FakeEE):
+        @staticmethod
+        def Dictionary(props):
+            inner = FakeEE.Dictionary(props)
+            def getInfo():
+                round_trips.append(sorted(props))
+                return inner.getInfo()
+            return types.SimpleNamespace(getInfo=getInfo)
 
     scenes = [(f"2021-{m:02d}-05", 0.1) for m in range(1, 13)]
-    frames = composite(Counting(scenes),
-                       _pool_cfg(start="2022-01-01", end="2023-01-01"))
+    frames = pooled_composite(PooledCollection(scenes),
+                              _pool_cfg(start="2022-01-01", end="2023-01-01"),
+                              ee_module=CountingEE)
     assert len(frames) == 12
-    assert calls == ["system:time_start", "region_cloud_fraction"]
+    assert round_trips == [["region_cloud", "time"]]
+
+
+def test_composite_delegates_to_pooled_composite_when_pool_years_is_set(monkeypatch):
+    # composite() keeps its two-argument signature; the pooled path is reached purely
+    # off cfg.pool_years, with no live EE call from composite() itself.
+    seen = []
+    monkeypatch.setattr("gee_animation.compositing.pooled_composite",
+                        lambda coll, cfg: (seen.append((coll, cfg)) or ["POOLED"]))
+    coll = PooledCollection([("2021-05-14", 0.10)])
+    cfg = _pool_cfg()
+    assert composite(coll, cfg) == ["POOLED"]
+    assert seen == [(coll, cfg)]
 
 
 def test_pool_span_is_none_without_pool_years_and_spans_whole_years_with():

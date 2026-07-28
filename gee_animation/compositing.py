@@ -88,8 +88,15 @@ def _calendar_key(p_start_iso: str, p_end_iso: str) -> tuple[int, int, int]:
 def _cloud_rank(clouds, i) -> float:
     """Sort key for the least-cloudy pick. A missing region_cloud_fraction (scene
     fully masked over the region, so reduceRegion came back empty) sorts last —
-    mirroring `inventory._judge`, which treats it as unusable rather than perfect."""
-    v = clouds[i] if clouds is not None and i < len(clouds) else None
+    mirroring `inventory._judge`, which treats it as unusable rather than perfect.
+
+    `clouds` is indexed positionally against the timestamps, so it MUST be the same
+    length; that is guaranteed structurally by fetching both in one `ee.Dictionary`
+    and checked explicitly in `pooled_composite`. There is deliberately no
+    out-of-range fallback here: a short list would silently rank a scene by another
+    scene's cloud value and then label the frame with the wrong source year.
+    """
+    v = clouds[i]
     return float("inf") if v is None else float(v)
 
 
@@ -104,18 +111,25 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
 
     ``cfg.pool_strategy``:
 
-    * ``least_cloudy`` (default) — the single scene with the lowest region cloud
-      fraction across all pooled years. Sharpest; nothing is averaged, and the label
-      names the one year the frame came from.
+    * ``least_cloudy`` (default) — the acquisition with the lowest region cloud
+      fraction across all pooled years, mosaicked over its tiles. Sharpest; nothing is
+      averaged in time, and the label names the one year the frame came from.
+      Caveat: `region_cloud_fraction` is a mean over *unmasked* pixels, so a granule
+      that only clips a corner of the region scores near zero and can outrank a
+      genuinely clear full-coverage scene. Mosaicking the winning instant restores
+      coverage, but the ranking itself is still coverage-blind; weighting it would
+      need a per-scene valid-pixel fraction that `add_region_cloud_fraction` does not
+      currently compute.
     * ``median`` — median over every pooled year's scenes for that calendar period.
       Smoother and fills holes better, but blurs and mixes years, so the label names
       the whole pooled range.
 
-    Round trips are constant, not per scene: one `aggregate_array` for the
-    timestamps (which calendar slot and which year each scene sits in) and, for
-    ``least_cloudy`` only, one for `region_cloud_fraction` (how to rank them). Both
-    have to come back client-side because the *chosen* scene's year is what the frame
-    label has to say.
+    ONE round trip, whatever the scene or frame count: the per-scene arrays are
+    batched into a single `ee.Dictionary(...).getInfo()`, the idiom
+    `inventory.scene_inventory` uses. That is not only cheaper — it makes the
+    timestamps and the cloud fractions come from one evaluation of one collection, so
+    their positional alignment is structural rather than assumed. They have to come
+    back client-side because the *chosen* scene's year is what the frame label says.
     """
     cadence = getattr(cfg, "cadence", "monthly")
     periods = period_starts(cfg.start, cfg.end, cadence)
@@ -129,9 +143,19 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
     # already widened to the same range).
     pooled = collection.filterDate(*span)
 
-    millis = pooled.aggregate_array("system:time_start").getInfo()
-    clouds = (pooled.aggregate_array("region_cloud_fraction").getInfo()
-              if strategy == "least_cloudy" else None)
+    props = {"time": pooled.aggregate_array("system:time_start")}
+    if strategy == "least_cloudy":
+        props["region_cloud"] = pooled.aggregate_array("region_cloud_fraction")
+    data = ee_module.Dictionary(props).getInfo()
+    millis = data["time"]
+    clouds = data.get("region_cloud")
+    if clouds is not None and len(clouds) != len(millis):
+        # Fail loudly rather than rank scene i by scene j's cloud value: that would
+        # put the wrong source year on the label, which is the one thing this mode
+        # may never get wrong.
+        raise RuntimeError(
+            f"pooled scene metadata is misaligned: {len(millis)} timestamps but "
+            f"{len(clouds)} region_cloud_fraction values")
     dates = [datetime.fromtimestamp(t / 1000, tz=timezone.utc).date() for t in millis]
 
     min_scenes = int(getattr(cfg, "min_scenes", 1) or 1)
@@ -155,10 +179,13 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
             source, n_scenes = f"{y0}–{y1}", len(candidates)
         else:
             best = min(candidates, key=lambda i: _cloud_rank(clouds, i))
-            # Select that one scene by its exact acquisition instant (filterDate takes
-            # epoch millis) — no extra round trip, and it is provably the scene whose
-            # year the label names.
-            image = pooled.filterDate(millis[best], millis[best] + 1).first()
+            # Select that one acquisition instant (filterDate takes epoch millis) — no
+            # extra round trip, and it is provably the scene whose year the label
+            # names. `.mosaic()`, not `.first()`: S2/Landsat scenes are per-tile, so an
+            # AOI spanning a tile boundary would come back part no-data from a single
+            # granule. Mosaicking that one instant's tiles restores full coverage and
+            # still averages nothing across time.
+            image = pooled.filterDate(millis[best], millis[best] + 1).mosaic()
             source, n_scenes = str(dates[best].year), 1
         # Mandatory provenance: the source year is part of the label, which render
         # draws on every frame and writes into every frame's filename.

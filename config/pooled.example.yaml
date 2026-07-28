@@ -35,6 +35,8 @@ draw_region: true
 render: { fps: 3, scale: 20, dimensions: 768, crs: auto }
 
 # Notes:
+# * `--inventory` is rejected together with `pool_years`: the inventory buckets scenes
+#   by the nominal date range, so it cannot describe frames borrowed from other years.
 # * `anomaly` is rejected together with `pool_years` — the anomaly baseline is itself
 #   multi-year, so a borrowed year would be scored against a climatology containing it.
 # * With `sensor: landsat`, add a `missions` whitelist (e.g. missions: [L8, L9]);
