@@ -219,6 +219,39 @@ def test_pooling_needs_both_years(tmp_path):
         _run(tmp_path, {}, pool_start_year=2019)
 
 
+# --- browser-submitted values, not Python defaults ---------------------------------
+#
+# gr.Number(value=None) is rendered by the browser as 0 (verified against the live
+# DOM: {value: "0", valueAsNumber: 0}), so an *untouched* pooling-years form submits
+# pool_start_year=0, pool_end_year=0 — not None. These tests exercise exactly that,
+# rather than the Python-only None default every other pooling test uses.
+
+def test_pooling_both_zero_is_off_like_an_untouched_browser_form(tmp_path):
+    # What an untouched form actually POSTs (see module docstring above). Before the
+    # fix this silently switched pooling on with pool_years=[0, 0], sending the
+    # search to year 0000 and producing the misleading "No imagery found" error.
+    captured = {}
+    _run(tmp_path, captured, pool_start_year=0, pool_end_year=0)
+    assert captured["cfg"].pool_years is None
+
+
+def test_pooling_zero_in_one_box_with_a_real_year_still_refused(tmp_path):
+    # A 0 (untouched) alongside a real year in the other box must not silently
+    # become a half-open range — it's the same user mistake as leaving one truly
+    # blank, so it must raise the same clear error.
+    with pytest.raises(ValueError, match="both a first and a last year"):
+        _run(tmp_path, {}, pool_start_year=0, pool_end_year=2024)
+    with pytest.raises(ValueError, match="both a first and a last year"):
+        _run(tmp_path, {}, pool_start_year=2019, pool_end_year=0)
+
+
+def test_pooling_real_years_still_work(tmp_path):
+    # Guard against over-correcting: a genuine pair must still reach the config.
+    captured = {}
+    _run(tmp_path, captured, pool_start_year=2019, pool_end_year=2024)
+    assert captured["cfg"].pool_years == [2019, 2024]
+
+
 def test_pooling_status_carries_the_provenance_warning(tmp_path):
     *_, status, _ = _run(tmp_path, {}, pool_start_year=2019, pool_end_year=2024)
     assert "COSMETIC ONLY" in status and "quantitative analysis" in status

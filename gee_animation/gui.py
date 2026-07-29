@@ -202,8 +202,23 @@ def _region_aoi_from_upload(path: str) -> dict:
 
 
 def _blank(value) -> bool:
-    """True for a Gradio input left empty (``None`` or an all-whitespace string)."""
-    return value is None or (isinstance(value, str) and not value.strip())
+    """True for a Gradio input left empty.
+
+    Handles ``None``, an all-whitespace string, and non-positive numbers. The
+    latter matters because ``gr.Number(value=None)`` is rendered by the browser
+    as ``0`` (verified against the live DOM), so an *untouched* pooling-year box
+    posts ``0``, not ``None``. No calendar year is zero or negative, so treating
+    a non-positive number as "not set" keeps the untouched-form default off
+    without guessing at a bogus year-0 range.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    try:
+        return float(value) <= 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _pool_years(first, last) -> list | None:
@@ -452,7 +467,7 @@ def build_app():
                 with gr.Accordion("🔁 Cross-year pooling (cosmetic)", open=False):
                     gr.Markdown(POOL_WARNING)
                     with gr.Row():
-                        pool_start = gr.Number(label="Pool from year (empty = off)",
+                        pool_start = gr.Number(label="Pool from year (0 or empty = off)",
                                                value=None, precision=0)
                         pool_end = gr.Number(label="Pool to year (inclusive)",
                                              value=None, precision=0)
