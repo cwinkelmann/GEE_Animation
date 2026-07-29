@@ -272,20 +272,57 @@ def _bar_h(h: int) -> int:
     return max(12, h // 12)
 
 
+def _fit_bar_text(draw: ImageDraw.ImageDraw, text: str, px: int, avail_w: int) -> tuple:
+    """(font, text) that fits `avail_w` — shrink font size down to the `_font` floor
+    (10px) before truncating with a trailing ellipsis.
+
+    Started at `px` (whatever the caller would otherwise have used unshrunk), so text
+    that already fits is returned completely unchanged — same font, same string.
+    """
+    font = _font(px)
+    tb = draw.textbbox((0, 0), text, font=font)
+    while tb[2] - tb[0] > avail_w and px > 10:
+        px -= 1
+        font = _font(px)
+        tb = draw.textbbox((0, 0), text, font=font)
+    if tb[2] - tb[0] <= avail_w:
+        return font, text
+    # Still too wide at the size floor: binary-search the longest prefix (+ "…") that
+    # fits. "…" (U+2026) is a real glyph in Pillow's bundled default font — unlike
+    # "←"/"–" (see _DRAWABLE), it does not draw as a notdef box.
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        tb = draw.textbbox((0, 0), text[:mid] + "…", font=font)
+        if tb[2] - tb[0] <= avail_w:
+            lo = mid
+        else:
+            hi = mid - 1
+    return font, (text[:lo] + "…" if lo > 0 else "…")
+
+
 def draw_info_bar(rgb: np.ndarray, text: str) -> np.ndarray:
     """Draw a translucent top bar naming the bands used and the formula (if any).
 
     `text` is drawn as given — callers must pre-fold any character Pillow's default
-    font cannot render (see `_DRAWABLE`); `_info_text` itself never emits one.
+    font cannot render (see `_DRAWABLE`); `_info_text` itself never emits one. Unlike
+    `annotate`'s bottom label (always short), this text can overflow a narrow frame
+    for the long-formula indices (lst_smw, lst_sharp); `_fit_bar_text` shrinks the
+    font (and, as a last resort, truncates) so it always stays inside the frame. The
+    bar height/rectangle and vertical placement are untouched either way — only the
+    font size and, in the worst case, the string itself change.
     """
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
     w, h = img.size
-    font, _ = _annot_scale(h)
     bar_h = _bar_h(h)
     pad = max(1, h // 200)
+    x = max(4, w // 200)
+    px = max(11, h // 40)   # same starting size _annot_scale would pick
+    avail_w = max(1, w - 2 * x)
+    font, text = _fit_bar_text(draw, text, px, avail_w)
     draw.rectangle([0, 0, w, bar_h], fill=(0, 0, 0, 140))
-    draw.text((max(4, w // 200), pad), text, fill=(255, 255, 255, 255), font=font)
+    draw.text((x, pad), text, fill=(255, 255, 255, 255), font=font)
     return np.asarray(img)
 
 

@@ -21,6 +21,8 @@ anomaly: climatology         # (x - mean_month) / std_month per pixel
 baseline_years: [2015, 2024] # inclusive year range the climatology is built from
 
 draw_region: true
-render: { fps: 3, scale: 30, dimensions: 768, crs: auto }
+# preset: fetch at native GSD, upscale smoothly (the data is ~100 m/px; without this
+# the WNE frame caps to ~91 px)
+render: { fps: 3, scale: 30, dimensions: 768, crs: auto, preset: 1080p }
 # viz omitted -> diverging z-score default (-3..3 sigma). For LST minus air
 # temperature instead, use: anomaly: reference   (thermal indices only; no baseline).

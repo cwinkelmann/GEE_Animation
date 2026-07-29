@@ -211,6 +211,56 @@ def test_render_skips_region_overlay_when_disabled(tmp_path, monkeypatch):
     render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)  # must not raise
 
 
+def test_draw_info_bar_shrinks_long_text_to_fit_the_frame():
+    # Reviewer-verified live overflow: lst_smw's info text measured 2239px wide in a
+    # 1920px frame and got cut mid-word. draw_info_bar must shrink the font until the
+    # text fits inside the frame instead of letting Pillow draw past the right edge.
+    from gee_animation.render import _info_text, draw_info_bar
+    cfg = types.SimpleNamespace(index="lst_smw")
+    text = _info_text(cfg)
+    w, h = 500, 1200          # narrow frame relative to this long formula string
+    rgb = np.zeros((h, w, 3), np.uint8)
+    out = draw_info_bar(rgb, text)
+    bar_h = h // 12
+    # no ink in the rightmost columns of the bar row band -> text stayed inside frame
+    assert out[:bar_h, -3:].sum() == 0
+
+
+def test_draw_info_bar_leaves_short_text_at_the_original_font_size():
+    # NDVI-style short text must render identically to before the fitting change: same
+    # font size (and therefore identical glyph rendering) as _annot_scale would pick.
+    from gee_animation.render import _info_text, draw_info_bar, _annot_scale
+    cfg = types.SimpleNamespace(index="ndvi")
+    text = _info_text(cfg)
+    w, h = 800, 300
+    rgb = np.zeros((h, w, 3), np.uint8)
+    out = draw_info_bar(rgb, text)
+
+    expected_font, _ = _annot_scale(h)
+    scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    tb = scratch.textbbox((0, 0), text, font=expected_font)
+    ink_cols = np.nonzero(out[:h // 12].sum(axis=(0, 2)))[0]
+    assert ink_cols.size
+    # drawn text width matches what the unshrunk (_annot_scale) font would measure
+    assert ink_cols.max() - ink_cols.min() <= (tb[2] - tb[0]) + 2
+
+
+def test_draw_info_bar_keeps_bar_height_fixed_for_long_and_short_text():
+    # Font-fitting must never touch the bar rectangle itself — _bar_h feeds the
+    # _margins fixed point (see test_margins_match_the_bar_height_of_the_padded_frame).
+    from gee_animation.render import _info_text, draw_info_bar, _bar_h
+    w, h = 500, 300
+    long_text = _info_text(types.SimpleNamespace(index="lst_smw"))
+    short_text = _info_text(types.SimpleNamespace(index="ndvi"))
+    for text in (long_text, short_text):
+        rgb = np.zeros((h, w, 3), np.uint8)
+        out = draw_info_bar(rgb, text)
+        bar_h = _bar_h(h)
+        # bar tint fills exactly [0, bar_h) and nothing below it
+        assert out[:bar_h].sum() > 0
+        assert out[bar_h:].sum() == 0
+
+
 def test_info_text_shows_formula_and_bands():
     from gee_animation.render import _info_text, draw_info_bar
     cfg = types.SimpleNamespace(index="ndvi")
