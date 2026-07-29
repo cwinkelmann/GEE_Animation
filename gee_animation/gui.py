@@ -57,6 +57,25 @@ POOL_WARNING = (
     "the pooled range."
 )
 
+# Gradio 6 lays the whole ancestor chain out as a flex column — including <html> — and
+# puts `overflow-y: hidden` on .gradio-container. On a tall form like this one that
+# leaves the page unscrollable in browsers that don't scroll a flex <html> (Safari in
+# particular), so the bottom controls become unreachable. Restore a plain document:
+# block layout, auto height, and let the container overflow normally.
+PAGE_CSS = """
+html, body, gradio-app {
+    display: block !important;
+    height: auto !important;
+    min-height: 100% !important;
+    overflow-y: auto !important;
+}
+.gradio-container {
+    overflow-y: visible !important;
+    height: auto !important;
+    min-height: 0 !important;
+}
+"""
+
 
 def _mean(values):
     vals = [v for v in values if v is not None]
@@ -566,7 +585,9 @@ def build_app():
 
 
 def main():
-    build_app().launch()
+    # Gradio 6 moved `css` from the Blocks constructor to launch(); passing it to
+    # Blocks still works but warns. See PAGE_CSS for why the override is needed.
+    build_app().launch(css=PAGE_CSS)
 
 
 if __name__ == "__main__":

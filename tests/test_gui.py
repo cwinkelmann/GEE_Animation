@@ -318,6 +318,31 @@ def test_build_app_constructs():
     assert app is not None
 
 
+def test_page_css_restores_document_scrolling():
+    """Gradio 6 lays <html>/<body> out as a flex column and clips .gradio-container
+    with `overflow-y: hidden`, which leaves this tall form unscrollable in browsers
+    that won't scroll a flex <html>. The overrides must reach launch() — Gradio 6
+    moved `css` off the Blocks constructor, so passing it there only warns."""
+    for fragment in ("display: block", "overflow-y: auto", "height: auto"):
+        assert fragment in gui.PAGE_CSS, f"missing scroll fix: {fragment}"
+    assert ".gradio-container" in gui.PAGE_CSS
+    assert "overflow-y: visible" in gui.PAGE_CSS
+
+
+def test_main_passes_page_css_to_launch(monkeypatch):
+    """The stylesheet is useless if it never reaches launch()."""
+    pytest.importorskip("gradio")
+    seen = {}
+
+    class FakeApp:
+        def launch(self, **kwargs):
+            seen.update(kwargs)
+
+    monkeypatch.setattr(gui, "build_app", lambda: FakeApp())
+    gui.main()
+    assert seen.get("css") == gui.PAGE_CSS
+
+
 def _make_run(d, name, months, mp4=True, gif=True):
     """Create a rendered-run layout: <name>.mp4/.gif + <name>_<month>.png frames."""
     d = Path(d)
