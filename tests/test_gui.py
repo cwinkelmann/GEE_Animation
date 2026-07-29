@@ -31,6 +31,12 @@ def _fake_deps(tmp_path, captured, frames=None):
             pngs.append(p)
         return [tmp_path / "o.mp4", tmp_path / "o.gif", *pngs]
 
+    def inventory(cfg, f, r):
+        captured.update(inventory_cfg=cfg)
+        p = tmp_path / f"{cfg.name}_inventory.csv"
+        p.write_text("scene_id,used\n")
+        return p
+
     return types.SimpleNamespace(
         init=lambda project: captured.__setitem__("project", project),
         parse=lambda a: ("geom", tuple(sorted(a))),
@@ -40,6 +46,7 @@ def _fake_deps(tmp_path, captured, frames=None):
         anomaly=lambda frames_, cfg, f, r, build: frames_,
         render=render,
         timeseries=lambda frames_, region, frame, scale: [(f.label, 0.8, 0.5) for f in frames_],
+        inventory=inventory,
     )
 
 
@@ -99,7 +106,7 @@ def test_run_animation_builds_config_and_threads_geometry(tmp_path):
     assert zip_path.endswith("sentinel2_ndvi_frames.zip")   # {cfg.name}_frames.zip
     with zipfile.ZipFile(zip_path) as zf:
         assert sorted(zf.namelist()) == ["o_2022-05.png", "o_2022-06.png"]
-    assert "Rendered 2 of 2 months" in status                 # May + June both rendered
+    assert "Rendered 2 of 2 monthly periods" in status        # May + June both rendered
     assert series == [("2022-05", 0.8, 0.5), ("2022-06", 0.8, 0.5)]   # (month, inside, outside)
     # inside/outside summary appended to the status
     assert "inside AOI 0.800" in status and "outside 0.500" in status and "+0.300" in status
@@ -113,8 +120,8 @@ def test_run_animation_status_reports_dropped_months(tmp_path):
         aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
         start="2022-05-01", end="2022-09-01", region_max_cloud_percent=10,
         out_dir=str(tmp_path), deps=_fake_deps(tmp_path, {}, frames=frames))
-    assert "Rendered 2 of 4 months" in status
-    assert "2 month(s) had no scene" in status and "10%" in status
+    assert "Rendered 2 of 4 monthly periods" in status
+    assert "2 period(s) had no scene" in status and "10%" in status
 
 
 def test_run_animation_uses_500m_scale_for_modis(tmp_path):
@@ -146,6 +153,130 @@ def test_run_animation_requires_aoi(tmp_path):
     with pytest.raises(ValueError, match="upload an AOI"):
         gui.run_animation(aoi_path=None, buffer_m=1000, sensor="sentinel2", index="ndvi",
                           start="2022-05-01", end="2022-07-01", deps=_fake_deps(tmp_path, {}))
+
+
+# --- CLI-parity controls: cadence, preset/aspect, pooling, inventory, validation ---
+
+def _run(tmp_path, captured, **kw):
+    """run_animation over a throwaway AOI + fake deps, with sensible GUI defaults."""
+    aoi = _write_geojson(tmp_path)
+    kw.setdefault("sensor", "sentinel2")
+    kw.setdefault("index", "ndvi")
+    kw.setdefault("start", "2022-05-01")
+    kw.setdefault("end", "2022-07-01")
+    return gui.run_animation(aoi_path=str(aoi), buffer_m=1000, out_dir=str(tmp_path),
+                             deps=_fake_deps(tmp_path, captured), **kw)
+
+
+def test_cadence_reaches_the_config(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, cadence="10day")
+    assert captured["cfg"].cadence == "10day"      # not the old hardcoded "monthly"
+
+
+def test_cadence_defaults_to_monthly(tmp_path):
+    captured = {}
+    _run(tmp_path, captured)
+    assert captured["cfg"].cadence == "monthly"
+
+
+def test_preset_and_aspect_default_to_1080p_match(tmp_path):
+    # The GUI used to omit preset entirely, so coarse products (LST 100 m, MODIS 500 m)
+    # were rendered at their tiny native pixel count. Match api.animate's defaults.
+    captured = {}
+    _run(tmp_path, captured)
+    assert captured["cfg"].preset == "1080p" and captured["cfg"].aspect == "match"
+
+
+def test_preset_and_aspect_are_passed_through(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, preset="4k", aspect="16:9")
+    assert captured["cfg"].preset == "4k" and captured["cfg"].aspect == "16:9"
+
+
+def test_native_preset_maps_to_none(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, preset=gui.NATIVE_PRESET)
+    assert captured["cfg"].preset is None
+
+
+def test_pooling_params_reach_the_config(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, pool_start_year=2019, pool_end_year=2024,
+         pool_strategy="median")
+    cfg = captured["cfg"]
+    assert cfg.pool_years == [2019, 2024] and cfg.pool_strategy == "median"
+
+
+def test_pooling_off_by_default(tmp_path):
+    captured = {}
+    _run(tmp_path, captured)
+    assert captured["cfg"].pool_years is None
+
+
+def test_pooling_needs_both_years(tmp_path):
+    with pytest.raises(ValueError, match="both a first and a last year"):
+        _run(tmp_path, {}, pool_start_year=2019)
+
+
+def test_pooling_status_carries_the_provenance_warning(tmp_path):
+    *_, status, _ = _run(tmp_path, {}, pool_start_year=2019, pool_end_year=2024)
+    assert "COSMETIC ONLY" in status and "quantitative analysis" in status
+
+
+def test_inventory_writes_a_csv(tmp_path):
+    captured = {}
+    aoi = _write_geojson(tmp_path)
+    csv_path, status = gui.run_inventory(
+        aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        deps=_fake_deps(tmp_path, captured))
+    assert csv_path.endswith("sentinel2_ndvi_inventory.csv")
+    assert Path(csv_path).exists() and "inventory" in status.lower()
+    assert captured["inventory_cfg"].cadence == "monthly"
+    assert "cfg" not in captured                       # inventory short-circuits build
+
+
+def test_inventory_refuses_pooling_and_runs_nothing(tmp_path):
+    captured = {}
+    aoi = _write_geojson(tmp_path)
+    with pytest.raises(ValueError, match="does not support cross-year pooling"):
+        gui.run_inventory(
+            aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
+            start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+            pool_start_year=2019, pool_end_year=2024,
+            deps=_fake_deps(tmp_path, captured))
+    assert "cfg" not in captured and "inventory_cfg" not in captured
+
+
+def test_invalid_pool_strategy_is_a_friendly_error_not_a_crash(tmp_path):
+    # proves cfg.validate() runs: the GUI builds RunConfig directly, bypassing from_yaml
+    with pytest.raises(ValueError, match="Invalid settings: unknown pool_strategy"):
+        _run(tmp_path, {}, pool_start_year=2019, pool_end_year=2024,
+             pool_strategy="bogus")
+
+
+def test_validation_rejects_reversed_pool_years(tmp_path):
+    with pytest.raises(ValueError, match="Invalid settings"):
+        _run(tmp_path, {}, pool_start_year=2024, pool_end_year=2019)
+
+
+def test_landsat_submonthly_warning_reaches_the_status(tmp_path):
+    # config.validate() only log.warning()s this; the GUI must show it to the user
+    *_, status, _ = _run(tmp_path, {}, sensor="landsat", index="lst", cadence="10day")
+    assert "16-day repeat" in status
+
+
+def test_status_is_cadence_neutral(tmp_path):
+    frames = [types.SimpleNamespace(label="2022-05-01")]
+    aoi = _write_geojson(tmp_path)
+    *_, status, _ = gui.run_animation(
+        aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
+        start="2022-05-01", end="2022-06-01", cadence="10day", out_dir=str(tmp_path),
+        deps=_fake_deps(tmp_path, {}, frames=frames))
+    assert "Rendered 1 of 3 10day periods" in status
+    assert "2 period(s) had no scene" in status
+    assert "month" not in status                        # no monthly-specific wording
 
 
 def test_build_app_constructs():
