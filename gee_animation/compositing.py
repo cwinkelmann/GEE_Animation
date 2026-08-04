@@ -122,6 +122,29 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
     * ``median`` — median over every pooled year's scenes for that calendar period.
       Smoother and fills holes better, but blurs and mixes years, so the label names
       the whole pooled range.
+    * ``gap_fill`` — **true gap filling, and the only strategy that preserves the
+      requested year.** The other two replace *every* frame, so a run over 2022 pooled
+      across 2018–2024 can end up with only a couple of frames actually from 2022 — a
+      synthetic "typical summer" rather than the year that was asked for. `gap_fill`
+      instead keeps the nominal year (the year in each period's own start date, derived
+      per period so a range spanning New Year stays honest) whenever that year has at
+      least `cfg.min_scenes` scenes in the period, compositing them with the same
+      `.median()` the non-pooled path uses. Only a period the nominal year cannot fill
+      borrows, and it borrows the way `least_cloudy` does — the clearest single
+      acquisition from the OTHER pooled years, mosaicked over its tiles.
+
+      Provenance therefore has to say two different things, and the distinction is the
+      point: a nominal-year frame is real data for its period, so `Frame.source` is
+      ``None`` and `render` draws the bare period label — an arrow there would be a lie
+      in the other direction. A borrowed frame keeps its source year (``2022-06 ←
+      2019``). `render._info_text` still names the whole pooled range, which stays
+      correct: it says what frames *may* have been drawn from, and some were.
+
+      Two consequences of the single round trip, both deliberate: the nominal year must
+      itself be inside `pool_years` to be seen at all (scenes outside the pooled span
+      never reach the client), and `min_scenes` gates the borrowed set too — if neither
+      the nominal year nor the other years clear it, the period is skipped, exactly as
+      the other strategies skip.
 
     ONE round trip, whatever the scene or frame count: the per-scene arrays are
     batched into a single `ee.Dictionary(...).getInfo()`, the idiom
@@ -133,7 +156,7 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
     cadence = getattr(cfg, "cadence", "monthly")
     periods = period_starts(cfg.start, cfg.end, cadence)
     strategy = getattr(cfg, "pool_strategy", None) or "least_cloudy"
-    if strategy not in ("least_cloudy", "median"):
+    if strategy not in ("least_cloudy", "median", "gap_fill"):
         raise ValueError(f"unknown pool_strategy {strategy!r}")
     span = pool_span(cfg)
     y0, y1 = int(cfg.pool_years[0]), int(cfg.pool_years[-1])
@@ -143,7 +166,10 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
     pooled = collection.filterDate(*span)
 
     props = {"time": pooled.aggregate_array("system:time_start")}
-    if strategy == "least_cloudy":
+    if strategy in ("least_cloudy", "gap_fill"):
+        # gap_fill ranks clouds only for the periods it has to borrow, but the ranking
+        # data still comes from the SAME single Dictionary — fetching it lazily per
+        # gap would be one round trip per empty period.
         props["region_cloud"] = pooled.aggregate_array("region_cloud_fraction")
     data = ee_module.Dictionary(props).getInfo()
     millis = data["time"]
@@ -164,6 +190,25 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
         candidates = [i for i, d in enumerate(dates)
                       if y0 <= d.year <= y1 and d.month == month
                       and first_day <= d.day <= last_day]
+        if strategy == "gap_fill":
+            # Nominal year first: this period is only a "gap" if its OWN year cannot
+            # fill it. The year comes from the period's start date, not from cfg.start,
+            # so a range crossing New Year keeps each period on its real year.
+            nominal_year = date.fromisoformat(p_start).year
+            nominal = [i for i in candidates if dates[i].year == nominal_year]
+            if len(nominal) >= min_scenes:
+                # Exactly the non-pooled path: a median of this period's own scenes.
+                # source stays None — this is genuine data for the period, and marking
+                # it borrowed would misreport it just as badly as hiding a borrow.
+                frames.append(Frame(label=label,
+                                    image=pooled.filterDate(p_start, p_end).median(),
+                                    n_scenes=len(nominal), source=None))
+                continue
+            if nominal:
+                log.info("%s: %d nominal-year scene(s) below min_scenes=%d, "
+                         "looking for a donor year", label, len(nominal), min_scenes)
+            # Genuine gap: borrow from the other pooled years only.
+            candidates = [i for i in candidates if dates[i].year != nominal_year]
         if len(candidates) < min_scenes:
             if candidates:
                 log.info("skipping %s: %d pooled scene(s) below min_scenes=%d",

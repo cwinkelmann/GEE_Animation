@@ -292,6 +292,117 @@ def test_pooled_skips_periods_below_min_scenes():
     assert len(_pooled(coll, _pool_cfg(min_scenes=2))) == 1
 
 
+# --- gap_fill: keep the nominal year, borrow only for empty periods -----------------
+
+def test_gap_fill_keeps_the_nominal_year_when_it_has_data():
+    # The whole point of gap_fill: May 2022 has scenes, so the 2022-05 frame is the
+    # NOMINAL year's median — even though May 2021 is far clearer and would win
+    # least_cloudy. n_scenes is the nominal year's count (a median, not one scene).
+    coll = PooledCollection([("2021-05-14", 0.01, "CLEAR21"),
+                             ("2022-05-11", 0.80, "MAY22A"),
+                             ("2022-05-21", 0.70, "MAY22B")])
+    frames = _pooled(coll, _pool_cfg(pool_strategy="gap_fill"))
+    assert len(frames) == 1
+    assert frames[0].label == "2022-05"
+    assert frames[0].image.tag == "median:2022-05-11,2022-05-21"
+    assert frames[0].n_scenes == 2
+    # Genuine nominal-year data is NOT borrowed: no source -> render draws the plain
+    # period label, with no "← year" arrow.
+    assert frames[0].source is None
+
+
+def test_gap_fill_borrows_the_least_cloudy_other_year_for_an_empty_period():
+    # No 2022 scene in this slot at all -> fall back to least_cloudy across the other
+    # pooled years, mosaicking the winning instant's tiles (never .first()).
+    coll = PooledCollection([("2020-05-14", 0.10, "A"), ("2020-05-14", 0.12, "B"),
+                             ("2021-05-03", 0.60, "C")])
+    frames = _pooled(coll, _pool_cfg(pool_years=[2020, 2022], pool_strategy="gap_fill"))
+    assert len(frames) == 1
+    assert frames[0].label == "2022-05"
+    assert frames[0].image.tag == "mosaic:A+B"       # both tiles of the chosen instant
+    assert frames[0].n_scenes == 1
+    assert frames[0].source == 2020                  # borrowed -> provenance required
+
+
+def test_gap_fill_mixed_run_marks_only_the_borrowed_periods():
+    # The strategy's whole point, pinned per period: May/July have 2022 data and stay
+    # 2022 (unmarked); June has none and is borrowed from the clearest other year.
+    coll = PooledCollection([
+        ("2022-05-11", 0.80, "MAY22"),
+        ("2020-06-04", 0.50, "JUN20"), ("2021-06-08", 0.20, "JUN21"),
+        ("2021-05-02", 0.01, "MAY21"),               # clearer, but May 2022 exists
+        ("2022-07-09", 0.90, "JUL22"), ("2021-07-01", 0.02, "JUL21"),
+    ])
+    frames = _pooled(coll, _pool_cfg(start="2022-05-01", end="2022-08-01",
+                                     pool_years=[2020, 2022], pool_strategy="gap_fill"))
+    assert [(f.label, f.source) for f in frames] == [
+        ("2022-05", None), ("2022-06", 2021), ("2022-07", None)]
+    assert [f.image.tag for f in frames] == [
+        "median:2022-05-11", "mosaic:JUN21", "median:2022-07-09"]
+
+
+def test_gap_fill_falls_back_when_the_nominal_year_is_below_min_scenes():
+    # One thin 2022 scene under min_scenes=2 must not produce a thin nominal composite:
+    # borrow the clearest of the other years instead, and say so.
+    scenes = [("2022-06-11", 0.30, "THIN22"),
+              ("2020-06-04", 0.50, "JUN20"), ("2021-06-08", 0.20, "JUN21")]
+    frames = _pooled(PooledCollection(scenes),
+                     _pool_cfg(start="2022-06-01", end="2022-07-01",
+                               pool_years=[2020, 2022], pool_strategy="gap_fill",
+                               min_scenes=2))
+    assert [(f.label, f.source, f.image.tag) for f in frames] == [
+        ("2022-06", 2021, "mosaic:JUN21")]
+    # With min_scenes=1 the single nominal scene is enough and stays unborrowed.
+    kept = _pooled(PooledCollection(scenes),
+                   _pool_cfg(start="2022-06-01", end="2022-07-01",
+                             pool_years=[2020, 2022], pool_strategy="gap_fill",
+                             min_scenes=1))
+    assert [(f.label, f.source, f.image.tag) for f in kept] == [
+        ("2022-06", None, "median:2022-06-11")]
+
+
+def test_gap_fill_skips_a_period_no_year_can_fill():
+    coll = PooledCollection([("2021-05-14", 0.10, "MAY21")])
+    frames = _pooled(coll, _pool_cfg(start="2022-06-01", end="2022-07-01",
+                                     pool_strategy="gap_fill"))
+    assert frames == []
+
+
+def test_gap_fill_derives_the_nominal_year_per_period_not_per_run():
+    # A run spanning a year boundary: each period's nominal year comes from its OWN
+    # start date, so Dec keeps 2022 and Jan keeps 2023.
+    coll = PooledCollection([("2022-12-05", 0.50, "DEC22"), ("2021-12-05", 0.01, "DEC21"),
+                             ("2023-01-07", 0.50, "JAN23"), ("2021-01-07", 0.01, "JAN21")])
+    frames = _pooled(coll, _pool_cfg(start="2022-12-01", end="2023-02-01",
+                                     pool_years=[2021, 2023], pool_strategy="gap_fill"))
+    assert [(f.label, f.source, f.image.tag) for f in frames] == [
+        ("2022-12", None, "median:2022-12-05"), ("2023-01", None, "median:2023-01-07")]
+
+
+def test_gap_fill_issues_one_round_trip_not_one_per_frame():
+    # 12 frames, mixed nominal/borrowed, still exactly ONE getInfo().
+    round_trips = []
+
+    class CountingEE(FakeEE):
+        @staticmethod
+        def Dictionary(props):
+            inner = FakeEE.Dictionary(props)
+            def getInfo():
+                round_trips.append(sorted(props))
+                return inner.getInfo()
+            return types.SimpleNamespace(getInfo=getInfo)
+
+    scenes = ([(f"2021-{m:02d}-05", 0.1) for m in range(1, 13)]
+              + [(f"2022-{m:02d}-05", 0.5) for m in range(1, 7)])
+    frames = pooled_composite(PooledCollection(scenes),
+                              _pool_cfg(start="2022-01-01", end="2023-01-01",
+                                        pool_strategy="gap_fill"),
+                              ee_module=CountingEE)
+    assert len(frames) == 12
+    assert [f.source for f in frames] == [None] * 6 + [2021] * 6
+    assert round_trips == [["region_cloud", "time"]]
+
+
 def test_pooled_issues_one_round_trip_not_one_per_frame():
     # 12 frames, still exactly ONE getInfo(): every per-scene array is batched into a
     # single ee.Dictionary, which is also what makes their alignment structural.

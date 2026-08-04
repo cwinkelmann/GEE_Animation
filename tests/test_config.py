@@ -461,6 +461,14 @@ def test_validate_rejects_anomaly_with_pool_years(tmp_path):
             "pool_years: [2019, 2024]\n")))
 
 
+def test_validate_accepts_gap_fill_pool_strategy(tmp_path):
+    # gap_fill is the only strategy that keeps the requested year wherever it has
+    # data, so it has to be selectable from YAML like the other two.
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+        "index: ndvi\npool_years: [2019, 2024]\npool_strategy: gap_fill\n")))
+    assert cfg.pool_strategy == "gap_fill"
+
+
 def test_validate_rejects_unknown_pool_strategy(tmp_path):
     with pytest.raises(ConfigError, match="pool_strategy"):
         RunConfig.from_yaml(_write(tmp_path, _base(

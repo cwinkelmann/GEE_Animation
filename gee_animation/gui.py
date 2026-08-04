@@ -53,8 +53,11 @@ POOL_WARNING = (
     "labelled `2022-05` may show May 2021. The result is a smooth, near cloud-free "
     "seasonal loop — it is **not a time series** and must not be used for quantitative "
     "analysis, trend/change detection, or anything reported as a measurement. Every "
-    "frame is labelled with its source year (`2022-05 ← 2021`) and the info bar names "
-    "the pooled range."
+    "borrowed frame is labelled with its source year (`2022-05 ← 2021`) and the info "
+    "bar names the pooled range. "
+    "**Exception:** `gap_fill` keeps the year you asked for wherever it has usable "
+    "data and borrows only for periods that would otherwise be empty, so its unmarked "
+    "frames really are from the requested year."
 )
 
 # Gradio 6 lays the whole ancestor chain out as a flex column — including <html> — and
@@ -493,7 +496,11 @@ def build_app():
                     pool_strategy = gr.Dropdown(
                         sorted(POOL_STRATEGIES), value="least_cloudy",
                         label="Pooling strategy",
-                        info="least_cloudy = the single sharpest scene per period; "
+                        info="gap_fill = keep the requested year where it has data, "
+                             "borrow another year only for otherwise-empty periods "
+                             "(the only strategy that preserves the year you asked "
+                             "for); least_cloudy = replace every period with the "
+                             "single sharpest scene from any pooled year; "
                              "median = median across the pooled years (smoother, "
                              "but blurs and mixes years).")
                 project = gr.Textbox(label="Earth Engine project",

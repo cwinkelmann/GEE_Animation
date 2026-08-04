@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 SUPPORTED_CADENCES = {"monthly", "semimonthly", "10day"}
 
 # Cross-year "best month" pooling (see compositing.pooled_composite).
-POOL_STRATEGIES = {"least_cloudy", "median"}
+POOL_STRATEGIES = {"least_cloudy", "median", "gap_fill"}
 
 
 class ConfigError(ValueError):

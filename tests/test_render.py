@@ -599,6 +599,23 @@ def test_render_composes_pooled_provenance_into_the_drawn_text(tmp_path, monkeyp
     assert "←" not in drawn[0]
 
 
+def test_render_leaves_gap_fill_nominal_frames_unmarked(tmp_path, monkeypatch):
+    # gap_fill emits a mix: nominal-year frames carry source=None and must draw the
+    # PLAIN period label (an arrow there would claim borrowed data that isn't), while
+    # the borrowed ones still name their source year — in the same run.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    drawn = []
+    monkeypatch.setattr(r, "annotate", lambda rgb, label: (drawn.append(label) or rgb))
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
+
+    render([Frame("2022-05", object(), 3, None), Frame("2022-06", object(), 1, 2019)],
+           cfg, fetch=fake_fetch, geometry=None)
+    assert drawn == ["2022-05  n=3", "2022-06 <- 2019  n=1"]
+
+
 def test_render_composite_passes_rgb_through_without_colorbar(tmp_path):
     # rgb/cir fetch returns an H×W×3 colour array; render must NOT colorize it,
     # and must not draw a palette colorbar (composites have no palette).
