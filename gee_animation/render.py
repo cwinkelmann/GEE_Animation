@@ -163,11 +163,6 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4) -> np.ndarray:
         np.linspace(vmin, vmax, bar_w)[None, :],
         vmin, vmax, cfg.palette,
     )[0]  # (bar_w, 3)
-    for i in range(bar_w):
-        c = tuple(int(v) for v in ramp[i])
-        draw.line([(x0 + i, y0), (x0 + i, y0 + bar_h)], fill=c)
-    draw.rectangle([x0, y0, x0 + bar_w, y0 + bar_h], outline=(255, 255, 255, 255), width=lw)
-
     # Units: the index's own (e.g. "°C" for a thermal index); a climatology anomaly
     # renders z-scores instead, so its unit overrides whatever the index carries.
     meta = _index_meta(cfg)
@@ -203,6 +198,25 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4) -> np.ndarray:
 
     tick_top, tick_bot = y0 + bar_h, y0 + bar_h + lw + 2
     text_y = tick_bot + 1
+
+    # Translucent panel behind the whole block. The ramp and its white labels sit on
+    # top of the imagery, which can be any colour — white-on-pale-yellow was
+    # unreadable. draw_scale_bar already backs its label the same way; without this
+    # the legend's legibility depends on whatever the scene happens to look like.
+    pad = max(3, lw * 2)
+    text_h = draw.textbbox((0, 0), "0", font=font)[3]
+    shown = [(_label_bounds(lb, _x(v), a)) for i, (v, lb, a, _d) in enumerate(ticks)
+             if show_label[i]]
+    right = max([x0 + bar_w] + [hi for _lo, hi in shown])
+    left = min([x0] + [lo for lo, _hi in shown])
+    draw.rectangle([left - pad, y0 - pad, right + pad, text_y + text_h + pad],
+                   fill=(0, 0, 0, 130))
+
+    for i in range(bar_w):
+        c = tuple(int(v) for v in ramp[i])
+        draw.line([(x0 + i, y0), (x0 + i, y0 + bar_h)], fill=c)
+    draw.rectangle([x0, y0, x0 + bar_w, y0 + bar_h], outline=(255, 255, 255, 255), width=lw)
+
     for i, (v, label, anchor, _droppable) in enumerate(ticks):
         x = _x(v)
         draw.line([(x, tick_top), (x, tick_bot)], fill=(255, 255, 255, 255), width=lw)

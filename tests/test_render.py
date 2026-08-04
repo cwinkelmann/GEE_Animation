@@ -882,3 +882,22 @@ def test_info_text_pooled_note_matches_the_strategy():
     assert "cosmetic" in cosmetic and "gap-filled" not in cosmetic
     # unpooled runs carry no pooling note at all
     assert "pooled years" not in _info_text(types.SimpleNamespace(index="ndvi"))
+
+
+def test_colorbar_draws_a_backing_panel_for_contrast():
+    """The ramp and its white labels sit on the imagery, which can be any colour —
+    white-on-pale-yellow was unreadable. A translucent dark panel must back the whole
+    block, as draw_scale_bar already does for its own label."""
+    w, h = 400, 120
+    bright = np.full((h, w, 3), 255, np.uint8)      # worst case: white imagery
+    cfg = types.SimpleNamespace(index="lst", viz_min=-3.0, viz_max=46.0,
+                                palette=["#0000ff", "#ff0000"])
+    out = add_colorbar(bright, cfg)
+
+    # Sample just under the ramp, where the tick labels are drawn: on a white frame
+    # that band must have been darkened, or the labels are invisible.
+    bar_h = max(6, h // 20)
+    label_band = out[bar_h + 6 : bar_h + 14, : int(w * 0.4)]
+    assert label_band.mean() < 200, "no backing panel behind the colorbar labels"
+    # Well away from the colorbar the imagery is untouched.
+    assert out[h - 4, w - 4].tolist() == [255, 255, 255]
