@@ -32,6 +32,13 @@ Two geometries are supplied, and they do different jobs:
 In the example configs the frame is the region buffered by 5 km, giving a 13.7 × 12.5 km
 picture around a forest that is only 3.7 × 2.5 km.
 
+![Sentinel-2 true colour, July 2022](images/rgb-summer.jpg)
+
+*The area in true colour (Sentinel-2, July 2022). The yellow outline is the **region**;
+everything around it is the **frame**. The forest is the dark continuous canopy; the
+pale rectangles are harvested fields, and the surrounding villages, roads and lakes are
+all resolvable at 10 m. This is the context the thermal comparison is made against.*
+
 ---
 
 ## 3. Choosing scenes: two cloud gates
@@ -142,6 +149,14 @@ trend detection, change detection, or anything reported as a measurement.
   product's true ground resolution and upscales smoothly for display. Landsat thermal
   is 100 m, so a 13.7 km frame holds only ~137 real pixels; Sentinel-2 optical is 10 m
   and holds ~1368. That is a property of the sensors, not the tool.
+
+  ![Landsat thermal at its true resolution](images/lst-coarse.jpg)
+
+  *The same frame in the thermal band. Compare with the true-colour image in §2: both
+  cover identical ground, but this one contains roughly one tenth the detail in each
+  direction. The softness is the data. `lst_sharp` will make this look sharper by
+  fitting the thermal signal against 30 m optical, at the price of inventing structure —
+  see §9.*
 - **Overlays** — region outline, colour bar with units, scale bar, period label, and an
   information bar naming the bands and formula — are drawn *outside* the imagery, in
   added margins, so nothing in the picture is covered up.
@@ -161,16 +176,34 @@ Separately, `charts.inside_outside_timeseries` returns the mean **inside the reg
 **over the surrounding frame** for each period, which is the comparison that carries the
 ecological story.
 
-Worked example, the two-year Landsat LST run (`config/wne_2yr_gapfill.example.yaml`):
+### The phenomenon, seen and measured
 
-| | forest | surroundings | difference |
-|---|---|---|---|
-| summer (Jun–Aug) mean | — | — | **−4.7 °C** |
-| winter (Dec–Feb) mean | — | — | **−0.3 °C** |
-
+Worked example, the two-year Landsat LST run (`config/wne_2yr_gapfill.example.yaml`).
 The forest is markedly cooler than the farmland around it while the canopy is active,
-and indistinguishable from it in winter. That contrast is the thermal-buffering signal;
-a single frame cannot show it, which is the reason for building the series at all.
+and indistinguishable from it in winter — a difference of about **4.7 °C in summer**
+against **0.3 °C in winter**.
+
+![LST, July 2022, summer range](images/lst-summer.jpg)
+
+*July 2022, colour range narrowed to 18–43 °C. The forest reads as a coherent cool
+island — green and cyan against farmland at 35–43 °C. Its boundary in the thermal image
+follows the mapped polygon closely, which is the point: the canopy, not the map, is
+what makes the temperature change. The small deep-blue patches elsewhere are lakes.*
+
+![LST, January 2022](images/lst-winter.jpg)
+
+*January 2022, from the two-year run. The forest is invisible — indistinguishable from
+everything around it. This is the phenomenon being absent, not the imagery failing:
+with no active canopy there is nothing to buffer. It also shows the fixed-range
+trade-off of §9, since this frame occupies a few percent of a −3…46 °C ramp.*
+
+![Inside vs outside the AOI, 2021–2022](images/lst-inside-outside.png)
+
+*The same two years as a series: mean LST inside the forest (green) against the
+surrounding frame (red). The two lines run together through winter and separate every
+summer, by up to 5.6 °C. Grey numbers mark the five frames that `gap_fill` borrowed
+from another year. No single frame shows this — it is the reason for building the
+series at all.*
 
 **Caveat:** `aoi_mean` is computed only over clear pixels, so a frame with heavy partial
 cloud averages a smaller, non-random part of the AOI. Read the series alongside
