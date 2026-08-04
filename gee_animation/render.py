@@ -131,16 +131,17 @@ def apply_nodata(rgb: np.ndarray, valid: np.ndarray, color=NODATA_RGB) -> np.nda
 def _colorbar_ticks(vmin: float, vmax: float, units: str) -> list:
     """Ordered tick specs ``(value, label, anchor, droppable)`` for the colorbar.
 
-    min (left-anchored) and max (right-anchored, with units appended) always show.
-    An exact 0 is added only when the range straddles it (anomaly renders); it is
-    never dropped. The midpoint is always ticked but flagged droppable — the caller
-    may omit *just its label* when the ramp is too narrow for three non-overlapping
-    labels.
+    min (left-anchored) and max (right-anchored, with units appended) always show —
+    they define the range, so they are never dropped. An exact 0 is added only when
+    the range straddles it. Both the 0 and the midpoint are always *ticked* but their
+    labels are droppable: the caller omits a label that would collide with another.
+    A lopsided range makes this necessary — over -3..46 the 0 tick sits at 6% of the
+    ramp and its label lands on top of the "-3", drawing as "-30".
     """
     ticks = [(vmin, f"{vmin:g}", "l", False)]
     zero_shown = vmin < 0 < vmax
     if zero_shown:
-        ticks.append((0.0, "0", "m", False))
+        ticks.append((0.0, "0", "m", True))
     vmid = (vmin + vmax) / 2.0
     if not (zero_shown and vmid == 0.0):   # avoid a duplicate "0" tick (e.g. -3..3)
         ticks.append((vmid, f"{vmid:g}", "m", True))
@@ -228,8 +229,14 @@ def _info_text(cfg) -> str:
         # Plain ASCII hyphen, not an en dash: this string is drawn straight into
         # `draw_info_bar` with no fold step, and Pillow's default font has no en-dash
         # glyph (see _DRAWABLE).
-        text += (f"   pooled years {int(pool[0])}-{int(pool[-1])} "
-                 "(cosmetic: frames may be from different years)")
+        # gap_fill keeps the requested year wherever it has data and only borrows for
+        # otherwise-empty periods, so its unmarked frames really are that year —
+        # calling the whole run "cosmetic" would overstate it. The other strategies
+        # re-pick every frame, so for those the blanket warning is correct.
+        note = ("gap-filled: frames marked <- YYYY borrow another year"
+                if getattr(cfg, "pool_strategy", None) == "gap_fill"
+                else "cosmetic: frames may be from different years")
+        text += f"   pooled years {int(pool[0])}-{int(pool[-1])} ({note})"
     return text
 
 

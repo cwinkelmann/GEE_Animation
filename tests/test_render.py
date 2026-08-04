@@ -727,7 +727,7 @@ def test_colorbar_adds_zero_tick_only_when_range_spans_zero():
     from gee_animation.render import _colorbar_ticks
     spans = _colorbar_ticks(-3, 3, "")
     absolute = _colorbar_ticks(15, 40, "")
-    assert (0.0, "0", "m", False) in spans
+    assert (0.0, "0", "m", True) in spans
     assert not any(label == "0" for _v, label, _a, _d in absolute)
 
     # and the rendered (-3, 3) bar actually carries a tick at the 0 position
@@ -752,7 +752,9 @@ def test_colorbar_ticks_zero_dedupes_with_midpoint():
     ticks = _colorbar_ticks(-3, 3, "")
     zero_ticks = [t for t in ticks if t[0] == 0.0]
     assert len(zero_ticks) == 1
-    assert zero_ticks[0] == (0.0, "0", "m", False)   # kept as the non-droppable zero tick
+    # The 0 label is droppable so it can yield when a lopsided range parks it on top
+    # of the min label (see test_colorbar_drops_zero_label_when_it_collides_with_min).
+    assert zero_ticks[0] == (0.0, "0", "m", True)
 
 
 def test_colorbar_drops_mid_label_on_narrow_ramp():
@@ -773,7 +775,8 @@ def test_colorbar_drops_mid_label_on_narrow_ramp():
     text_y = y0 + bar_h + lw + 2 + 1   # matches add_colorbar's tick_bot + 1
 
     ticks = _colorbar_ticks(-10.0, 40.0, "°C")
-    assert [droppable for *_, droppable in ticks] == [False, False, True, False]
+    # min and max pin the range and never drop; the 0 and mid labels both yield.
+    assert [droppable for *_, droppable in ticks] == [False, True, True, False]
 
     scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     def _bounds(text, x, anchor):
@@ -844,3 +847,38 @@ def test_pooled_label_source_year_is_drawn_not_a_notdef_box():
     with_year = annotate(rgb.copy(), _drawable("2022-05 ← 2021"))
     without = annotate(rgb.copy(), "2022-05")
     assert not np.array_equal(with_year, without)      # the source year really lands
+
+
+def test_colorbar_drops_zero_label_when_it_collides_with_min():
+    """A lopsided range puts 0 close to the min end: over -3..46 the zero tick sits at
+    6% of the ramp and its label lands on the "-3", which drew as "-30". The min label
+    defines the range and must survive; the zero label yields."""
+    from gee_animation.render import _colorbar_ticks
+    ticks = _colorbar_ticks(-3, 46, "°C")
+    zero = [t for t in ticks if t[1] == "0"]
+    assert zero and zero[0][3] is True, "the 0 label must be droppable"
+
+    w, h = 300, 80
+    cfg = types.SimpleNamespace(index="lst", viz_min=-3.0, viz_max=46.0,
+                                palette=["#0000ff", "#ff0000"])
+    out = add_colorbar(np.zeros((h, w, 3), np.uint8), cfg)
+    # The min label "-3" occupies the left end; nothing may be drawn immediately to its
+    # right at label height, which is what the overlapping "0" did.
+    bar_w = max(20, int(w * 0.4))
+    band = out[:, : bar_w // 4, :]
+    assert band.max() > 0, "the min label should still be drawn"
+
+
+def test_info_text_pooled_note_matches_the_strategy():
+    """gap_fill keeps the requested year where it has data, so labelling the whole run
+    "cosmetic" overstates it; least_cloudy/median do re-pick every frame, so for those
+    the blanket warning is right."""
+    from gee_animation.render import _info_text
+    base = dict(index="ndvi", pool_years=[2018, 2024])
+    gap = _info_text(types.SimpleNamespace(**base, pool_strategy="gap_fill"))
+    cosmetic = _info_text(types.SimpleNamespace(**base, pool_strategy="least_cloudy"))
+    assert "pooled years 2018-2024" in gap and "gap-filled" in gap
+    assert "cosmetic" not in gap
+    assert "cosmetic" in cosmetic and "gap-filled" not in cosmetic
+    # unpooled runs carry no pooling note at all
+    assert "pooled years" not in _info_text(types.SimpleNamespace(index="ndvi"))
