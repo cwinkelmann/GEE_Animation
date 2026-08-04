@@ -58,3 +58,7 @@ render:
   aspect: match
   upscale: lanczos
   region_line_width: 5      # thicker outline so the AOI reads at output size
+
+# Record per-frame stats to out/metadata.db (mean index over the AOI's clear
+# pixels, scene count, cloud fraction) so the series can be plotted afterwards.
+metadata: true
