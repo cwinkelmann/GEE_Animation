@@ -1,0 +1,47 @@
+# Two full years of true-colour Sentinel-2 over the Grumsin (WNE) beech forest,
+# with cross-year gap filling. The optical twin of wne_2yr_gapfill.example.yaml.
+#
+# Why this is far sharper than the LST run: Sentinel-2 RGB is 10 m native, so this
+# 13.7 km frame carries ~1368 px of real data and the 1440p preset is close to a 1:1
+# render. The thermal band is 100 m — the same frame is only ~137 px, upscaled ~8x.
+# That is a property of the sensors, not of the renderer.
+name: wne_2yr_rgb
+project: hnee-331218
+
+aoi:
+  frame:
+    bbox: [13.7949, 52.9299, 13.9985, 53.0421]   # region + 5 km -> 13.7 x 12.5 km
+  region:
+    shapefile: docs/aoi/wne/wne.shp
+  region_max_cloud_percent: 20
+
+start: "2021-01-01"
+end: "2023-01-01"
+
+sensor: sentinel2
+index: rgb                  # true colour. Composites have no single INDEX band, so
+                            # there is no colour bar on these frames by design.
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+
+pool_years: [2018, 2024]
+pool_strategy: gap_fill     # keep 2021/2022 where they have data; borrow only for gaps
+
+viz:
+  min: 0.0                  # measured: p98 peaks at 0.207 (R, July), medians 0.03-0.07,
+  max: 0.17                 # so 0..0.3 wasted the top third and forest read near-black
+
+render:
+  fps: 1
+  scale: 10
+  dimensions: 1440          # caps to ~1368 px native at 10 m — essentially 1:1
+  crs: auto
+  preset: 1440p
+  aspect: match
+  upscale: lanczos
+  region_line_width: 5
+
+# Record per-frame stats to out/metadata.db (mean index over the AOI's clear
+# pixels, scene count, cloud fraction) so the series can be plotted afterwards.
+metadata: true

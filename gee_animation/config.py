@@ -1,6 +1,7 @@
 """Run configuration model: load and validate YAML into a RunConfig."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -9,11 +10,45 @@ import yaml
 
 from .products import INDICES, get_product
 
-SUPPORTED_CADENCES = {"monthly"}
+log = logging.getLogger(__name__)
+
+# semimonthly splits at the 1st/16th; 10day splits at the 1st/11th/21st (see
+# compositing._SPLIT_DAYS — bins stay aligned to calendar months).
+SUPPORTED_CADENCES = {"monthly", "semimonthly", "10day"}
+
+# Cross-year "best month" pooling (see compositing.pooled_composite).
+POOL_STRATEGIES = {"least_cloudy", "median", "gap_fill"}
+
+# Frame-interpolation strategies (see render.interpolate / render.interpolate_mode).
+INTERPOLATE_MODES = {"auto", "crossfade", "data"}
 
 
 class ConfigError(ValueError):
     """Raised when a run configuration is invalid."""
+
+
+#: Optional render flags that must be real YAML booleans (see _flag / validate).
+_RENDER_FLAGS = ("gif", "frames")
+
+
+def _flag(render: dict, key: str, default=True):
+    """A `render.<key>` boolean, or `default` when the key is absent.
+
+    Deliberately not `bool(...)`: YAML turns a *quoted* ``gif: "false"`` into a
+    non-empty string, and truthy-coercing it would silently keep writing the very
+    output the user asked to skip. Anything that isn't a real boolean is rejected.
+
+    `default` may be ``None`` — "not configured", which `render.gif` needs so that an
+    interpolated run can default the GIF off while an explicit ``gif: true`` still
+    wins. The absent case returns the default untouched; a value that *is* present is
+    held to the same boolean rule either way.
+    """
+    if key not in render:
+        return default
+    value = render[key]
+    if not isinstance(value, bool):
+        raise ConfigError(f"render.{key} must be true or false (got {value!r})")
+    return value
 
 
 @dataclass
@@ -35,25 +70,46 @@ class RunConfig:
     fps: float          # frames/sec; fractional allowed (e.g. 0.5 = 2 s per frame)
     scale: float
     dimensions: int
-    # Render CRS (from render.crs). None => EPSG:4326 (plate carrée). "auto" => UTM
-    # zone from the AOI centroid (square pixels; correct scale bar on both axes).
-    crs: str = None
+    # Render CRS (from render.crs). Default "auto" => UTM zone from the AOI
+    # centroid (square pixels; correct scale bar on both axes). Explicit
+    # crs: "EPSG:4326" restores the old plate-carrée behaviour (stretched at
+    # latitude; not recommended).
+    crs: str = "auto"
     # Screen-output controls (from render.*). preset => output long-edge (4k/1440p/
     # 1080p/720p or an int); aspect => canvas aspect (match/16:9/4:3/1:1/21:9);
     # upscale => interpolation used to enlarge the native-resolution frame.
     preset: str = None
     aspect: str = None
     upscale: str = "lanczos"
+    # Which outputs render writes (from render.gif / render.frames). The MP4 is always
+    # written; the GIF is a preview format and by far the slowest encode (~5 s of a
+    # 24 s run), and the per-frame PNGs are ~6 s more. Both effectively default on, so
+    # an existing config's deliverables are unchanged. See render.assemble_stream /
+    # render._write_frames.
+    # `gif` is three-state: None means "not configured", which `render()` resolves —
+    # on for a normal run, off for an interpolated one (several hundred quantized
+    # frames). Only an explicit True/False here can override that.
+    gif: bool | None = None
+    frames: bool = True
     # Anomaly rendering (from top-level `anomaly` / `baseline_years`). "climatology"
     # => per-pixel z-score vs baseline monthly climatology; "reference" => LST minus
     # ERA5 air temp (thermal only). None => raw values.
     anomaly: str = None
     baseline_years: list = None
+    # Cross-year "best month" pooling (from top-level `pool_years` / `pool_strategy`).
+    # [firstYear, lastYear] inclusive: each period is filled from the same calendar
+    # period in ANY of those years, so a "2022-05" frame may show May 2021. Cosmetic
+    # only — every frame is labelled with its source year. None => off (default).
+    pool_years: list = None
+    pool_strategy: str = "least_cloudy"
     # Write per-frame AOI cloud fraction to <out_dir>/metadata.db (a reduceRegion per
     # frame, so opt-in).
     metadata: bool = False
     out_dir: str = "out"
     draw_region: bool = True
+    # Region outline core width in px (from render.region_line_width). None => the
+    # current max(2, h/430) behaviour (see render.draw_region).
+    region_line_width: int = None
     # Optional Landsat mission whitelist (e.g. ["L8", "L9"]). None => sensor default
     # (thermal indices default to L8/L9; see collection.build).
     missions: list = None
@@ -66,6 +122,21 @@ class RunConfig:
     # Debug: if set to "YYYY-MM", export that month's individual input scenes + the
     # median they collapse into (to <out_dir>/debug/<month>/) instead of the animation.
     debug_month: str = None
+    # Concurrent thumbnail fetches (from render.workers). Each frame is an EE
+    # compute + stream, so overlapping them dominates runtime; 4 is the measured
+    # sweet spot (EE throttles beyond it). 1 => genuinely serial (debugging).
+    workers: int = 4
+    # On-disk cache of raw thumbnail bytes (from render.cache / render.cache_dir).
+    # cache_dir None => $GEE_ANIMATION_CACHE_DIR, else the platform user cache dir
+    # (never inside out/, which is the shared deliverable). See cache.py.
+    cache: bool = True
+    cache_dir: str = None
+    # Generated frames inserted between observations so playback reads as motion
+    # (from render.interpolate / render.interpolate_mode). 0 = off. "auto" picks
+    # data-space interpolation for single-band indices and cross-fade for
+    # composites, which arrive from EE already coloured.
+    interpolate: int = 0
+    interpolate_mode: str = "auto"
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RunConfig":
@@ -104,19 +175,30 @@ class RunConfig:
                 fps=float(render["fps"]),
                 scale=float(render["scale"]),
                 dimensions=int(render["dimensions"]),
-                crs=render.get("crs"),
+                crs=render.get("crs") or "auto",
                 preset=(str(render["preset"]) if render.get("preset") is not None else None),
                 aspect=render.get("aspect"),
                 upscale=str(render.get("upscale", "lanczos")),
+                gif=_flag(render, "gif", default=None),
+                frames=_flag(render, "frames"),
                 out_dir=str(raw.get("out_dir", "out")),
                 draw_region=bool(raw.get("draw_region", True)),
+                region_line_width=(int(render["region_line_width"])
+                                   if render.get("region_line_width") is not None else None),
                 anomaly=anomaly,
                 baseline_years=raw.get("baseline_years"),
+                pool_years=raw.get("pool_years"),
+                pool_strategy=str(raw.get("pool_strategy") or "least_cloudy"),
                 metadata=bool(raw.get("metadata", False)),
                 missions=raw.get("missions"),
                 min_scenes=int(raw.get("min_scenes", 1)),
                 allow_upsample=bool(raw.get("allow_upsample", False)),
                 debug_month=(str(raw["debug_month"]) if raw.get("debug_month") else None),
+                workers=int(render.get("workers", 4)),
+                cache=bool(render.get("cache", True)),
+                cache_dir=(str(render["cache_dir"]) if render.get("cache_dir") else None),
+                interpolate=int(render.get("interpolate", 0) or 0),
+                interpolate_mode=str(render.get("interpolate_mode") or "auto"),
             )
         except KeyError as exc:
             raise ConfigError(f"missing required config key: {exc}") from exc
@@ -132,6 +214,10 @@ class RunConfig:
             raise ConfigError(
                 f"unsupported cadence {self.cadence!r}; supported: {sorted(SUPPORTED_CADENCES)}"
             )
+        if self.cadence != "monthly" and self.sensor == "landsat":
+            log.warning(
+                "cadence %r with sensor 'landsat': Landsat's 16-day repeat leaves most "
+                "%s bins empty", self.cadence, self.cadence)
         for label, a in (("frame", self.frame_aoi), ("region", self.region_aoi)):
             if not (a.get("bbox") or a.get("geojson") or a.get("shapefile")):
                 raise ConfigError(
@@ -147,8 +233,37 @@ class RunConfig:
                     f"unknown missions {bad}; valid Landsat missions: {sorted(valid)}")
         if self.min_scenes < 1:
             raise ConfigError("min_scenes must be >= 1")
+        if self.region_line_width is not None and self.region_line_width < 1:
+            raise ConfigError("render.region_line_width must be >= 1")
+        if self.workers < 1:
+            raise ConfigError("render.workers must be >= 1")
+        if self.interpolate < 0:
+            raise ConfigError("render.interpolate must be >= 0")
+        if self.interpolate_mode not in INTERPOLATE_MODES:
+            raise ConfigError(
+                f"unknown render.interpolate_mode {self.interpolate_mode!r}; "
+                f"supported: {sorted(INTERPOLATE_MODES)}")
+        if self.interpolate_mode == "data" and INDICES[self.index].composite:
+            raise ConfigError(
+                f"render.interpolate_mode: data needs a single-band index; "
+                f"{self.index!r} is a composite — use crossfade (or auto)")
+        # Also checked here (not only in from_yaml) because the GUI and api.animate
+        # build RunConfig directly and validate() is their only gate.
+        for flag in _RENDER_FLAGS:
+            value = getattr(self, flag)
+            if flag == "gif" and value is None:
+                continue          # "not configured" — resolved in render() (see above)
+            if not isinstance(value, bool):
+                raise ConfigError(
+                    f"render.{flag} must be true or false (got {value!r})")
         if self.anomaly is not None:
             from .products import THERMAL_INDICES
+            if self.cadence != "monthly":
+                # anomaly divides a period mean by a *monthly* climatology σ; a
+                # sub-monthly slice would silently produce inflated z-scores.
+                raise ConfigError(
+                    f"anomaly requires cadence: monthly (got {self.cadence!r}); "
+                    "sub-monthly composites cannot be scored against a monthly climatology")
             if self.anomaly not in ("climatology", "reference"):
                 raise ConfigError(
                     f"unknown anomaly {self.anomaly!r}; use 'climatology' or 'reference'")
@@ -157,6 +272,33 @@ class RunConfig:
             if self.anomaly == "climatology" and not (
                     isinstance(self.baseline_years, (list, tuple)) and len(self.baseline_years) == 2):
                 raise ConfigError("anomaly: climatology needs baseline_years: [firstYear, lastYear]")
+        if self.pool_strategy not in POOL_STRATEGIES:
+            raise ConfigError(
+                f"unknown pool_strategy {self.pool_strategy!r}; "
+                f"use one of {sorted(POOL_STRATEGIES)}")
+        if self.pool_years is not None:
+            if self.anomaly is not None:
+                # The climatology baseline is itself multi-year, so a pooled frame
+                # would score a borrowed year against a mean that already contains it.
+                raise ConfigError(
+                    "pool_years cannot be combined with anomaly: the anomaly baseline "
+                    "is itself multi-year, so a frame borrowed from another year would "
+                    "be scored against a climatology that already includes it")
+            if not (isinstance(self.pool_years, (list, tuple))
+                    and len(self.pool_years) == 2):
+                raise ConfigError("pool_years must be [firstYear, lastYear]")
+            try:
+                y0, y1 = int(self.pool_years[0]), int(self.pool_years[1])
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(f"pool_years must be two years: {exc}") from exc
+            if y1 < y0:
+                raise ConfigError(
+                    f"pool_years last year ({y1}) must not precede the first ({y0})")
+            if self.sensor == "landsat" and not self.missions:
+                log.warning(
+                    "pool_years with sensor 'landsat' and no `missions` whitelist: "
+                    "L7/L8/L9 differ radiometrically and L7 is SLC-off, so pooled "
+                    "frames can step between missions; set e.g. missions: [L8, L9]")
         if self.preset or self.aspect or self.upscale != "lanczos":
             from .render import ASPECTS, PRESETS, UPSCALE_METHODS
             if self.preset and self.preset.lower() not in PRESETS and not str(self.preset).isdigit():
@@ -181,3 +323,18 @@ class RunConfig:
         if not (spec and spec.composite) and not self.palette:
             # composites (rgb/cir) render 3 real bands, so they need no palette
             raise ConfigError("viz.palette must be non-empty")
+
+
+def pool_span(cfg) -> tuple[str, str] | None:
+    """(start, end) covering every year in ``cfg.pool_years``, or None when
+    cross-year pooling is off.
+
+    ``collection.build`` widens its ``filterDate`` to this span so the pooled scenes
+    exist at all; :func:`compositing.pooled_composite` then buckets them by calendar
+    period.
+    """
+    years = getattr(cfg, "pool_years", None)
+    if not years:
+        return None
+    y0, y1 = int(years[0]), int(years[-1])
+    return f"{y0}-01-01", f"{y1 + 1}-01-01"

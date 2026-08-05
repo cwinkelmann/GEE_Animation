@@ -192,6 +192,7 @@ def animate(region, *, sensor="landsat", index="lst", start, end,
         fps=float(fps), scale=_SCALE.get(sensor, 30), dimensions=768,
         preset=preset, aspect=aspect, upscale="lanczos", out_dir=out_dir,
         draw_region=True, metadata=bool(write_metadata))
+    cfg.validate()   # RunConfig is built directly here, so from_yaml's check is skipped
 
     frames = deps.monthly_median(deps.build(cfg, frame_geom, region_geom), cfg)
     if not frames:

@@ -14,4 +14,6 @@ end: "2026-09-01"
 cadence: monthly
 max_cloud_percent: 60             # ignored for MODIS (no per-scene cloud metadata)
 draw_region: true
-render: { fps: 3, scale: 500, dimensions: 512 }
+# preset: fetch at native GSD, upscale smoothly (the data is ~500 m/px; without this
+# the WNE frame caps to ~18 px)
+render: { fps: 3, scale: 500, dimensions: 512, crs: auto, preset: 1080p }

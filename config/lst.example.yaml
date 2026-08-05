@@ -32,3 +32,5 @@ render:
   scale: 30                 # metres/pixel (informational; dimensions drives size)
   dimensions: 768           # capped to native 100 m thermal -> honest (blocky) pixels
   crs: auto                 # UTM from AOI centroid -> square pixels + correct scale bar
+  preset: 1080p             # fetch at native GSD, upscale smoothly (the data is
+                            # ~100 m/px; without this the frame caps to ~91 px)

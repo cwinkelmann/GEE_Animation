@@ -1,10 +1,13 @@
 """Build a cloud-masked (sensor, index) ImageCollection with an INDEX band."""
 from __future__ import annotations
 
+import copy
 import logging
+from dataclasses import is_dataclass, replace
 
 import ee
 
+from .config import pool_span
 from .products import THERMAL_INDICES, get_product
 
 log = logging.getLogger(__name__)
@@ -46,8 +49,33 @@ def add_region_cloud_fraction(image, region, scale, cloud_band, ee_module=ee):
     return image.set("region_cloud_fraction", frac)
 
 
-def build(cfg, frame_geom, region_geom, ee_module=ee):
+def _with_dates(cfg, start: str, end: str):
+    """A copy of `cfg` with start/end replaced (dataclass or plain namespace)."""
+    if is_dataclass(cfg):
+        return replace(cfg, start=start, end=end)
+    clone = copy.copy(cfg)
+    clone.start, clone.end = start, end
+    return clone
+
+
+def build(cfg, frame_geom, region_geom, *, apply_cloud_filters: bool = True, ee_module=ee):
+    """Build the (sensor, index) ImageCollection for `cfg`'s AOI/date range.
+
+    `apply_cloud_filters=False` (default True) skips both the coarse scene-level
+    cloud filter and the in-region cloud-fraction filter, while still computing
+    `region_cloud_fraction` on every scene — this is what `inventory.py` needs to
+    see the full unfiltered candidate set, with the same per-scene cloud metadata
+    the filtered path would have judged them by.
+    """
     sensor, index = get_product(cfg.sensor, cfg.index)
+    span = pool_span(cfg)
+    if span is not None:
+        # Cross-year "best month" mode: the candidate scenes live outside
+        # [cfg.start, cfg.end), so widen the date range to every pooled year here —
+        # compositing.pooled_composite then buckets them by calendar period, ignoring
+        # the year. Replacing start/end (rather than special-casing the filterDate
+        # below) also reaches the index-supplied `build_collection` path.
+        cfg = _with_dates(cfg, *span)
     if getattr(index, "build_collection", None) is not None:
         # Index supplies its own (already date/bounds-filtered) source collection,
         # e.g. lst_smw's satellite-aware Landsat+TOA join.
@@ -65,15 +93,24 @@ def build(cfg, frame_geom, region_geom, ee_module=ee):
     # Coarse scene-level cloud pre-filter — only sensors that carry a per-scene
     # cloud metadata property (S2, Landsat); MODIS has none, so skip it and rely
     # on the in-region QA cloud-fraction filter below.
-    if sensor.scene_cloud_property is not None:
+    if apply_cloud_filters and sensor.scene_cloud_property is not None:
         coll = coll.filter(
             ee_module.Filter.lte(sensor.scene_cloud_property, cfg.max_cloud_percent))
+    coll = coll.map(lambda img: add_region_cloud_fraction(
+        img, region_geom, cfg.scale, sensor.cloud_band, ee_module))
+    if apply_cloud_filters:
+        coll = coll.filter(
+            ee_module.Filter.lt("region_cloud_fraction", cfg.region_max_cloud_percent / 100.0))
+    # index.compute derives a brand-new image (select/band-math/rename), which drops
+    # every source property except the system:time_start each compute fn re-sets
+    # explicitly (see products.py's NOTE). copyProperties restores the rest —
+    # region_cloud_fraction, the sensor's scene cloud property, mission — so
+    # inventory.scene_inventory and compositing.pooled_composite can still read them
+    # back via aggregate_array() on the built collection.
     coll = (
         coll
-        .map(lambda img: add_region_cloud_fraction(
-            img, region_geom, cfg.scale, sensor.cloud_band, ee_module))
-        .filter(ee_module.Filter.lt("region_cloud_fraction", cfg.region_max_cloud_percent / 100.0))
         .map(lambda img: sensor.mask_clouds(img, ee_module))
-        .map(lambda img: index.compute(sensor, img, ee_module))
+        .map(lambda img: ee_module.Image(
+            index.compute(sensor, img, ee_module).copyProperties(img, img.propertyNames())))
     )
     return coll

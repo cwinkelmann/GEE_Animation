@@ -1,0 +1,48 @@
+# Smooth playback: generated frames between observations so the animation reads
+# as motion rather than a slideshow. Same AOI as wne_2yr_gapfill.example.yaml, one
+# year instead of two, so the interpolation is easy to see without a long render.
+#
+# Generated frames show dates that were never observed. They are labelled
+# "2022-05 -> 2022-06  30%" on the frame and the info bar names the
+# interpolation, so an observed frame is never mistaken for a generated one.
+name: wne_interpolated
+project: hnee-331218
+
+aoi:
+  frame:
+    bbox: [13.7949, 52.9299, 13.9985, 53.0421]   # region + 5 km -> 13.7 x 12.5 km
+  region:
+    shapefile: docs/aoi/wne/wne.shp
+  region_max_cloud_percent: 20
+
+start: "2022-01-01"          # one calendar year: enough seasonal change to see
+end: "2023-01-01"            # motion, short enough to render quickly
+
+sensor: sentinel2
+index: ndvi
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+
+pool_years: [2018, 2026]     # borrow only for months this year left empty
+pool_strategy: gap_fill
+
+viz:
+  min: 0.0                   # the index default is -1..1, but almost nothing on
+  max: 0.95                  # land sits below 0, so 0..0.95 spends the colours
+                              # where the land actually varies; water clips low
+
+render:
+  fps: 24                    # 24-30 reads as filmed; 1 fps (the other examples'
+                              # rate) would defeat the point of interpolating
+  interpolate: 10            # generated frames per one-period step; proportional
+                              # spacing means a skipped month still costs 2x this
+  interpolate_mode: auto     # data-space for NDVI (single-band); would be
+                              # rejected for rgb/cir composites, which need crossfade
+  scale: 10
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: match
+  upscale: lanczos
+  region_line_width: 5

@@ -1,0 +1,64 @@
+# Two full years of Landsat surface temperature over the Grumsin (WNE) beech forest,
+# with cross-year GAP FILLING.
+#
+# `pool_strategy: gap_fill` keeps the year you asked for wherever it has usable
+# imagery and borrows the same calendar slot from another year ONLY for periods that
+# would otherwise be empty. Frames from the requested year are drawn with a plain
+# label; borrowed frames are marked with their source year (`2022-09 <- 2018`). So
+# unmarked frames really are a time series — unlike `pool_strategy: least_cloudy`,
+# which re-picks every frame from whichever year was clearest (see
+# wne_summer_pooled.example.yaml).
+#
+# Still read the borrowed frames with care: they are real observations, but from a
+# different year, so do not treat a marked frame as a measurement of this one.
+name: wne_2yr_gapfill
+project: hnee-331218
+
+aoi:
+  frame:
+    # The region buffered by 5 km -> 13.7 x 12.5 km of context around a forest that is
+    # only 3.7 x 2.5 km, so the surroundings it is being compared against are visible.
+    bbox: [13.7949, 52.9299, 13.9985, 53.0421]
+  region:
+    shapefile: docs/aoi/wne/wne.shp
+  region_max_cloud_percent: 20
+
+start: "2021-01-01"         # two full calendar years
+end: "2023-01-01"
+
+sensor: landsat
+index: lst                  # Collection-2 Level-2 surface temperature, ~100 m native.
+                            # Deliberately NOT lst_sharp: the NDVI sharpening paints a
+                            # 30 m residual over 100 m thermal blocks, which shows up as
+                            # blocky rectangular artefacts. Honest 100 m data upscaled
+                            # smoothly reads better than invented detail.
+cadence: monthly            # 10day leaves winter bins empty even across seven years
+max_cloud_percent: 70
+draw_region: true
+missions: [L8, L9]          # one radiometric family across the pooled years
+
+pool_years: [2018, 2024]    # the pool that gaps are filled from; must contain the
+                            # nominal years above
+pool_strategy: gap_fill
+
+viz:
+  # Measured p1/p99 over these two years: -2.8 .. 45.9 degC. A single fixed range is
+  # needed for cross-frame comparability, and it has to span both winter and summer —
+  # so winter frames (whole-scene spread under 3 degC) look flat by construction.
+  # Narrow this to roughly 18..43 for a summer-only run with far more contrast.
+  min: -3
+  max: 46
+
+render:
+  fps: 1                    # 22 frames -> a ~22 s walk through two years
+  scale: 30
+  dimensions: 1024          # capped to native (~137 px here); the preset upscales it
+  crs: auto                 # UTM -> square pixels, no plate-carree stretch
+  preset: 1080p
+  aspect: match
+  upscale: lanczos
+  region_line_width: 5      # thicker outline so the AOI reads at output size
+
+# Record per-frame stats to out/metadata.db (mean index over the AOI's clear
+# pixels, scene count, cloud fraction) so the series can be plotted afterwards.
+metadata: true

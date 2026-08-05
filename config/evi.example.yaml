@@ -14,5 +14,5 @@ end: "2022-08-01"
 cadence: monthly
 max_cloud_percent: 60
 draw_region: true
-render: { fps: 4, scale: 20, dimensions: 768 }
+render: { fps: 4, scale: 20, dimensions: 768, crs: auto }
 # viz omitted -> EVI default (0..1, brown->green)

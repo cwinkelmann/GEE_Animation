@@ -1,0 +1,64 @@
+# Cross-year mode: a frame's calendar slot always stays put, but the imagery may be
+# taken from another year in `pool_years` — see `pool_strategy` below for how much.
+#
+# ==> COSMETIC ONLY (with `least_cloudy` / `median`). Those two replace EVERY frame, so
+#     the result is NOT a time series and must not be used for quantitative analysis,
+#     trend/change detection, or anything reported as a measurement: a frame labelled
+#     2022-05 may show May 2021, and a 2022 run pooled over 2018-2024 can end up with
+#     only a couple of frames actually from 2022 — a synthetic "typical summer".
+#     What you get is a smooth, near cloud-free seasonal loop; what you lose is the
+#     ability to compare frames in time.
+#     Use `gap_fill` if you want the year you actually asked for (see below).
+#     Every BORROWED frame is labelled with its source year ("2022-05 <- 2021") and the
+#     info bar names the pooled range, so a viewer can always see what they are looking
+#     at. Frames that are genuinely from the requested year carry no such mark.
+name: wne_ndvi_pooled
+project: hnee-331218
+
+aoi:
+  frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 10
+
+sensor: sentinel2            # S2_SR_HARMONIZED — corrects the 2022 BOA_ADD_OFFSET
+                             # baseline shift, so pooling across 2019..2024 does not
+                             # step in brightness at that boundary.
+index: ndvi
+start: "2022-01-01"          # the calendar the animation *runs* over (label years)
+end: "2023-01-01"
+cadence: monthly
+max_cloud_percent: 60
+
+pool_years: [2019, 2024]     # inclusive range of years each month may be drawn from
+pool_strategy: gap_fill      # Three strategies, in order of how much they change:
+                             #
+                             # gap_fill  = TRUE gap filling, and the ONLY strategy that
+                             #   preserves the year you requested. A period whose own
+                             #   year has at least `min_scenes` scenes is built from
+                             #   that year alone (a median of its scenes, exactly like
+                             #   a non-pooled run) and is left unmarked. Only periods
+                             #   the nominal year cannot fill borrow, and those borrow
+                             #   the clearest single scene from another pooled year and
+                             #   are labelled with it ("2022-06 <- 2019"). Pick this
+                             #   when you want 2022, just without the holes.
+                             #
+                             # least_cloudy (default) = replaces EVERY period with the
+                             #   single sharpest scene from any pooled year; nothing is
+                             #   averaged, and the label names the one source year.
+                             #
+                             # median = median over all pooled years for that month:
+                             #   smoother, fills holes better, but blurs and mixes
+                             #   years (label then names the whole range). Also
+                             #   replaces every period.
+
+draw_region: true
+render: { fps: 3, scale: 20, dimensions: 768, crs: auto }
+
+# Notes:
+# * `--inventory` is rejected together with `pool_years`: the inventory buckets scenes
+#   by the nominal date range, so it cannot describe frames borrowed from other years.
+# * `anomaly` is rejected together with `pool_years` — the anomaly baseline is itself
+#   multi-year, so a borrowed year would be scored against a climatology containing it.
+# * With `sensor: landsat`, add a `missions` whitelist (e.g. missions: [L8, L9]);
+#   otherwise pooled frames can step between radiometrically different missions, and
+#   L7's SLC-off stripes can appear in some years only.

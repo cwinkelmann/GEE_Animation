@@ -6,6 +6,7 @@ tests) load without the optional `gui` extra.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sqlite3
@@ -14,9 +15,9 @@ import types
 import zipfile
 from pathlib import Path
 
-from . import anomaly, auth, aoi, charts, collection, compositing, render
-from .compositing import month_starts
-from .config import RunConfig
+from . import anomaly, auth, aoi, charts, collection, compositing, inventory, render
+from .compositing import period_starts
+from .config import POOL_STRATEGIES, SUPPORTED_CADENCES, ConfigError, RunConfig
 from .products import INDICES, SENSORS, get_product
 
 # Injectable pipeline seams (overridden in tests).
@@ -29,7 +30,54 @@ DEFAULT_DEPS = types.SimpleNamespace(
     anomaly=anomaly.apply,
     render=render.render,
     timeseries=charts.inside_outside_timeseries,
+    inventory=inventory.write_inventory,
 )
+
+# Cadence choices, monthly first (the default).
+CADENCES = ["monthly"] + sorted(SUPPORTED_CADENCES - {"monthly"})
+
+# Screen-size presets offered in the GUI. NATIVE_PRESET is the "don't upscale" choice
+# and maps to cfg.preset=None; everything else is a render.PRESETS key.
+NATIVE_PRESET = "native (no upscaling)"
+PRESET_CHOICES = ["4k", "1440p", "1080p", "720p", NATIVE_PRESET]
+DEFAULT_PRESET = "1080p"
+ASPECT_CHOICES = ["match", "16:9", "4:3", "1:1", "21:9"]
+DEFAULT_ASPECT = "match"
+
+# Shown next to the pooling controls *and* appended to the status of any pooled run —
+# the trade-off has to be visible before the user renders. Wording from
+# config/pooled.example.yaml.
+POOL_WARNING = (
+    "**COSMETIC ONLY.** Cross-year pooling keeps each frame's calendar slot but takes "
+    "the imagery from whichever year in the range had the clearest scene, so a frame "
+    "labelled `2022-05` may show May 2021. The result is a smooth, near cloud-free "
+    "seasonal loop — it is **not a time series** and must not be used for quantitative "
+    "analysis, trend/change detection, or anything reported as a measurement. Every "
+    "borrowed frame is labelled with its source year (`2022-05 ← 2021`) and the info "
+    "bar names the pooled range. "
+    "**Exception:** `gap_fill` keeps the year you asked for wherever it has usable "
+    "data and borrows only for periods that would otherwise be empty, so its unmarked "
+    "frames really are from the requested year."
+)
+
+# Gradio 6 lays the whole ancestor chain out as a flex column — including <html> — and
+# puts `overflow-y: hidden` on .gradio-container. On a tall form like this one that
+# leaves the page unscrollable in browsers that don't scroll a flex <html> (Safari in
+# particular), so the bottom controls become unreachable. Restore a plain document:
+# block layout, auto height, and let the container overflow normally.
+PAGE_CSS = """
+html, body, gradio-app {
+    display: block !important;
+    height: auto !important;
+    min-height: 100% !important;
+    overflow-y: auto !important;
+}
+.gradio-container {
+    overflow-y: visible !important;
+    height: auto !important;
+    min-height: 0 !important;
+}
+"""
 
 
 def _mean(values):
@@ -175,21 +223,88 @@ def _region_aoi_from_upload(path: str) -> dict:
     )
 
 
-def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
-                  region_max_cloud_percent=10.0, max_cloud_percent=60.0,
-                  fps=4, dimensions=768, project="hnee-331218",
-                  out_dir=None, deps=DEFAULT_DEPS):
-    """Build one animation from GUI inputs.
+def _blank(value) -> bool:
+    """True for a Gradio input left empty.
 
-    Returns ``(mp4_path, gif_path, frame_pngs, frames_zip, status, series)`` where
-    `frame_pngs` is the list of per-month PNGs and `frames_zip` bundles them for
-    download (both ``None``/empty if no frames were rendered).
+    Handles ``None``, an all-whitespace string, and non-positive numbers. The
+    latter matters because ``gr.Number(value=None)`` is rendered by the browser
+    as ``0`` (verified against the live DOM), so an *untouched* pooling-year box
+    posts ``0``, not ``None``. No calendar year is zero or negative, so treating
+    a non-positive number as "not set" keeps the untouched-form default off
+    without guessing at a bogus year-0 range.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    try:
+        return float(value) <= 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _pool_years(first, last) -> list | None:
+    """``[firstYear, lastYear]`` from the two GUI year boxes, or ``None`` when off.
+
+    Both boxes empty => pooling off. Exactly one filled is a user mistake, not a
+    half-open range, so it is refused rather than guessed at.
+    """
+    if _blank(first) and _blank(last):
+        return None
+    if _blank(first) or _blank(last):
+        raise ValueError(
+            "cross-year pooling needs both a first and a last year "
+            "(or leave both empty to switch pooling off)")
+    try:
+        return [int(first), int(last)]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"pooling years must be whole years: {exc}") from exc
+
+
+def _preset_value(preset):
+    """Map the preset dropdown to ``cfg.preset`` (NATIVE_PRESET / blank => ``None``)."""
+    if _blank(preset) or str(preset) == NATIVE_PRESET:
+        return None
+    return str(preset)
+
+
+def _validate(cfg) -> list[str]:
+    """Run ``cfg.validate()``, returning the warnings it logged.
+
+    The GUI builds :class:`RunConfig` directly, so — unlike ``RunConfig.from_yaml`` —
+    nothing would otherwise validate it. ``ConfigError`` becomes a plain ``ValueError``
+    with a friendly prefix (the callbacks render it as text, not a traceback), and
+    ``config``'s advisory ``log.warning``s are captured so they can be shown to the
+    user instead of vanishing into the server log.
+    """
+    warnings: list[str] = []
+    handler = logging.Handler(level=logging.WARNING)
+    handler.emit = lambda record: warnings.append(record.getMessage())
+    logger = logging.getLogger("gee_animation.config")
+    logger.addHandler(handler)
+    try:
+        cfg.validate()
+    except ConfigError as exc:
+        raise ValueError(f"Invalid settings: {exc}") from exc
+    finally:
+        logger.removeHandler(handler)
+    return warnings
+
+
+def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
+             region_max_cloud_percent, max_cloud_percent, fps, dimensions,
+             project, out_dir, cadence, preset, aspect, write_gif,
+             pool_start_year, pool_end_year, pool_strategy, deps):
+    """Authenticate, resolve the AOIs and build a validated RunConfig.
+
+    Returns ``(cfg, frame_geom, region_geom, warnings)``. Shared by
+    :func:`run_animation` and :func:`run_inventory` so both entry points get exactly
+    the same configuration and the same validation.
     """
     if not aoi_path:
         raise ValueError("please upload an AOI (a GeoJSON file or a zipped shapefile)")
     get_product(sensor, index)   # validate the (sensor, index) pair up front
     region_aoi = _region_aoi_from_upload(aoi_path)
-    composite = INDICES[index].composite
     viz_min, viz_max, palette = INDICES[index].default_viz
     palette = palette or []      # composites (rgb/cir) carry no palette
     out_dir = out_dir or tempfile.mkdtemp()
@@ -204,13 +319,88 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
         name=f"{sensor}_{index}", project=project,
         frame_aoi=frame_aoi, region_aoi=region_aoi,
         start=str(start), end=str(end), sensor=sensor, index=index,
-        cadence="monthly",
+        cadence=str(cadence),
         max_cloud_percent=float(max_cloud_percent),
         region_max_cloud_percent=float(region_max_cloud_percent),
         viz_min=viz_min, viz_max=viz_max, palette=palette,
         fps=float(fps), scale=_SCALE.get(sensor, 30), dimensions=int(dimensions),
+        # `dimensions` is the *fetch* size (capped to the product's native GSD by
+        # render._cap_dimensions); `preset` is the output size it is upscaled to.
+        # Without a preset a 100 m LST over a ~9 km AOI renders at ~91 px.
+        preset=_preset_value(preset), aspect=(aspect or None),
+        # The GIF is the slowest encode of a render and only a preview format, so it
+        # is opt-out here. The PNG frames are NOT exposed: the gallery and the ZIP
+        # download are built from them, so switching them off would empty the GUI's
+        # own outputs. (`render.frames` still exists for config/API runs.)
+        gif=bool(write_gif),
+        pool_years=_pool_years(pool_start_year, pool_end_year),
+        pool_strategy=str(pool_strategy or "least_cloudy"),
         out_dir=str(out_dir), draw_region=True,
     )
+    return cfg, frame_geom, region_geom, _validate(cfg)
+
+
+def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
+                  region_max_cloud_percent=10.0, max_cloud_percent=60.0,
+                  fps=4, dimensions=768, project="hnee-331218", out_dir=None,
+                  cadence="monthly", preset=DEFAULT_PRESET, aspect=DEFAULT_ASPECT,
+                  write_gif=True, pool_start_year=None, pool_end_year=None,
+                  pool_strategy="least_cloudy", deps=DEFAULT_DEPS):
+    """Write the per-scene usable/rejected inventory CSV. Returns ``(csv_path, status)``.
+
+    Mirrors ``cli.run(..., inventory=True)``, including its refusal to combine the
+    inventory with cross-year pooling.
+    """
+    if not _blank(pool_start_year) or not _blank(pool_end_year):
+        # Same reason as cli.run: the inventory buckets scenes by the nominal date
+        # range while pooling draws them from other years, so the CSV would list
+        # scenes the run did not use and omit the ones it did.
+        raise ValueError(
+            "the scene inventory does not support cross-year pooling: it buckets "
+            "scenes by the nominal date range, so it cannot describe frames borrowed "
+            "from other years. Clear the pooling years to inventory the candidate "
+            "scenes.")
+    cfg, frame_geom, region_geom, warnings = _prepare(
+        aoi_path=aoi_path, buffer_m=buffer_m, sensor=sensor, index=index,
+        start=start, end=end, region_max_cloud_percent=region_max_cloud_percent,
+        max_cloud_percent=max_cloud_percent, fps=fps, dimensions=dimensions,
+        project=project, out_dir=out_dir, cadence=cadence, preset=preset,
+        aspect=aspect, write_gif=write_gif, pool_start_year=None, pool_end_year=None,
+        pool_strategy=pool_strategy, deps=deps)
+    path = deps.inventory(cfg, frame_geom, region_geom)
+    status = (f"Wrote the scene inventory for {sensor} {index.upper()} "
+              f"({cfg.start} → {cfg.end}, {cfg.cadence}) — one row per candidate scene "
+              f"with the reason it was used or rejected.")
+    return str(path), _with_warnings(status, warnings)
+
+
+def _with_warnings(status: str, warnings) -> str:
+    """Append the config's advisory warnings to a status line."""
+    return status + "".join(f"\n\n⚠️ {w}" for w in warnings)
+
+
+def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
+                  region_max_cloud_percent=10.0, max_cloud_percent=60.0,
+                  fps=4, dimensions=768, project="hnee-331218", out_dir=None,
+                  cadence="monthly", preset=DEFAULT_PRESET, aspect=DEFAULT_ASPECT,
+                  write_gif=True, pool_start_year=None, pool_end_year=None,
+                  pool_strategy="least_cloudy", deps=DEFAULT_DEPS):
+    """Build one animation from GUI inputs.
+
+    Returns ``(mp4_path, gif_path, frame_pngs, frames_zip, status, series)`` where
+    `frame_pngs` is the list of per-period PNGs and `frames_zip` bundles them for
+    download (both ``None``/empty if no frames were rendered). `gif_path` is ``None``
+    when `write_gif` is off — the MP4 and the frames are unaffected.
+    """
+    composite = INDICES[index].composite if index in INDICES else False
+    cfg, frame_geom, region_geom, warnings = _prepare(
+        aoi_path=aoi_path, buffer_m=buffer_m, sensor=sensor, index=index,
+        start=start, end=end, region_max_cloud_percent=region_max_cloud_percent,
+        max_cloud_percent=max_cloud_percent, fps=fps, dimensions=dimensions,
+        project=project, out_dir=out_dir, cadence=cadence, preset=preset,
+        aspect=aspect, write_gif=write_gif, pool_start_year=pool_start_year,
+        pool_end_year=pool_end_year, pool_strategy=pool_strategy, deps=deps)
+    out_dir = cfg.out_dir
 
     coll = deps.build(cfg, frame_geom, region_geom)
     frames = deps.monthly_median(coll, cfg)
@@ -228,20 +418,23 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
     # [(month, inside, outside)] — index mean inside the AOI vs the surrounding frame.
     # Composites (rgb/cir) have no single INDEX band to reduce, so skip the chart.
     series = [] if composite else deps.timeseries(frames, region_geom, frame_geom, cfg.scale)
-    n_months = len(month_starts(str(start), str(end)))
-    dropped = n_months - len(frames)
-    status = (f"Rendered {len(frames)} of {n_months} months as {sensor} {index.upper()} "
-              f"({frames[0].label} → {frames[-1].label}).")
+    n_periods = len(period_starts(cfg.start, cfg.end, cfg.cadence))
+    dropped = n_periods - len(frames)
+    status = (f"Rendered {len(frames)} of {n_periods} {cfg.cadence} periods as "
+              f"{sensor} {index.upper()} ({frames[0].label} → {frames[-1].label}).")
     if dropped > 0:
-        status += (f" {dropped} month(s) had no scene under the "
-                   f"{float(region_max_cloud_percent):g}% region-cloud filter — "
+        status += (f" {dropped} period(s) had no scene under the "
+                   f"{cfg.region_max_cloud_percent:g}% region-cloud filter — "
                    f"raise it for more frames.")
     inside_mean = _mean(row[1] for row in series)
     outside_mean = _mean(row[2] for row in series)
     if inside_mean is not None and outside_mean is not None:
         status += (f" Mean {index.upper()} — inside AOI {inside_mean:.3f}, "
                    f"outside {outside_mean:.3f} (Δ {inside_mean - outside_mean:+.3f}).")
-    return mp4, gif, frame_pngs, frames_zip, status, series
+    if cfg.pool_years:
+        status += (f"\n\nPooled over {cfg.pool_years[0]}–{cfg.pool_years[1]} "
+                   f"({cfg.pool_strategy}). {POOL_WARNING}")
+    return mp4, gif, frame_pngs, frames_zip, _with_warnings(status, warnings), series
 
 
 def build_app():
@@ -255,7 +448,7 @@ def build_app():
         gr.Markdown(
             "# GEE Index Timelapse\n"
             "Upload an area of interest, choose a sensor / index and a date range, "
-            "and generate a cloud-masked monthly-median animation. The AOI is the "
+            "and generate a cloud-masked median-composite animation. The AOI is the "
             "cloud-filtered region; the animation frame is its bounding box expanded "
             "by the buffer below."
         )
@@ -278,22 +471,62 @@ def build_app():
                 with gr.Row():
                     start = gr.Textbox(label="Start (YYYY-MM-DD)", value="2022-05-01")
                     end = gr.Textbox(label="End (YYYY-MM-DD, exclusive)", value="2022-09-01")
+                cadence = gr.Dropdown(CADENCES, value="monthly", label="Cadence",
+                                      info="One frame per period. Sub-monthly cadences "
+                                           "leave most bins empty on Landsat (16-day "
+                                           "repeat) — prefer Sentinel-2.")
                 region_cloud = gr.Slider(0, 100, value=10, step=5,
                                          label="Max cloud % over the region")
                 with gr.Row():
                     fps = gr.Number(label="Frames per second", value=4)
-                    dims = gr.Number(label="Frame size (px)", value=768)
+                    dims = gr.Number(label="Fetch size (px)", value=768,
+                                     info="How much data is fetched. Capped to the "
+                                          "product's true resolution (no upsampling).")
+                with gr.Row():
+                    preset = gr.Dropdown(PRESET_CHOICES, value=DEFAULT_PRESET,
+                                         label="Output size",
+                                         info="Screen size the fetched frame is "
+                                              "upscaled to. Without it, 100 m LST over "
+                                              "a 9 km AOI is only ~91 px wide.")
+                    aspect = gr.Dropdown(ASPECT_CHOICES, value=DEFAULT_ASPECT,
+                                         label="Aspect ratio",
+                                         info="'match' keeps the AOI's own shape "
+                                              "(no letterbox bars).")
+                write_gif = gr.Checkbox(
+                    value=True, label="Also write a GIF",
+                    info="The GIF is a low-resolution preview and the slowest step of "
+                         "a render (~5 s per run). The MP4 and the per-frame PNGs are "
+                         "written either way.")
+                with gr.Accordion("🔁 Cross-year pooling (cosmetic)", open=False):
+                    gr.Markdown(POOL_WARNING)
+                    with gr.Row():
+                        pool_start = gr.Number(label="Pool from year (0 or empty = off)",
+                                               value=None, precision=0)
+                        pool_end = gr.Number(label="Pool to year (inclusive)",
+                                             value=None, precision=0)
+                    pool_strategy = gr.Dropdown(
+                        sorted(POOL_STRATEGIES), value="least_cloudy",
+                        label="Pooling strategy",
+                        info="gap_fill = keep the requested year where it has data, "
+                             "borrow another year only for otherwise-empty periods "
+                             "(the only strategy that preserves the year you asked "
+                             "for); least_cloudy = replace every period with the "
+                             "single sharpest scene from any pooled year; "
+                             "median = median across the pooled years (smoother, "
+                             "but blurs and mixes years).")
                 project = gr.Textbox(label="Earth Engine project",
                                      value=os.environ.get("EE_PROJECT", "hnee-331218"))
                 go = gr.Button("Generate animation", variant="primary")
+                inv = gr.Button("📋 Scene inventory (CSV)", variant="secondary")
             with gr.Column():
                 video = gr.Video(label="Animation (MP4)")
                 gif = gr.File(label="Animation (GIF, download)")
                 gallery = gr.Gallery(label="Frames (click to preview)", columns=4,
                                      height=200, object_fit="contain")
                 frames_zip = gr.File(label="Frames (ZIP of PNGs, download)")
-                chart = gr.LinePlot(x="month", y="value", color="area", x_title="Month",
-                                    y_title="Index (mean)",
+                inventory_csv = gr.File(label="Scene inventory (CSV, download)")
+                chart = gr.LinePlot(x="period", y="value", color="area",
+                                    x_title="Period", y_title="Index (mean)",
                                     title="Inside vs outside the AOI", height=280)
                 status = gr.Markdown()
 
@@ -303,44 +536,77 @@ def build_app():
             return gr.update(choices=choices, value=choices[0])
         sensor.change(_sync_index, sensor, index)
 
-        def _go(aoi_file, buffer_m, sensor, index, start, end, region_cloud, fps, dims,
-                project, progress=gr.Progress()):
+        # Every run-shaped callback returns the same widget tuple:
+        # (video, gif, gallery, frames_zip, inventory_csv, status, chart).
+        inputs = [aoi_file, buffer_m, sensor, index, start, end, cadence, region_cloud,
+                  fps, dims, preset, aspect, write_gif,
+                  pool_start, pool_end, pool_strategy, project]
+        outputs = [video, gif, gallery, frames_zip, inventory_csv, status, chart]
+
+        def _error(exc):
+            return None, None, None, None, None, f"**Error:** {exc}", None
+
+        def _go(aoi_file, buffer_m, sensor, index, start, end, cadence, region_cloud,
+                fps, dims, preset, aspect, write_gif, pool_start, pool_end,
+                pool_strategy, project, progress=gr.Progress()):
             import pandas as pd
             try:
                 progress(0.05, desc="Filtering imagery and building frames…")
                 mp4, gif_path, frame_pngs, zip_path, msg, series = run_animation(
                     aoi_path=aoi_file, buffer_m=buffer_m, sensor=sensor, index=index,
-                    start=start, end=end, region_max_cloud_percent=region_cloud,
-                    fps=fps, dimensions=dims, project=project)
+                    start=start, end=end, cadence=cadence,
+                    region_max_cloud_percent=region_cloud, fps=fps, dimensions=dims,
+                    preset=preset, aspect=aspect, write_gif=write_gif,
+                    pool_start_year=pool_start, pool_end_year=pool_end,
+                    pool_strategy=pool_strategy, project=project)
                 rows = []
-                for month, inside, outside in series:
+                for period, inside, outside in series:
                     if inside is not None:
-                        rows.append((month, inside, "inside AOI"))
+                        rows.append((period, inside, "inside AOI"))
                     if outside is not None:
-                        rows.append((month, outside, "outside AOI"))
-                df = pd.DataFrame(rows, columns=["month", "value", "area"])
+                        rows.append((period, outside, "outside AOI"))
+                df = pd.DataFrame(rows, columns=["period", "value", "area"])
                 progress(1.0, desc="Done")
-                return mp4, gif_path, frame_pngs, zip_path, msg, df
+                return mp4, gif_path, frame_pngs, zip_path, None, msg, df
             except Exception as exc:   # surface a friendly message in the UI
-                return None, None, None, None, f"**Error:** {exc}", None
+                return _error(exc)
 
-        go.click(_go,
-                 [aoi_file, buffer_m, sensor, index, start, end, region_cloud, fps, dims, project],
-                 [video, gif, gallery, frames_zip, status, chart])
+        go.click(_go, inputs, outputs)
+
+        def _inventory(aoi_file, buffer_m, sensor, index, start, end, cadence,
+                       region_cloud, fps, dims, preset, aspect, write_gif, pool_start,
+                       pool_end, pool_strategy, project, progress=gr.Progress()):
+            try:
+                progress(0.05, desc="Listing candidate scenes…")
+                csv_path, msg = run_inventory(
+                    aoi_path=aoi_file, buffer_m=buffer_m, sensor=sensor, index=index,
+                    start=start, end=end, cadence=cadence,
+                    region_max_cloud_percent=region_cloud, fps=fps, dimensions=dims,
+                    preset=preset, aspect=aspect, write_gif=write_gif,
+                    pool_start_year=pool_start, pool_end_year=pool_end,
+                    pool_strategy=pool_strategy, project=project)
+                progress(1.0, desc="Done")
+                return None, None, None, None, csv_path, msg, None
+            except Exception as exc:   # surface a friendly message in the UI
+                return _error(exc)
+
+        inv.click(_inventory, inputs, outputs)
 
         # Load a previously-rendered run into the same output widgets (no Earth Engine).
         def _load(sel):
             try:
                 mp4, gif_path, frame_pngs, zip_path, msg = load_previous_run(sel)
-                return mp4, gif_path, frame_pngs, zip_path, msg, None
+                return mp4, gif_path, frame_pngs, zip_path, None, msg, None
             except Exception as exc:   # surface a friendly message in the UI
-                return None, None, None, None, f"**Error:** {exc}", None
-        load.click(_load, [prev], [video, gif, gallery, frames_zip, status, chart])
+                return _error(exc)
+        load.click(_load, [prev], outputs)
     return app
 
 
 def main():
-    build_app().launch()
+    # Gradio 6 moved `css` from the Blocks constructor to launch(); passing it to
+    # Blocks still works but warns. See PAGE_CSS for why the override is needed.
+    build_app().launch(css=PAGE_CSS)
 
 
 if __name__ == "__main__":

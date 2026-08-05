@@ -35,6 +35,16 @@ def test_reference_anomaly_is_thermal_only(tmp_path):
     assert cfg.anomaly == "reference"
 
 
+def test_validate_rejects_anomaly_with_sub_monthly_cadence(tmp_path):
+    # anomaly divides a period mean by a *monthly* climatology sigma; a semimonthly
+    # slice would silently produce inflated z-scores, so this must be a hard reject.
+    body = _base(
+        "index: lst\nanomaly: climatology\nbaseline_years: [2015, 2024]\n"
+    ).replace("cadence: monthly", "cadence: semimonthly")
+    with pytest.raises(ConfigError, match="cadence"):
+        RunConfig.from_yaml(_write(tmp_path, body))
+
+
 def test_accepts_shapefile_aois(tmp_path):
     p = _write(tmp_path, """
         name: t
@@ -141,6 +151,96 @@ def test_viz_block_overrides_defaults(tmp_path):
     assert cfg.viz_min == 5 and cfg.viz_max == 35 and cfg.palette == ["#000000", "#ffffff"]
 
 
+def test_crs_defaults_to_auto_when_yaml_omits_it(tmp_path):
+    # Regression guard: an absent render.crs key must NOT pass an explicit
+    # None into RunConfig (which would override the dataclass default).
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi: {frame: {bbox: [0,0,1,1]}, region: {bbox: [0,0,1,1]}}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: sentinel2
+        index: ndvi
+        cadence: monthly
+        max_cloud_percent: 60
+        render: {fps: 4, scale: 20, dimensions: 768}
+    """)
+    cfg = RunConfig.from_yaml(p)
+    assert cfg.crs == "auto"
+
+
+def test_explicit_crs_in_yaml_is_preserved(tmp_path):
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi: {frame: {bbox: [0,0,1,1]}, region: {bbox: [0,0,1,1]}}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: sentinel2
+        index: ndvi
+        cadence: monthly
+        max_cloud_percent: 60
+        render: {fps: 4, scale: 20, dimensions: 768, crs: "EPSG:4326"}
+    """)
+    cfg = RunConfig.from_yaml(p)
+    assert cfg.crs == "EPSG:4326"
+
+
+def test_region_line_width_defaults_to_none(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.region_line_width is None
+
+
+def test_region_line_width_read_from_render_block(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, region_line_width: 5}"))
+    cfg = RunConfig.from_yaml(p)
+    assert cfg.region_line_width == 5
+
+
+def test_rejects_non_positive_region_line_width(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, region_line_width: 0}"))
+    with pytest.raises(ConfigError, match="region_line_width"):
+        RunConfig.from_yaml(p)
+
+
+def test_workers_defaults_to_four(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.workers == 4
+
+
+def test_workers_read_from_render_block(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, workers: 8}"))
+    assert RunConfig.from_yaml(p).workers == 8
+
+
+def test_rejects_non_positive_workers(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, workers: 0}"))
+    with pytest.raises(ConfigError, match="workers"):
+        RunConfig.from_yaml(p)
+
+
+def test_cache_defaults_on_and_dir_unset(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.cache is True and cfg.cache_dir is None
+
+
+def test_cache_can_be_disabled_and_redirected(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, cache: false, cache_dir: /tmp/x}"))
+    cfg = RunConfig.from_yaml(p)
+    assert cfg.cache is False and cfg.cache_dir == "/tmp/x"
+
+
 def test_rejects_unsupported_sensor_index_pair(tmp_path):
     p = _write(tmp_path, """
         name: t
@@ -194,6 +294,28 @@ def test_rejects_unsupported_cadence(tmp_path):
     """)
     with pytest.raises(ConfigError, match="cadence"):
         RunConfig.from_yaml(p)
+
+
+def test_warns_on_sub_monthly_cadence_with_landsat(tmp_path, caplog):
+    # Landsat's 16-day repeat leaves most 10-day bins empty — warn, don't reject.
+    p = _write(tmp_path, """
+        name: t
+        project: p
+        aoi:
+          frame: {bbox: [0, 0, 1, 1]}
+          region: {bbox: [0, 0, 1, 1]}
+        start: "2022-01-01"
+        end: "2023-01-01"
+        sensor: landsat
+        index: lst
+        cadence: 10day
+        max_cloud_percent: 60
+        render: {fps: 4, scale: 20, dimensions: 768}
+    """)
+    with caplog.at_level("WARNING"):
+        cfg = RunConfig.from_yaml(p)
+    assert cfg.cadence == "10day"
+    assert "landsat" in caplog.text.lower() and "10day" in caplog.text
 
 
 def test_rejects_viz_max_not_greater_than_min(tmp_path):
@@ -350,4 +472,148 @@ def test_rejects_unknown_index_cleanly(tmp_path):
         render: {fps: 4, scale: 20, dimensions: 768}
     """)
     with pytest.raises(ConfigError, match="index"):
+        RunConfig.from_yaml(p)
+
+
+def test_pool_years_defaults_off_and_loads(tmp_path):
+    # absent -> off, and the strategy default is least_cloudy
+    plain = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert plain.pool_years is None and plain.pool_strategy == "least_cloudy"
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+        "index: ndvi\npool_years: [2019, 2024]\npool_strategy: median\n"
+        "missions: [L8, L9]\n")))
+    assert cfg.pool_years == [2019, 2024] and cfg.pool_strategy == "median"
+
+
+def test_validate_rejects_anomaly_with_pool_years(tmp_path):
+    # the anomaly baseline is itself multi-year, so a borrowed year would be scored
+    # against a climatology that already contains it
+    with pytest.raises(ConfigError, match="pool_years"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: lst\nanomaly: climatology\nbaseline_years: [2015, 2024]\n"
+            "pool_years: [2019, 2024]\n")))
+
+
+def test_validate_accepts_gap_fill_pool_strategy(tmp_path):
+    # gap_fill is the only strategy that keeps the requested year wherever it has
+    # data, so it has to be selectable from YAML like the other two.
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+        "index: ndvi\npool_years: [2019, 2024]\npool_strategy: gap_fill\n")))
+    assert cfg.pool_strategy == "gap_fill"
+
+
+def test_validate_rejects_unknown_pool_strategy(tmp_path):
+    with pytest.raises(ConfigError, match="pool_strategy"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: ndvi\npool_years: [2019, 2024]\npool_strategy: sharpest\n")))
+
+
+def test_validate_rejects_malformed_pool_years(tmp_path):
+    with pytest.raises(ConfigError, match="pool_years"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: ndvi\npool_years: [2019]\n")))
+    with pytest.raises(ConfigError, match="precede"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: ndvi\npool_years: [2024, 2019]\n")))
+
+
+def test_pool_years_with_landsat_and_no_missions_warns(tmp_path, caplog):
+    # L7/L8/L9 differ radiometrically (and L7 is SLC-off), so pooled Landsat frames
+    # can step between missions — must warn, not silently proceed.
+    with caplog.at_level("WARNING"):
+        cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: ndvi\npool_years: [2019, 2024]\n")))       # _base is sensor: landsat
+    assert cfg.pool_years == [2019, 2024]
+    assert "missions" in caplog.text
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: ndvi\npool_years: [2019, 2024]\nmissions: [L8, L9]\n")))
+    assert "missions" not in caplog.text
+
+
+def test_render_output_flags_default_to_true(tmp_path):
+    # Both outputs stay on unless a config explicitly opts out, so an existing
+    # config's deliverables (MP4 + GIF + per-frame PNGs) are unchanged. `gif` records
+    # that it was never configured (None) rather than defaulting here, because the
+    # answer depends on the run: render() turns it on for a normal one and off for an
+    # interpolated one (several hundred quantized frames). Only an explicit value
+    # overrides that — see test_render.py's gif-default tests for the resolution.
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: lst\n")))
+    assert cfg.gif is None and cfg.frames is True
+    cfg.validate()                      # "unconfigured" is valid, unlike a non-boolean
+
+
+def test_render_gif_explicitly_true_is_kept_distinct_from_unset(tmp_path):
+    body = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, gif: true}")
+    assert RunConfig.from_yaml(_write(tmp_path, body)).gif is True
+
+
+def test_render_output_flags_can_be_switched_off(tmp_path):
+    body = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, gif: false, frames: false}")
+    cfg = RunConfig.from_yaml(_write(tmp_path, body))
+    assert cfg.gif is False and cfg.frames is False
+
+
+@pytest.mark.parametrize("value", ['"false"', "0", "no-thanks"])
+def test_render_gif_rejects_a_non_boolean(tmp_path, value):
+    # YAML turns a quoted "false" into a non-empty *string*; bool()-coercing it would
+    # silently keep writing the output the user asked to skip.
+    body = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        f"render: {{fps: 4, scale: 30, dimensions: 768, gif: {value}}}")
+    with pytest.raises(ConfigError, match="render.gif must be true or false"):
+        RunConfig.from_yaml(_write(tmp_path, body))
+
+
+def test_validate_rejects_a_non_boolean_render_flag_built_directly(tmp_path):
+    # The GUI and api.animate build RunConfig directly, so validate() is their only gate.
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: lst\n")))
+    cfg.frames = "yes"
+    with pytest.raises(ConfigError, match="render.frames must be true or false"):
+        cfg.validate()
+
+
+def test_interpolate_defaults_to_off(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.interpolate == 0 and cfg.interpolate_mode == "auto"
+
+
+def test_interpolate_is_read_from_the_render_block(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, interpolate: 10, "
+        "interpolate_mode: crossfade}"))
+    cfg = RunConfig.from_yaml(p)
+    assert cfg.interpolate == 10 and cfg.interpolate_mode == "crossfade"
+
+
+def test_validate_rejects_negative_interpolate(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, interpolate: -1}"))
+    with pytest.raises(ConfigError, match="interpolate"):
+        RunConfig.from_yaml(p)
+
+
+def test_validate_rejects_unknown_interpolate_mode(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, interpolate_mode: wobble}"))
+    with pytest.raises(ConfigError, match="interpolate_mode"):
+        RunConfig.from_yaml(p)
+
+
+def test_validate_rejects_data_mode_for_a_composite_index(tmp_path):
+    # rgb/cir arrive from EE already coloured, so there is no index array to
+    # interpolate; the error must name the alternative.
+    p = _write(tmp_path, _base("index: rgb\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, interpolate: 5, "
+        "interpolate_mode: data}"))
+    with pytest.raises(ConfigError, match="crossfade"):
         RunConfig.from_yaml(p)

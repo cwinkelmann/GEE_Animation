@@ -98,3 +98,43 @@ def test_apply_climatology_builds_baseline_over_years():
     assert out == ["ANOM"]
     assert captured["baseline_range"] == ("2015-01-01", "2025-01-01")   # y0..y1+1 exclusive
     assert captured["baseline"] == "BASELINE_COLL"
+
+
+def test_apply_climatology_passes_ee_module_by_keyword_to_build_fn():
+    """`anomaly.apply` must call `build_fn` with `ee_module` passed by keyword, not
+    positionally, since `collection.build`'s real signature is
+    ``(cfg, frame_geom, region_geom, *, apply_cloud_filters=True, ee_module=ee)`` —
+    a positional 4th argument lands in `apply_cloud_filters`, not `ee_module`, and the
+    injected fake would be silently discarded in favour of live EE. `fake_build` here
+    mirrors that real (keyword-only) signature, unlike the permissive
+    ``ee_module=None`` catch-all used by `test_apply_climatology_builds_baseline_over_years`,
+    which absorbs a stray positional argument without complaint and so cannot catch
+    this regression."""
+    from gee_animation.config import RunConfig
+    captured = {}
+
+    def fake_build(cfg, frame, region, *, apply_cloud_filters=True, ee_module=None):
+        captured["apply_cloud_filters"] = apply_cloud_filters
+        captured["ee_module"] = ee_module
+        return "BASELINE_COLL"
+
+    sentinel_ee = types.SimpleNamespace(marker="FAKE_EE")
+
+    cfg = RunConfig(
+        name="t", project="p", frame_aoi={"bbox": [0, 0, 1, 1]}, region_aoi={"bbox": [0, 0, 1, 1]},
+        start="2022-05-01", end="2022-09-01", sensor="landsat", index="lst_smw",
+        cadence="monthly", max_cloud_percent=60, region_max_cloud_percent=10,
+        viz_min=-3, viz_max=3, palette=["#000000"], fps=4, scale=30, dimensions=64,
+        anomaly="climatology", baseline_years=[2015, 2024])
+    import gee_animation.anomaly as A
+    A_clim = A.climatology_anomaly
+    A.climatology_anomaly = lambda frames, baseline, ee_module=None: ["ANOM"]
+    try:
+        out = A.apply(["f"], cfg, "F", "R", fake_build, ee_module=sentinel_ee)
+    finally:
+        A.climatology_anomaly = A_clim
+    assert out == ["ANOM"]
+    # The injected ee_module must reach build_fn as ee_module — not silently absorbed
+    # into apply_cloud_filters (which must keep its default, True).
+    assert captured["ee_module"] is sentinel_ee
+    assert captured["apply_cloud_filters"] is True

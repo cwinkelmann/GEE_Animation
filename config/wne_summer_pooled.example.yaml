@@ -1,0 +1,57 @@
+# A smooth summer thermal loop over the Grumsin (WNE) beech forest, using the
+# COSMETIC cross-year pooling strategy.
+#
+# `pool_strategy: least_cloudy` takes each frame's calendar slot from whichever year in
+# `pool_years` had the clearest scene. On a real run of this config only 2 of 15 frames
+# came from 2022 — the result is a synthetic "typical summer", NOT a time series, and
+# must not be used for quantitative analysis, trend detection, or anything reported as a
+# measurement. Every frame carries its source year (`2022-05-11 <- 2018`) and the info
+# bar names the pooled range.
+#
+# If you want the requested year preserved and only the empty periods filled, use
+# `pool_strategy: gap_fill` instead — see wne_2yr_gapfill.example.yaml.
+#
+# What this mode buys: a 10-day cadence over Landsat would normally leave most bins
+# empty (16-day repeat), and the pipeline warns about exactly that. Pooling seven years
+# of candidates fills all 15 bins, giving the smooth phenology a single year cannot.
+name: wne_summer_pooled
+project: hnee-331218
+
+aoi:
+  frame:
+    bbox: [13.7949, 52.9299, 13.9985, 53.0421]   # region + 5 km -> 13.7 x 12.5 km
+  region:
+    shapefile: docs/aoi/wne/wne.shp
+  region_max_cloud_percent: 20
+
+start: "2022-05-01"         # growing season only: Jan-Mar whole-scene spread is under
+end: "2022-10-01"           # 3 degC, so winter frames are flat at any fixed range
+
+sensor: landsat
+index: lst                  # not lst_sharp — its NDVI sharpening produces blocky
+                            # rectangular artefacts at the 100 m thermal block edges
+cadence: 10day
+max_cloud_percent: 70
+draw_region: true
+missions: [L8, L9]
+
+pool_years: [2018, 2024]
+pool_strategy: least_cloudy
+
+viz:
+  min: 18                   # measured percentiles for May-Sep: p2 Sep 18.7, p98 Aug 42.6
+  max: 43
+
+render:
+  fps: 3
+  scale: 30
+  dimensions: 1024
+  crs: auto
+  preset: 1080p
+  aspect: match
+  upscale: lanczos
+  region_line_width: 5
+
+# Record per-frame stats to out/metadata.db (mean index over the AOI's clear
+# pixels, scene count, cloud fraction) so the series can be plotted afterwards.
+metadata: true
