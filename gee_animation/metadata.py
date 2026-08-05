@@ -20,11 +20,16 @@ _COLUMNS = ("name", "sensor", "index_name", "month", "n_scenes",
             "aoi_cloud_fraction", "aoi_clear_fraction", "aoi_mean")
 
 
-def _reduce_value(image, reducer, region_geom, scale, ee_module):
-    """First value of a single-reducer reduceRegion over the AOI, or None if empty."""
+def _reduce_expr(image, reducer, region_geom, scale):
+    """UNEVALUATED first value of a single-reducer reduceRegion over the AOI.
+
+    Deliberately returns the server-side object rather than calling `.getInfo()` on
+    it: `frame_stats` collects one of these per frame and resolves them all in a
+    single round trip (see there). Evaluates to null when the region is empty.
+    """
     return image.reduceRegion(
         reducer, geometry=region_geom, scale=scale,
-        bestEffort=True, maxPixels=int(1e9)).values().get(0).getInfo()
+        bestEffort=True, maxPixels=int(1e9)).values().get(0)
 
 
 def frame_stats(frames, region_geom, scale, mean_band=None, ee_module=ee):
@@ -36,16 +41,32 @@ def frame_stats(frames, region_geom, scale, mean_band=None, ee_module=ee):
     `mean_band` over the AOI's clear pixels (None when `mean_band` is None, e.g. a
     composite with no single meaningful value); reduceRegion's mean ignores masked
     pixels, so cloudy areas don't drag it down.
+
+    Every frame's reducers are batched into ONE `ee.Dictionary(...).getInfo()` — the
+    same idiom `inventory.scene_inventory` uses, and the same global constraint
+    `compositing.composite` is pinned to: never one `getInfo()` per frame. Serially
+    this cost ~5 s per frame (110 s for a 22-frame run) purely in round trips.
     """
-    rows = []
-    for f in frames:
+    # Index-keyed (not label-keyed) so two frames sharing a label could never collide
+    # and silently overwrite each other's stats.
+    exprs = {}
+    for i, f in enumerate(frames):
         valid = f.image.mask().reduce(ee_module.Reducer.min())   # 1 where all bands valid
-        clear = _reduce_value(valid, ee_module.Reducer.mean(), region_geom, scale, ee_module)
+        exprs[f"clear{i}"] = _reduce_expr(valid, ee_module.Reducer.mean(), region_geom, scale)
+        if mean_band is not None:
+            exprs[f"mean{i}"] = _reduce_expr(f.image.select(mean_band),
+                                             ee_module.Reducer.mean(), region_geom, scale)
+    if not exprs:                     # no frames: nothing to ask Earth Engine about
+        return []
+    data = ee_module.Dictionary(exprs).getInfo()
+
+    rows = []
+    for i, f in enumerate(frames):
+        clear = data.get(f"clear{i}")
         clear = 0.0 if clear is None else float(clear)
         mean = None
         if mean_band is not None:
-            mv = _reduce_value(f.image.select(mean_band), ee_module.Reducer.mean(),
-                               region_geom, scale, ee_module)
+            mv = data.get(f"mean{i}")
             mean = None if mv is None else round(float(mv), 4)
         rows.append((f.label, getattr(f, "n_scenes", None), round(1.0 - clear, 4), mean))
     return rows

@@ -28,6 +28,13 @@ render:
   # region_line_width: 4      # region outline core width in px (default: max(2, h/430))
   workers: 4                # concurrent thumbnail fetches (default 4; EE throttles
                             # beyond ~4, so more is slower). 1 = serial, for debugging.
+                            # Also sizes the pool that writes the per-frame PNGs.
+  # gif: false                # skip the GIF (default true). The MP4 is always written;
+                            # the GIF is a 1280px preview and the slowest encode of a
+                            # run (~3-5 s for 22 frames, half of it colour quantising).
+  # frames: false             # skip the per-frame PNGs (default true) — another ~4 s
+                            # for 22 frames at 1080p. Note the GUI's frame gallery and
+                            # ZIP download are built from these.
   # cache: false              # disable the on-disk cache of raw thumbnail bytes
   # cache_dir: /path/to/cache # default: $GEE_ANIMATION_CACHE_DIR, else the platform
                             # user cache dir (~/.cache/gee_animation/thumbs; on macOS

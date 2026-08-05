@@ -1,6 +1,7 @@
 from pathlib import Path
 import numpy as np
 import types
+import pytest
 from PIL import Image, ImageDraw
 from gee_animation.render import (
     add_colorbar,
@@ -46,6 +47,111 @@ def test_assemble_writes_gif_and_mp4(tmp_path):
     suffixes = {p.suffix for p in paths}
     assert suffixes == {".mp4", ".gif"}
     assert all(p.exists() for p in paths)
+
+
+def test_assemble_skips_the_gif_when_render_gif_is_false(tmp_path):
+    # render.gif: false is the opt-out for the slowest encode of a run; the MP4 must
+    # still be written, and no stale .gif may be left behind.
+    cfg = _cfg(tmp_path)
+    cfg.gif = False
+    frames = [np.zeros((16, 16, 3), np.uint8), np.full((16, 16, 3), 255, np.uint8)]
+    paths = assemble(frames, cfg)
+    assert [p.suffix for p in paths] == [".mp4"]
+    assert paths[0].exists()
+    assert not (tmp_path / f"{cfg.name}.gif").exists()
+
+
+def test_assemble_fails_fast_when_mp4_fails_and_the_gif_is_disabled(tmp_path, monkeypatch):
+    # With the GIF off there is no fallback animation, so silently returning only the
+    # PNGs would look like a successful render that produced no video at all.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.gif = False
+    monkeypatch.setattr(r, "_write_mp4", _boom)
+    with pytest.raises(RuntimeError, match="render.gif"):
+        assemble([np.zeros((16, 16, 3), np.uint8)], cfg)
+
+
+def _boom(*a, **kw):
+    raise OSError("no ffmpeg")
+
+
+def test_render_gif_false_still_returns_mp4_and_pngs(tmp_path):
+    # End to end through render(): the return contract cli/api/gui read (an .mp4 and
+    # the per-frame .pngs) survives switching the GIF off.
+    cfg = _cfg(tmp_path)
+    cfg.gif = False
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((16, 16)), np.ones((16, 16), dtype=bool)
+
+    paths = render([Frame("2022-01", object()), Frame("2022-02", object())],
+                   cfg, fetch=fake_fetch, geometry=None)
+    assert [p.suffix for p in paths] == [".mp4", ".png", ".png"]
+    assert all(p.exists() for p in paths)
+    assert not any(p.suffix == ".gif" for p in paths)
+
+
+def test_render_frames_false_skips_the_per_frame_pngs(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.frames = False
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((16, 16)), np.ones((16, 16), dtype=bool)
+
+    paths = render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+    assert {p.suffix for p in paths} == {".mp4", ".gif"}
+    assert not list(tmp_path.glob("*.png"))
+
+
+def test_render_writes_gif_and_frames_by_default(tmp_path):
+    # The defaults must be unchanged — an existing config keeps every output it had.
+    cfg = _cfg(tmp_path)
+    assert not hasattr(cfg, "gif") and not hasattr(cfg, "frames")
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((16, 16)), np.ones((16, 16), dtype=bool)
+
+    paths = render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+    assert {p.suffix for p in paths} == {".mp4", ".gif", ".png"}
+
+
+@pytest.mark.parametrize("workers", [1, 4])
+def test_write_frames_names_and_orders_the_pngs(tmp_path, workers):
+    # Threaded encoding must not reorder the returned paths (callers zip them against
+    # the frame list) nor corrupt a file.
+    from gee_animation.render import _write_frames
+    labels = [f"2022-{m:02d}" for m in range(1, 8)]
+    frames = [np.full((12, 10, 3), 10 * i, np.uint8) for i in range(len(labels))]
+    paths = _write_frames(tmp_path, "anim", frames, labels, workers=workers)
+    assert [p.name for p in paths] == [f"anim_{lb}.png" for lb in labels]
+    for i, p in enumerate(paths):
+        arr = np.asarray(Image.open(p).convert("RGB"))
+        assert arr.shape == (12, 10, 3)
+        assert np.array_equal(arr, frames[i])       # readable and byte-for-byte
+
+
+def test_write_frames_is_identical_threaded_and_serial(tmp_path):
+    from gee_animation.render import _write_frames
+    labels = ["a", "b", "c"]
+    rng = np.random.default_rng(11)
+    frames = [rng.integers(0, 256, (20, 24, 3), dtype=np.uint8) for _ in labels]
+    serial = (tmp_path / "s")
+    threaded = (tmp_path / "t")
+    serial.mkdir()
+    threaded.mkdir()
+    a = _write_frames(serial, "x", frames, labels, workers=1)
+    b = _write_frames(threaded, "x", frames, labels, workers=4)
+    assert [p.name for p in a] == [p.name for p in b]
+    assert [p.read_bytes() for p in a] == [p.read_bytes() for p in b]
+
+
+def test_write_frames_propagates_a_failure_from_a_worker(tmp_path):
+    # A silently-swallowed encode error would leave a run reporting PNGs it never wrote.
+    from gee_animation.render import _write_frames
+    frames = [np.zeros((4, 4, 3), np.uint8)] * 3
+    with pytest.raises(Exception):
+        _write_frames(tmp_path / "does-not-exist", "x", frames, ["a", "b", "c"], workers=4)
 
 
 def test_aoi_bounds_from_bbox():
@@ -423,6 +529,64 @@ def test_render_keeps_region_outline_on_imagery_when_margins_added(tmp_path):
     # ...and nowhere near where mapping across the padded array would have put it
     wrong_top = round(0.25 * (h + top_h + bottom_h))
     assert not np.any(np.abs(rows - wrong_top) <= 2)
+
+
+def _full_frame_blend(rgb, casing_mask, core_mask, color, casing=(0, 0, 0)):
+    """The original whole-frame `_composite_region`, verbatim — the byte-for-byte
+    reference the bounding-box version must reproduce."""
+    out = rgb.astype(np.float32)
+    for mask, rgb_color in ((casing_mask, casing), (core_mask, color)):
+        a = mask[..., None]
+        out = out * (1 - a) + np.asarray(rgb_color, dtype=np.float32) * a
+    return out.astype(np.uint8)
+
+
+def test_composite_region_matches_a_full_frame_blend():
+    # The bbox optimisation must be byte-identical to blending the whole frame — an
+    # "an outline was drawn" assertion would not catch a half-pixel alpha drift.
+    from gee_animation.render import _composite_region, _region_masks, REGION_OUTLINE_RGB
+    h, w = 96, 130
+    rings = [[(0.2, 0.2), (0.8, 0.25), (0.75, 0.8), (0.2, 0.2)]]   # diagonals -> partial alphas
+    casing, core = _region_masks((0.0, 0.0, 1.0, 1.0), rings, (h, w), 2)
+    assert 0 < float((casing > 0).mean()) < 0.5, "sanity: outline must be a small subset"
+    assert np.any((core > 0) & (core < 1)), "sanity: antialiased (fractional) alpha present"
+
+    rng = np.random.default_rng(7)
+    frames = [
+        rng.integers(0, 256, (h, w, 3), dtype=np.uint8),          # uint8 (post-upscale)
+        rng.random((h, w, 3)) * 255.0,                            # float64 (colorize output)
+        np.full((h, w, 3), 127.9999999, dtype=np.float64),        # truncation edge
+    ]
+    for rgb in frames:
+        got = _composite_region(rgb, casing, core, color=REGION_OUTLINE_RGB)
+        want = _full_frame_blend(rgb, casing, core, REGION_OUTLINE_RGB)
+        assert got.dtype == want.dtype == np.uint8
+        assert np.array_equal(got, want)
+        assert got is not rgb                       # never mutates the caller's frame
+
+    # ...and degenerate masks: all-zero (nothing drawn) and fully-covering.
+    zero = np.zeros((h, w), np.float32)
+    one = np.ones((h, w), np.float32)
+    for masks in ((zero, zero), (one, one), (casing, zero), (zero, core)):
+        rgb = frames[0]
+        assert np.array_equal(_composite_region(rgb, *masks, color=REGION_OUTLINE_RGB),
+                              _full_frame_blend(rgb, *masks, REGION_OUTLINE_RGB))
+
+
+def test_composite_region_leaves_untouched_pixels_bit_exact():
+    # The pixels outside the outline must come through the (uint8) fast path
+    # completely unmodified — not merely "close".
+    from gee_animation.render import _composite_region, REGION_OUTLINE_RGB
+    rng = np.random.default_rng(3)
+    rgb = rng.integers(0, 256, (40, 40, 3), dtype=np.uint8)
+    casing = np.zeros((40, 40), np.float32)
+    core = np.zeros((40, 40), np.float32)
+    casing[10, 10] = core[10, 10] = 1.0
+    out = _composite_region(rgb, casing, core)
+    untouched = np.ones((40, 40), bool)
+    untouched[10, 10] = False
+    assert np.array_equal(out[untouched], rgb[untouched])
+    assert tuple(out[10, 10]) == tuple(np.asarray(REGION_OUTLINE_RGB, np.uint8))
 
 
 def test_letterbox_centers_on_canvas():

@@ -530,3 +530,37 @@ def test_pool_years_with_landsat_and_no_missions_warns(tmp_path, caplog):
         RunConfig.from_yaml(_write(tmp_path, _base(
             "index: ndvi\npool_years: [2019, 2024]\nmissions: [L8, L9]\n")))
     assert "missions" not in caplog.text
+
+
+def test_render_output_flags_default_to_true(tmp_path):
+    # Both outputs stay on unless a config explicitly opts out, so an existing
+    # config's deliverables (MP4 + GIF + per-frame PNGs) are unchanged.
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: lst\n")))
+    assert cfg.gif is True and cfg.frames is True
+
+
+def test_render_output_flags_can_be_switched_off(tmp_path):
+    body = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, gif: false, frames: false}")
+    cfg = RunConfig.from_yaml(_write(tmp_path, body))
+    assert cfg.gif is False and cfg.frames is False
+
+
+@pytest.mark.parametrize("value", ['"false"', "0", "no-thanks"])
+def test_render_gif_rejects_a_non_boolean(tmp_path, value):
+    # YAML turns a quoted "false" into a non-empty *string*; bool()-coercing it would
+    # silently keep writing the output the user asked to skip.
+    body = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        f"render: {{fps: 4, scale: 30, dimensions: 768, gif: {value}}}")
+    with pytest.raises(ConfigError, match="render.gif must be true or false"):
+        RunConfig.from_yaml(_write(tmp_path, body))
+
+
+def test_validate_rejects_a_non_boolean_render_flag_built_directly(tmp_path):
+    # The GUI and api.animate build RunConfig directly, so validate() is their only gate.
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: lst\n")))
+    cfg.frames = "yes"
+    with pytest.raises(ConfigError, match="render.frames must be true or false"):
+        cfg.validate()

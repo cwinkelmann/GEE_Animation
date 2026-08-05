@@ -23,13 +23,17 @@ def _fake_deps(tmp_path, captured, frames=None):
         return [0.0, 0.0, 2.0, 2.0]
 
     def render(frames_, cfg, geometry=None):
-        # one real PNG per frame (so run_animation can zip them) + the mp4/gif
+        # one real PNG per frame (so run_animation can zip them) + the mp4/gif.
+        # Honours cfg.gif exactly as render.assemble does.
         pngs = []
         for f in frames_:
             p = tmp_path / f"o_{f.label}.png"
             p.write_bytes(b"x")
             pngs.append(p)
-        return [tmp_path / "o.mp4", tmp_path / "o.gif", *pngs]
+        media = [tmp_path / "o.mp4"]
+        if getattr(cfg, "gif", True):
+            media.append(tmp_path / "o.gif")
+        return [*media, *pngs]
 
     def inventory(cfg, f, r):
         captured.update(inventory_cfg=cfg)
@@ -415,3 +419,31 @@ def test_load_previous_run_without_metadata_and_gif_only(tmp_path):
 def test_load_previous_run_requires_selection():
     with pytest.raises(ValueError, match="select a previous run"):
         gui.load_previous_run(None)
+
+
+def test_run_animation_gif_checkbox_is_on_by_default(tmp_path):
+    aoi = _write_geojson(tmp_path)
+    captured = {}
+    _mp4, gif, *_ = gui.run_animation(
+        aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        deps=_fake_deps(tmp_path, captured))
+    assert captured["cfg"].gif is True
+    assert gif is not None
+
+
+def test_run_animation_write_gif_false_threads_through_to_the_config(tmp_path):
+    # The GIF is the slowest encode of a render; unticking the box must reach
+    # cfg.gif (which render.assemble reads) and leave the MP4 + PNGs untouched.
+    aoi = _write_geojson(tmp_path)
+    captured = {}
+    mp4, gif, frame_pngs, zip_path, *_ = gui.run_animation(
+        aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path), write_gif=False,
+        deps=_fake_deps(tmp_path, captured))
+    assert captured["cfg"].gif is False
+    assert gif is None
+    assert mp4.endswith("o.mp4")
+    # the gallery/ZIP are built from the PNGs, which are never switched off in the GUI
+    assert len(frame_pngs) == 2 and zip_path is not None
+    assert captured["cfg"].frames is True

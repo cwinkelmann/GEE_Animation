@@ -475,12 +475,26 @@ def _composite_region(rgb: np.ndarray, casing_mask: np.ndarray, core_mask: np.nd
 
     Cheap (no drawing) — meant to be called once per frame against masks built once
     by `_region_masks`, since the rings/bounds/frame size are identical every frame.
+
+    Only the pixels the outline actually touches are blended. A region outline covers
+    ~2 % of a frame, yet the whole frame used to be converted to float32 and blended
+    twice (each blend allocating frame-sized temporaries) — ~0.19 s per 1920x2118
+    frame, 4.2 s of a 22-frame run. Everywhere else both alphas are exactly 0, so the
+    full-frame blend degenerates to ``rgb * 1.0 + colour * 0.0`` and the only thing it
+    did was the float32 -> uint8 round trip, which `out` reproduces exactly (uint8 ->
+    float32 -> uint8 is lossless, so a uint8 frame is simply copied; a float frame —
+    `colorize`'s output — still makes the round trip, so its truncation matches).
+    Output is therefore byte-identical to blending the whole frame, pinned by
+    tests/test_render.py::test_composite_region_matches_a_full_frame_blend.
     """
-    out = rgb.astype(np.float32)
+    out = rgb.copy() if rgb.dtype == np.uint8 else rgb.astype(np.float32).astype(np.uint8)
+    touched = (casing_mask > 0) | (core_mask > 0)      # ~2% of the frame
+    patch = rgb[touched].astype(np.float32)            # (n_touched, 3)
     for mask, rgb_color in ((casing_mask, casing), (core_mask, color)):
-        a = mask[..., None]
-        out = out * (1 - a) + np.asarray(rgb_color, dtype=np.float32) * a
-    return out.astype(np.uint8)
+        a = mask[touched][:, None]
+        patch = patch * (1 - a) + np.asarray(rgb_color, dtype=np.float32) * a
+    out[touched] = patch.astype(np.uint8)
+    return out
 
 
 def draw_region(rgb: np.ndarray, bounds: tuple, rings: list,
@@ -737,34 +751,74 @@ def _write_gif(path: Path, frames: list[np.ndarray], fps: int) -> None:
     imageio.mimsave(path, frames, format="GIF", duration=1000.0 / fps, loop=0)
 
 
+#: PNG deflate level for the per-frame images. Left at Pillow's default 6 on purpose:
+#: measured on 22 1920x2118 frames, level 3 saved 0.8 s of a 3.6 s serial write but
+#: doubled the deliverable from 12.9 MB to 25.2 MB, and level 1 tripled it to 44 MB.
+#: Writing the frames concurrently instead (below) is the bigger win and costs nothing
+#: in file size — threaded, levels 3 and 6 are within noise of each other (1.36 s vs
+#: 1.32 s). PNG is lossless, so this only ever trades size against time, never pixels.
+_PNG_COMPRESS_LEVEL = 6
+
+
 def _write_frames(out_dir: Path, name: str, frames_rgb: list[np.ndarray],
-                  labels: list[str]) -> list[Path]:
+                  labels: list[str], workers: int = 1) -> list[Path]:
     """Save each annotated frame as its own PNG, named ``{name}_{label}.png``.
 
     Returns the frame paths in order so callers can offer the single images for
-    download alongside the assembled MP4/GIF.
+    download alongside the assembled MP4/GIF. The paths are computed up front, so the
+    returned order is the frame order regardless of which thread finished first.
+
+    Encoding is spread over `workers` threads (`cfg.workers`, the same knob that
+    bounds the fetch concurrency — one dial, not two): zlib releases the GIL, so this
+    is a real ~2.8x speedup on a multi-core machine, and each frame writes its own
+    file so the threads never touch shared state.
     """
-    paths: list[Path] = []
-    for rgb, label in zip(frames_rgb, labels):
-        p = out_dir / f"{name}_{label}.png"
-        Image.fromarray(rgb.astype(np.uint8), "RGB").save(p)
-        paths.append(p)
+    paths = [out_dir / f"{name}_{label}.png" for label in labels]
+
+    def _save(item):
+        rgb, path = item
+        Image.fromarray(rgb.astype(np.uint8), "RGB").save(
+            path, compress_level=_PNG_COMPRESS_LEVEL)
+
+    items = list(zip(frames_rgb, paths))
+    if workers <= 1 or len(items) <= 1:
+        for item in items:
+            _save(item)
+    else:
+        with ThreadPoolExecutor(max_workers=min(workers, len(items)),
+                                thread_name_prefix="gee-png") as pool:
+            list(pool.map(_save, items))     # list() so any failure is re-raised here
     return paths
 
 
 def assemble(frames_rgb: list[np.ndarray], cfg) -> list[Path]:
+    """Encode the frames to MP4 and (unless `render.gif` is false) GIF.
+
+    The GIF is the slowest single step of a render (5.4 s of a 24 s run, half of it
+    PIL's colour quantisation) and is only a preview format — `render.gif: false`
+    skips it. It defaults to true, so an existing config's outputs are unchanged.
+    """
     out_dir = Path(cfg.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     gif_path = out_dir / f"{cfg.name}.gif"
     mp4_path = out_dir / f"{cfg.name}.mp4"
+    want_gif = bool(getattr(cfg, "gif", True))
     paths: list[Path] = []
     try:
         _write_mp4(mp4_path, frames_rgb, cfg.fps)
         paths.append(mp4_path)
     except Exception as exc:  # ffmpeg missing / encode error
+        if not want_gif:
+            # The GIF is the fallback that makes an MP4 failure survivable; without it
+            # there is no animation at all, so fail fast rather than return only PNGs.
+            raise RuntimeError(
+                f"MP4 encoding failed ({exc}) and render.gif is disabled, so no "
+                f"animation could be written; set render.gif: true to fall back to a GIF"
+            ) from exc
         log.warning("MP4 write failed (%s); producing GIF only", exc)
-    _write_gif(gif_path, frames_rgb, cfg.fps)
-    paths.append(gif_path)
+    if want_gif:
+        _write_gif(gif_path, frames_rgb, cfg.fps)
+        paths.append(gif_path)
     return paths
 
 
@@ -904,6 +958,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
             rgb = _letterbox(rgb, output[0], output[1])
         rgb_frames.append(rgb)
     paths = assemble(rgb_frames, cfg)
-    paths += _write_frames(Path(cfg.out_dir), cfg.name, rgb_frames,
-                           [f.label for f in frames])
+    if getattr(cfg, "frames", True):
+        paths += _write_frames(Path(cfg.out_dir), cfg.name, rgb_frames,
+                               [f.label for f in frames], workers=workers)
     return paths

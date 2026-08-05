@@ -293,7 +293,7 @@ def _validate(cfg) -> list[str]:
 
 def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
              region_max_cloud_percent, max_cloud_percent, fps, dimensions,
-             project, out_dir, cadence, preset, aspect,
+             project, out_dir, cadence, preset, aspect, write_gif,
              pool_start_year, pool_end_year, pool_strategy, deps):
     """Authenticate, resolve the AOIs and build a validated RunConfig.
 
@@ -328,6 +328,11 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
         # render._cap_dimensions); `preset` is the output size it is upscaled to.
         # Without a preset a 100 m LST over a ~9 km AOI renders at ~91 px.
         preset=_preset_value(preset), aspect=(aspect or None),
+        # The GIF is the slowest encode of a render and only a preview format, so it
+        # is opt-out here. The PNG frames are NOT exposed: the gallery and the ZIP
+        # download are built from them, so switching them off would empty the GUI's
+        # own outputs. (`render.frames` still exists for config/API runs.)
+        gif=bool(write_gif),
         pool_years=_pool_years(pool_start_year, pool_end_year),
         pool_strategy=str(pool_strategy or "least_cloudy"),
         out_dir=str(out_dir), draw_region=True,
@@ -339,7 +344,7 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
                   region_max_cloud_percent=10.0, max_cloud_percent=60.0,
                   fps=4, dimensions=768, project="hnee-331218", out_dir=None,
                   cadence="monthly", preset=DEFAULT_PRESET, aspect=DEFAULT_ASPECT,
-                  pool_start_year=None, pool_end_year=None,
+                  write_gif=True, pool_start_year=None, pool_end_year=None,
                   pool_strategy="least_cloudy", deps=DEFAULT_DEPS):
     """Write the per-scene usable/rejected inventory CSV. Returns ``(csv_path, status)``.
 
@@ -360,7 +365,7 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
         start=start, end=end, region_max_cloud_percent=region_max_cloud_percent,
         max_cloud_percent=max_cloud_percent, fps=fps, dimensions=dimensions,
         project=project, out_dir=out_dir, cadence=cadence, preset=preset,
-        aspect=aspect, pool_start_year=None, pool_end_year=None,
+        aspect=aspect, write_gif=write_gif, pool_start_year=None, pool_end_year=None,
         pool_strategy=pool_strategy, deps=deps)
     path = deps.inventory(cfg, frame_geom, region_geom)
     status = (f"Wrote the scene inventory for {sensor} {index.upper()} "
@@ -378,13 +383,14 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
                   region_max_cloud_percent=10.0, max_cloud_percent=60.0,
                   fps=4, dimensions=768, project="hnee-331218", out_dir=None,
                   cadence="monthly", preset=DEFAULT_PRESET, aspect=DEFAULT_ASPECT,
-                  pool_start_year=None, pool_end_year=None,
+                  write_gif=True, pool_start_year=None, pool_end_year=None,
                   pool_strategy="least_cloudy", deps=DEFAULT_DEPS):
     """Build one animation from GUI inputs.
 
     Returns ``(mp4_path, gif_path, frame_pngs, frames_zip, status, series)`` where
     `frame_pngs` is the list of per-period PNGs and `frames_zip` bundles them for
-    download (both ``None``/empty if no frames were rendered).
+    download (both ``None``/empty if no frames were rendered). `gif_path` is ``None``
+    when `write_gif` is off — the MP4 and the frames are unaffected.
     """
     composite = INDICES[index].composite if index in INDICES else False
     cfg, frame_geom, region_geom, warnings = _prepare(
@@ -392,8 +398,8 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
         start=start, end=end, region_max_cloud_percent=region_max_cloud_percent,
         max_cloud_percent=max_cloud_percent, fps=fps, dimensions=dimensions,
         project=project, out_dir=out_dir, cadence=cadence, preset=preset,
-        aspect=aspect, pool_start_year=pool_start_year, pool_end_year=pool_end_year,
-        pool_strategy=pool_strategy, deps=deps)
+        aspect=aspect, write_gif=write_gif, pool_start_year=pool_start_year,
+        pool_end_year=pool_end_year, pool_strategy=pool_strategy, deps=deps)
     out_dir = cfg.out_dir
 
     coll = deps.build(cfg, frame_geom, region_geom)
@@ -486,6 +492,11 @@ def build_app():
                                          label="Aspect ratio",
                                          info="'match' keeps the AOI's own shape "
                                               "(no letterbox bars).")
+                write_gif = gr.Checkbox(
+                    value=True, label="Also write a GIF",
+                    info="The GIF is a low-resolution preview and the slowest step of "
+                         "a render (~5 s per run). The MP4 and the per-frame PNGs are "
+                         "written either way.")
                 with gr.Accordion("🔁 Cross-year pooling (cosmetic)", open=False):
                     gr.Markdown(POOL_WARNING)
                     with gr.Row():
@@ -528,15 +539,16 @@ def build_app():
         # Every run-shaped callback returns the same widget tuple:
         # (video, gif, gallery, frames_zip, inventory_csv, status, chart).
         inputs = [aoi_file, buffer_m, sensor, index, start, end, cadence, region_cloud,
-                  fps, dims, preset, aspect, pool_start, pool_end, pool_strategy, project]
+                  fps, dims, preset, aspect, write_gif,
+                  pool_start, pool_end, pool_strategy, project]
         outputs = [video, gif, gallery, frames_zip, inventory_csv, status, chart]
 
         def _error(exc):
             return None, None, None, None, None, f"**Error:** {exc}", None
 
         def _go(aoi_file, buffer_m, sensor, index, start, end, cadence, region_cloud,
-                fps, dims, preset, aspect, pool_start, pool_end, pool_strategy,
-                project, progress=gr.Progress()):
+                fps, dims, preset, aspect, write_gif, pool_start, pool_end,
+                pool_strategy, project, progress=gr.Progress()):
             import pandas as pd
             try:
                 progress(0.05, desc="Filtering imagery and building frames…")
@@ -544,9 +556,9 @@ def build_app():
                     aoi_path=aoi_file, buffer_m=buffer_m, sensor=sensor, index=index,
                     start=start, end=end, cadence=cadence,
                     region_max_cloud_percent=region_cloud, fps=fps, dimensions=dims,
-                    preset=preset, aspect=aspect, pool_start_year=pool_start,
-                    pool_end_year=pool_end, pool_strategy=pool_strategy,
-                    project=project)
+                    preset=preset, aspect=aspect, write_gif=write_gif,
+                    pool_start_year=pool_start, pool_end_year=pool_end,
+                    pool_strategy=pool_strategy, project=project)
                 rows = []
                 for period, inside, outside in series:
                     if inside is not None:
@@ -562,17 +574,17 @@ def build_app():
         go.click(_go, inputs, outputs)
 
         def _inventory(aoi_file, buffer_m, sensor, index, start, end, cadence,
-                       region_cloud, fps, dims, preset, aspect, pool_start, pool_end,
-                       pool_strategy, project, progress=gr.Progress()):
+                       region_cloud, fps, dims, preset, aspect, write_gif, pool_start,
+                       pool_end, pool_strategy, project, progress=gr.Progress()):
             try:
                 progress(0.05, desc="Listing candidate scenes…")
                 csv_path, msg = run_inventory(
                     aoi_path=aoi_file, buffer_m=buffer_m, sensor=sensor, index=index,
                     start=start, end=end, cadence=cadence,
                     region_max_cloud_percent=region_cloud, fps=fps, dimensions=dims,
-                    preset=preset, aspect=aspect, pool_start_year=pool_start,
-                    pool_end_year=pool_end, pool_strategy=pool_strategy,
-                    project=project)
+                    preset=preset, aspect=aspect, write_gif=write_gif,
+                    pool_start_year=pool_start, pool_end_year=pool_end,
+                    pool_strategy=pool_strategy, project=project)
                 progress(1.0, desc="Done")
                 return None, None, None, None, csv_path, msg, None
             except Exception as exc:   # surface a friendly message in the UI

@@ -24,6 +24,23 @@ class ConfigError(ValueError):
     """Raised when a run configuration is invalid."""
 
 
+#: Optional render flags that must be real YAML booleans (see _flag / validate).
+_RENDER_FLAGS = ("gif", "frames")
+
+
+def _flag(render: dict, key: str, default: bool = True) -> bool:
+    """A `render.<key>` boolean, defaulting to `default`.
+
+    Deliberately not `bool(...)`: YAML turns a *quoted* ``gif: "false"`` into a
+    non-empty string, and truthy-coercing it would silently keep writing the very
+    output the user asked to skip. Anything that isn't a real boolean is rejected.
+    """
+    value = render.get(key, default)
+    if not isinstance(value, bool):
+        raise ConfigError(f"render.{key} must be true or false (got {value!r})")
+    return value
+
+
 @dataclass
 class RunConfig:
     name: str
@@ -54,6 +71,12 @@ class RunConfig:
     preset: str = None
     aspect: str = None
     upscale: str = "lanczos"
+    # Which outputs render writes (from render.gif / render.frames). The MP4 is always
+    # written; the GIF is a preview format and by far the slowest encode (~5 s of a
+    # 24 s run), and the per-frame PNGs are ~6 s more. Both default True so an existing
+    # config's deliverables are unchanged. See render.assemble / render._write_frames.
+    gif: bool = True
+    frames: bool = True
     # Anomaly rendering (from top-level `anomaly` / `baseline_years`). "climatology"
     # => per-pixel z-score vs baseline monthly climatology; "reference" => LST minus
     # ERA5 air temp (thermal only). None => raw values.
@@ -136,6 +159,8 @@ class RunConfig:
                 preset=(str(render["preset"]) if render.get("preset") is not None else None),
                 aspect=render.get("aspect"),
                 upscale=str(render.get("upscale", "lanczos")),
+                gif=_flag(render, "gif"),
+                frames=_flag(render, "frames"),
                 out_dir=str(raw.get("out_dir", "out")),
                 draw_region=bool(raw.get("draw_region", True)),
                 region_line_width=(int(render["region_line_width"])
@@ -190,6 +215,12 @@ class RunConfig:
             raise ConfigError("render.region_line_width must be >= 1")
         if self.workers < 1:
             raise ConfigError("render.workers must be >= 1")
+        # Also checked here (not only in from_yaml) because the GUI and api.animate
+        # build RunConfig directly and validate() is their only gate.
+        for flag in _RENDER_FLAGS:
+            if not isinstance(getattr(self, flag), bool):
+                raise ConfigError(
+                    f"render.{flag} must be true or false (got {getattr(self, flag)!r})")
         if self.anomaly is not None:
             from .products import THERMAL_INDICES
             if self.cadence != "monthly":
