@@ -19,6 +19,9 @@ SUPPORTED_CADENCES = {"monthly", "semimonthly", "10day"}
 # Cross-year "best month" pooling (see compositing.pooled_composite).
 POOL_STRATEGIES = {"least_cloudy", "median", "gap_fill"}
 
+# Frame-interpolation strategies (see render.interpolate / render.interpolate_mode).
+INTERPOLATE_MODES = {"auto", "crossfade", "data"}
+
 
 class ConfigError(ValueError):
     """Raised when a run configuration is invalid."""
@@ -117,6 +120,12 @@ class RunConfig:
     # (never inside out/, which is the shared deliverable). See cache.py.
     cache: bool = True
     cache_dir: str = None
+    # Generated frames inserted between observations so playback reads as motion
+    # (from render.interpolate / render.interpolate_mode). 0 = off. "auto" picks
+    # data-space interpolation for single-band indices and cross-fade for
+    # composites, which arrive from EE already coloured.
+    interpolate: int = 0
+    interpolate_mode: str = "auto"
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RunConfig":
@@ -177,6 +186,8 @@ class RunConfig:
                 workers=int(render.get("workers", 4)),
                 cache=bool(render.get("cache", True)),
                 cache_dir=(str(render["cache_dir"]) if render.get("cache_dir") else None),
+                interpolate=int(render.get("interpolate", 0) or 0),
+                interpolate_mode=str(render.get("interpolate_mode") or "auto"),
             )
         except KeyError as exc:
             raise ConfigError(f"missing required config key: {exc}") from exc
@@ -215,6 +226,16 @@ class RunConfig:
             raise ConfigError("render.region_line_width must be >= 1")
         if self.workers < 1:
             raise ConfigError("render.workers must be >= 1")
+        if self.interpolate < 0:
+            raise ConfigError("render.interpolate must be >= 0")
+        if self.interpolate_mode not in INTERPOLATE_MODES:
+            raise ConfigError(
+                f"unknown render.interpolate_mode {self.interpolate_mode!r}; "
+                f"supported: {sorted(INTERPOLATE_MODES)}")
+        if self.interpolate_mode == "data" and INDICES[self.index].composite:
+            raise ConfigError(
+                f"render.interpolate_mode: data needs a single-band index; "
+                f"{self.index!r} is a composite — use crossfade (or auto)")
         # Also checked here (not only in from_yaml) because the GUI and api.animate
         # build RunConfig directly and validate() is their only gate.
         for flag in _RENDER_FLAGS:

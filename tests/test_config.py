@@ -564,3 +564,44 @@ def test_validate_rejects_a_non_boolean_render_flag_built_directly(tmp_path):
     cfg.frames = "yes"
     with pytest.raises(ConfigError, match="render.frames must be true or false"):
         cfg.validate()
+
+
+def test_interpolate_defaults_to_off(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.interpolate == 0 and cfg.interpolate_mode == "auto"
+
+
+def test_interpolate_is_read_from_the_render_block(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, interpolate: 10, "
+        "interpolate_mode: crossfade}"))
+    cfg = RunConfig.from_yaml(p)
+    assert cfg.interpolate == 10 and cfg.interpolate_mode == "crossfade"
+
+
+def test_validate_rejects_negative_interpolate(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, interpolate: -1}"))
+    with pytest.raises(ConfigError, match="interpolate"):
+        RunConfig.from_yaml(p)
+
+
+def test_validate_rejects_unknown_interpolate_mode(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, interpolate_mode: wobble}"))
+    with pytest.raises(ConfigError, match="interpolate_mode"):
+        RunConfig.from_yaml(p)
+
+
+def test_validate_rejects_data_mode_for_a_composite_index(tmp_path):
+    # rgb/cir arrive from EE already coloured, so there is no index array to
+    # interpolate; the error must name the alternative.
+    p = _write(tmp_path, _base("index: rgb\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, interpolate: 5, "
+        "interpolate_mode: data}"))
+    with pytest.raises(ConfigError, match="crossfade"):
+        RunConfig.from_yaml(p)
