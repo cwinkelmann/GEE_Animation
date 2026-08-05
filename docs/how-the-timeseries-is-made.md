@@ -163,6 +163,38 @@ trend detection, change detection, or anything reported as a measurement.
 
 ---
 
+## 7a. Interpolated playback (optional)
+
+`render.interpolate: N` inserts N generated frames per one-period step, so an
+animation reads as continuous motion instead of a slideshow. Spacing is
+proportional: a two-month gap gets twice the generated frames of a one-month gap,
+so playback speed tracks elapsed time rather than frame count — this matters
+because periods get skipped (§3, §4), so a real run's gaps are not all one period
+wide.
+
+**Generated frames show dates that were never observed.** They are labelled
+`2022-05 -> 2022-06  30%` and the info bar states the interpolation, so an
+observed frame is never mistaken for a generated one. Observed frames are
+byte-identical to a run with interpolation off — interpolation only adds frames,
+it never touches a real one.
+
+Two modes: `data` interpolates index values before colouring, so the colour bar
+stays exactly valid; `crossfade` blends already-finished colour and is the only
+option for the `rgb`/`cir` composites, which arrive from Earth Engine pre-coloured
+with no index values left to interpolate — asking for `data` on a composite is
+rejected at config load, naming `crossfade` as the fix. `auto` (the default)
+resolves to `data` for single-band indices and `crossfade` for composites.
+
+Where one observation has a cloud hole and the next does not, the generated frames
+**hold the valid observation's value** rather than fading toward the no-data grey —
+otherwise a healing cloud hole would pulse grey in and out on every transition.
+
+Only observed frames get per-frame PNGs. `render.gif` defaults to off when
+interpolating (several hundred quantized frames would be enormous) and on
+otherwise; set `gif: true` explicitly to force it either way.
+
+---
+
 ## 8. Recorded numbers, and plotting them
 
 Set `metadata: true` and the run writes `out/metadata.db` (SQLite), one row per frame:
