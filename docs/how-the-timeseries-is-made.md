@@ -14,9 +14,10 @@ For each time period in the requested range, the pipeline asks Earth Engine for 
 satellite scene that overlaps the area, throws away the ones that are too cloudy,
 combines what survives into a single image, downloads that image as a picture, draws
 the labels and the colour bar onto it, and finally stitches the pictures into a video.
-Nothing is interpolated between periods and nothing is smoothed over time: every frame
-is built only from scenes actually acquired in its own period — with one deliberate
-exception, cross-year pooling, described in §6.
+By default, nothing is interpolated between periods and nothing is smoothed over time:
+every frame is built only from scenes actually acquired in its own period — with two
+deliberate, opt-in exceptions: cross-year pooling (§6), and generated frames inserted
+between observations for smoother playback (§7a).
 
 ---
 
@@ -197,7 +198,9 @@ otherwise; set `gif: true` explicitly to force it either way.
 
 ## 8. Recorded numbers, and plotting them
 
-Set `metadata: true` and the run writes `out/metadata.db` (SQLite), one row per frame:
+Set `metadata: true` and the run writes `out/metadata.db` (SQLite), one row per
+**observed** frame — a generated frame (§7a) was never acquired, so it names no file
+and gets no metadata row:
 
 `name, sensor, index_name, month, n_scenes, aoi_cloud_fraction, aoi_clear_fraction, aoi_mean`
 
@@ -256,8 +259,11 @@ cloud averages a smaller, non-random part of the AOI. Read the series alongside
 - **`lst_sharp` is an approximation.** It sharpens 100 m thermal against 30 m optical
   and can produce blocky artefacts at the thermal block edges. The examples use plain
   `lst` for this reason.
-- **Uneven time spacing.** Skipped periods are dropped, not held, so a constant frame
-  rate does not represent constant time.
+- **Uneven time spacing.** With interpolation off (the default), skipped periods are
+  dropped, not held, so a constant frame rate does not represent constant time. §7a's
+  `render.interpolate` addresses this directly — proportional generated frames make
+  playback speed track elapsed time — at the cost of the generated frames being
+  synthetic, not observed.
 
 ---
 
@@ -266,6 +272,7 @@ cloud averages a smaller, non-random part of the AOI. Read the series alongside
 ```bash
 gee-animation --config config/wne_2yr_gapfill.example.yaml     # 2 years, gap-filled LST
 gee-animation --config config/wne_summer_pooled.example.yaml   # cosmetic summer loop
+gee-animation --config config/wne_interpolated.example.yaml    # smooth playback (§7a)
 gee-animation --config <cfg> --inventory                       # the scene evidence table
 ```
 

@@ -1,5 +1,5 @@
 # Smooth playback: generated frames between observations so the animation reads
-# as motion rather than a slideshow. Same AOI as wne_2yr_ndvi.example.yaml, one
+# as motion rather than a slideshow. Same AOI as wne_2yr_gapfill.example.yaml, one
 # year instead of two, so the interpolation is easy to see without a long render.
 #
 # Generated frames show dates that were never observed. They are labelled
@@ -28,8 +28,9 @@ pool_years: [2018, 2026]     # borrow only for months this year left empty
 pool_strategy: gap_fill
 
 viz:
-  min: 0.0                   # see wne_2yr_ndvi.example.yaml: NDVI rarely goes
-  max: 0.95                  # below 0 here, so the low half of -1..1 is wasted
+  min: 0.0                   # the index default is -1..1, but almost nothing on
+  max: 0.95                  # land sits below 0, so 0..0.95 spends the colours
+                              # where the land actually varies; water clips low
 
 render:
   fps: 24                    # 24-30 reads as filmed; 1 fps (the other examples'
