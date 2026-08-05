@@ -5,6 +5,8 @@ particular the no-data table) can be tested directly on small arrays.
 """
 from __future__ import annotations
 
+from bisect import bisect_right
+
 import numpy as np
 
 
@@ -54,34 +56,61 @@ def expand(items, steps: int, period_gap):
             yield gen_vals, gen_valid, f"{label} -> {b_label}  {round(100 * t)}%", False
 
 
-def _slot(label: str) -> int:
-    """Ordinal position of a period label, in slots since year 0.
+# Day-of-month a sub-monthly period starts on, per cadence. Mirrors
+# compositing.py's `_SPLIT_DAYS` (compositing.py:29) — that table is the source
+# of truth for where a run's periods actually split, since it is what
+# `period_starts` uses to build the labels this module only ever reads back.
+# Duplicated rather than imported so `interpolate.py` stays free of any
+# dependency on `compositing` (see module docstring); the two must be changed
+# together if `compositing`'s split points ever move.
+_SPLIT_DAYS = {
+    "semimonthly": (1, 16),
+    "10day": (1, 11, 21),
+}
 
-    Monthly labels ("2022-05") count whole months. Sub-monthly labels
-    ("2022-05-11") count the 1st/11th/21st slots `compositing.period_starts`
-    produces, three per month — so a 10-day cadence and a monthly one both give
-    sensible distances without `interpolate` needing to know the cadence.
+
+def _slot(label: str, cadence: str) -> int:
+    """Ordinal position of a period label, in whole periods of `cadence`.
+
+    Monthly labels ("2022-05") count whole months directly. Sub-monthly
+    labels ("2022-05-16") count whichever periods `cadence` splits the month
+    into (`_SPLIT_DAYS`) — a "YYYY-MM-01" label is period 0 under every
+    sub-monthly cadence, but how many periods make up the *rest* of the month
+    depends on `cadence`, which is why it has to be passed in rather than
+    guessed from the label (see `gap_for`).
     """
     parts = label.split("-")
     year, month = int(parts[0]), int(parts[1])
     months = year * 12 + month
-    if len(parts) < 3:
-        return months * 3
+    if cadence == "monthly":
+        return months
+    days = _SPLIT_DAYS[cadence]
     day = int(parts[2])
-    return months * 3 + (0 if day < 11 else 1 if day < 21 else 2)
+    offset = bisect_right(days, day) - 1
+    return months * len(days) + offset
 
 
-def period_gap(label_a: str, label_b: str) -> int:
-    """Whole periods between two frame labels, at least 1.
+def gap_for(cadence: str):
+    """Build a `period_gap(label_a, label_b)` for one run's cadence.
 
-    `_slot` puts both label styles on one scale (3 slots per month) so the
-    diff is always meaningful, but the *unit* callers expect differs by
-    cadence: monthly labels count whole months, so a pair of monthly labels
-    divides the slot diff back down by 3; sub-monthly labels (or a mixed
-    pair, which does not occur within a single run — see module docs) count
-    10-day slots directly, at the raw scale `_slot` already produces.
+    The label alone cannot always determine the grid: `compositing.period_starts`
+    (compositing.py:55) picks the label *format* from the cadence, not the other
+    way round, and a "YYYY-MM-01" label is the start of a period under both
+    `semimonthly` and `10day` — they only disagree on how many periods fill the
+    rest of the month. So the cadence has to come from the caller. Within one
+    run, every label passed to the returned function shares that one cadence:
+    `compositing.composite` picks exactly one strategy per run, and each
+    strategy calls `period_starts` with the single `cfg.cadence` value
+    (compositing.py:157, compositing.py:253) — so mixed-cadence pairs don't
+    occur in practice.
     """
-    diff = _slot(label_b) - _slot(label_a)
-    if len(label_a.split("-")) < 3 and len(label_b.split("-")) < 3:
-        diff //= 3
-    return max(1, diff)
+    def _gap(label_a: str, label_b: str) -> int:
+        return max(1, _slot(label_b, cadence) - _slot(label_a, cadence))
+    return _gap
+
+
+# Convenience default for callers/tests that only ever deal with monthly
+# labels. Sub-monthly runs must build their own gap function via
+# `gap_for(cfg.cadence)` — this one silently ignores a "YYYY-MM-DD" label's
+# day and counts whole months only, which is wrong for any sub-monthly cadence.
+period_gap = gap_for("monthly")

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from gee_animation.interpolate import blend, expand, period_gap
+from gee_animation.interpolate import blend, expand, gap_for, period_gap
 
 
 def test_blend_midpoint_of_two_valid_frames():
@@ -104,10 +104,27 @@ def test_period_gap_counts_months_for_monthly_labels():
 
 
 def test_period_gap_counts_ten_day_slots_for_sub_monthly_labels():
-    assert period_gap("2022-05-01", "2022-05-11") == 1
-    assert period_gap("2022-05-01", "2022-06-01") == 3   # 3 slots per month
-    assert period_gap("2022-05-21", "2022-06-01") == 1
+    ten_day_gap = gap_for("10day")
+    assert ten_day_gap("2022-05-01", "2022-05-11") == 1
+    assert ten_day_gap("2022-05-01", "2022-06-01") == 3   # 3 slots per month
+    assert ten_day_gap("2022-05-21", "2022-06-01") == 1
 
 
 def test_period_gap_is_at_least_one():
     assert period_gap("2022-05", "2022-05") == 1
+
+
+def test_gap_for_semimonthly_counts_two_slots_per_month():
+    semimonthly_gap = gap_for("semimonthly")
+    assert semimonthly_gap("2022-05-01", "2022-05-16") == 1
+    assert semimonthly_gap("2022-05-16", "2022-06-01") == 1
+    assert semimonthly_gap("2022-05-01", "2022-06-01") == 2
+    assert semimonthly_gap("2021-11-16", "2022-01-01") == 3   # across a year boundary
+
+
+def test_gap_for_disagrees_between_sub_monthly_cadences_for_the_same_labels():
+    # "YYYY-MM-01" starts a period under both semimonthly and 10day, but they
+    # split the rest of the month differently — the label alone can't say
+    # which grid it's on, so the cadence must be supplied by the caller.
+    assert gap_for("semimonthly")("2022-05-01", "2022-06-01") == 2
+    assert gap_for("10day")("2022-05-01", "2022-06-01") == 3
