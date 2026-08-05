@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from gee_animation.interpolate import blend, expand
+from gee_animation.interpolate import blend, expand, period_gap
 
 
 def test_blend_midpoint_of_two_valid_frames():
@@ -95,3 +95,19 @@ def test_expand_generated_values_lie_between_the_endpoints():
     out = list(expand(_items("a", "b"), steps=1, period_gap=_adjacent))
     mid = [v for v, _ok, _lab, real in out if not real][0]
     assert 0.0 < float(mid.item()) < 1.0
+
+
+def test_period_gap_counts_months_for_monthly_labels():
+    assert period_gap("2022-05", "2022-06") == 1
+    assert period_gap("2022-05", "2022-08") == 3
+    assert period_gap("2021-11", "2022-02") == 3      # across a year boundary
+
+
+def test_period_gap_counts_ten_day_slots_for_sub_monthly_labels():
+    assert period_gap("2022-05-01", "2022-05-11") == 1
+    assert period_gap("2022-05-01", "2022-06-01") == 3   # 3 slots per month
+    assert period_gap("2022-05-21", "2022-06-01") == 1
+
+
+def test_period_gap_is_at_least_one():
+    assert period_gap("2022-05", "2022-05") == 1

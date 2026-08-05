@@ -52,3 +52,36 @@ def expand(items, steps: int, period_gap):
             t = k / (n + 1)
             gen_vals, gen_valid = blend(values, valid, b_vals, b_valid, t)
             yield gen_vals, gen_valid, f"{label} -> {b_label}  {round(100 * t)}%", False
+
+
+def _slot(label: str) -> int:
+    """Ordinal position of a period label, in slots since year 0.
+
+    Monthly labels ("2022-05") count whole months. Sub-monthly labels
+    ("2022-05-11") count the 1st/11th/21st slots `compositing.period_starts`
+    produces, three per month — so a 10-day cadence and a monthly one both give
+    sensible distances without `interpolate` needing to know the cadence.
+    """
+    parts = label.split("-")
+    year, month = int(parts[0]), int(parts[1])
+    months = year * 12 + month
+    if len(parts) < 3:
+        return months * 3
+    day = int(parts[2])
+    return months * 3 + (0 if day < 11 else 1 if day < 21 else 2)
+
+
+def period_gap(label_a: str, label_b: str) -> int:
+    """Whole periods between two frame labels, at least 1.
+
+    `_slot` puts both label styles on one scale (3 slots per month) so the
+    diff is always meaningful, but the *unit* callers expect differs by
+    cadence: monthly labels count whole months, so a pair of monthly labels
+    divides the slot diff back down by 3; sub-monthly labels (or a mixed
+    pair, which does not occur within a single run — see module docs) count
+    10-day slots directly, at the raw scale `_slot` already produces.
+    """
+    diff = _slot(label_b) - _slot(label_a)
+    if len(label_a.split("-")) < 3 and len(label_b.split("-")) < 3:
+        diff //= 3
+    return max(1, diff)
