@@ -5,6 +5,7 @@ import io
 import logging
 import math
 from collections import deque
+from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache, partial
 from pathlib import Path
@@ -739,9 +740,20 @@ def _pad_to_even(frame: np.ndarray) -> np.ndarray:
     return frame
 
 
-def _write_mp4(path: Path, frames: list[np.ndarray], fps: int) -> None:
-    even = [_pad_to_even(f) for f in frames]
-    imageio.mimsave(path, even, fps=fps, macro_block_size=1)
+def _write_mp4(path: Path, frames: Iterable[np.ndarray], fps: int) -> None:
+    """Encode `frames` to MP4, appending each one as it arrives.
+
+    `frames` may be any iterable, including a generator: an interpolated run reaches
+    several hundred frames and at 4K that is tens of gigabytes if they are collected
+    first. The writer is closed on every path — a leaked ffmpeg writer leaves the
+    subprocess running and the file truncated.
+    """
+    writer = imageio.get_writer(path, fps=fps, macro_block_size=1)
+    try:
+        for frame in frames:
+            writer.append_data(_pad_to_even(frame))
+    finally:
+        writer.close()
 
 
 def _write_gif(path: Path, frames: list[np.ndarray], fps: int) -> None:
@@ -791,8 +803,15 @@ def _write_frames(out_dir: Path, name: str, frames_rgb: list[np.ndarray],
     return paths
 
 
-def assemble(frames_rgb: list[np.ndarray], cfg) -> list[Path]:
-    """Encode the frames to MP4 and (unless `render.gif` is false) GIF.
+def assemble_stream(frames_iter: Iterable[np.ndarray], cfg) -> list[Path]:
+    """Encode an *iterator* of frames to MP4 and (unless `render.gif` is false) GIF.
+
+    Frames are written as they arrive rather than collected first: an interpolated run
+    can reach several hundred frames, and at 4K that would be tens of gigabytes held at
+    once. Only the GIF's frames are retained — a GIF genuinely needs them all at
+    quantisation time — and those are capped to `_GIF_MAX_EDGE` here, as they pass, so
+    the full-size originals can be released immediately. `assemble` wraps this for
+    callers that already hold a list.
 
     The GIF is the slowest single step of a render (5.4 s of a 24 s run, half of it
     PIL's colour quantisation) and is only a preview format — `render.gif: false`
@@ -804,10 +823,22 @@ def assemble(frames_rgb: list[np.ndarray], cfg) -> list[Path]:
     mp4_path = out_dir / f"{cfg.name}.mp4"
     want_gif = bool(getattr(cfg, "gif", True))
     paths: list[Path] = []
+    frames_iter = iter(frames_iter)
+    gif_frames: list[np.ndarray] = []
+
+    def _tee(source: Iterator[np.ndarray]) -> Iterator[np.ndarray]:
+        """Pass frames through to the encoder, keeping a preview-sized GIF copy."""
+        for frame in source:
+            if want_gif:
+                gif_frames.append(_cap_edge(frame, _GIF_MAX_EDGE))
+            yield frame
+
     try:
-        _write_mp4(mp4_path, frames_rgb, cfg.fps)
+        _write_mp4(mp4_path, _tee(frames_iter), cfg.fps)
         paths.append(mp4_path)
     except Exception as exc:  # ffmpeg missing / encode error
+        # A partial .mp4 beside the GIF reads as a successful render, so drop it.
+        mp4_path.unlink(missing_ok=True)
         if not want_gif:
             # The GIF is the fallback that makes an MP4 failure survivable; without it
             # there is no animation at all, so fail fast rather than return only PNGs.
@@ -816,10 +847,24 @@ def assemble(frames_rgb: list[np.ndarray], cfg) -> list[Path]:
                 f"animation could be written; set render.gif: true to fall back to a GIF"
             ) from exc
         log.warning("MP4 write failed (%s); producing GIF only", exc)
+        # The MP4 pass was what pulled frames off the iterator, and it stopped where it
+        # failed — possibly at frame 0. Drain the rest so the fallback GIF is complete.
+        for _ in _tee(frames_iter):
+            pass
     if want_gif:
-        _write_gif(gif_path, frames_rgb, cfg.fps)
+        # Already capped above; _cap_edge is a no-op the second time, and leaving the
+        # cap in _write_gif keeps that function correct for its own callers.
+        _write_gif(gif_path, gif_frames, cfg.fps)
         paths.append(gif_path)
     return paths
+
+
+def assemble(frames_rgb: list[np.ndarray], cfg) -> list[Path]:
+    """Encode an already-collected list of frames — thin wrapper over `assemble_stream`.
+
+    Unchanged contract: MP4 path first, then the GIF path if one was written.
+    """
+    return assemble_stream(iter(frames_rgb), cfg)
 
 
 #: Default fetch concurrency. Measured on a 22-frame Landsat LST run: serial

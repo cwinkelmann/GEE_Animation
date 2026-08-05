@@ -682,6 +682,101 @@ def test_assemble_falls_back_to_gif_when_mp4_fails(tmp_path, monkeypatch):
     assert paths[0].exists()
 
 
+def test_assemble_stream_writes_mp4_from_an_iterator(tmp_path):
+    from gee_animation.render import assemble_stream
+    cfg = _cfg(tmp_path)
+    frames = (np.full((16, 16, 3), v, np.uint8) for v in (0, 128, 255))
+    paths = assemble_stream(frames, cfg)
+    assert any(p.suffix == ".mp4" for p in paths)
+    assert all(p.exists() for p in paths)
+
+
+def test_assemble_stream_does_not_retain_every_frame(tmp_path):
+    """Peak retained frames must not scale with the sequence length — this is what
+    makes 600-frame interpolated runs possible at all.
+
+    Liveness is measured with weakrefs rather than by counting the producer's own
+    references: the producer drops its reference on every iteration, so only the
+    encoder can keep a frame alive. An implementation that collects the frames in a
+    list before encoding keeps all 40 alive and fails here.
+    """
+    import gc
+    import weakref
+    from gee_animation.render import assemble_stream
+    cfg = _cfg(tmp_path)
+    cfg.gif = False
+    refs: list = []
+    peak = 0
+
+    def gen():
+        nonlocal peak
+        for i in range(40):
+            a = np.full((16, 16, 3), i % 256, np.uint8)
+            refs.append(weakref.ref(a))
+            yield a
+            del a                     # producer drops its own reference each iteration
+            gc.collect()
+            peak = max(peak, sum(r() is not None for r in refs))
+
+    assemble_stream(gen(), cfg)
+    assert peak <= 2, f"held up to {peak} frames at once"
+
+
+def test_assemble_still_accepts_a_list(tmp_path):
+    cfg = _cfg(tmp_path)
+    paths = assemble([np.zeros((16, 16, 3), np.uint8)] * 2, cfg)
+    assert any(p.suffix == ".mp4" for p in paths)
+
+
+def test_assemble_stream_drains_the_iterator_for_the_gif_when_mp4_fails(tmp_path,
+                                                                       monkeypatch):
+    # The GIF is the fallback for a failed MP4, so it must still contain every frame
+    # even though the MP4 pass is what was pulling them off the iterator.
+    import imageio.v2 as imageio
+    import gee_animation.render as r
+    from gee_animation.render import assemble_stream
+    cfg = _cfg(tmp_path)
+    monkeypatch.setattr(r, "_write_mp4", _boom)
+    frames = (np.full((16, 16, 3), v, np.uint8) for v in (0, 80, 160, 240))
+    paths = assemble_stream(frames, cfg)
+    assert [p.suffix for p in paths] == [".gif"]
+    assert len(imageio.mimread(paths[0])) == 4
+
+
+def test_assemble_stream_removes_a_half_written_mp4(tmp_path, monkeypatch):
+    # A truncated .mp4 next to the GIF looks like a successful render; the failed
+    # file must not survive the fallback.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+
+    def half_write(path, frames, fps):
+        Path(path).write_bytes(b"garbage")
+        raise RuntimeError("encoder died mid-stream")
+    monkeypatch.setattr(r, "_write_mp4", half_write)
+    paths = r.assemble_stream(iter([np.zeros((16, 16, 3), np.uint8)]), cfg)
+    assert [p.suffix for p in paths] == [".gif"]
+    assert not (tmp_path / f"{cfg.name}.mp4").exists()
+
+
+def test_write_mp4_closes_its_writer_when_a_frame_fails(tmp_path, monkeypatch):
+    # A leaked ffmpeg writer hangs or corrupts the output, so the close must happen
+    # on the failure path too.
+    import gee_animation.render as r
+    closed = []
+
+    class FakeWriter:
+        def append_data(self, frame):
+            raise ValueError("bad frame")
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(r.imageio, "get_writer", lambda *a, **k: FakeWriter())
+    with pytest.raises(ValueError):
+        r._write_mp4(tmp_path / "x.mp4", [np.zeros((16, 16, 3), np.uint8)], 2)
+    assert closed == [True]
+
+
 def _thermal_cfg(tmp_path):
     cfg = _cfg(tmp_path)
     cfg.sensor, cfg.index = "landsat", "lst"
