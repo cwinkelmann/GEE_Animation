@@ -1,0 +1,49 @@
+# Two full years of Sentinel-2 NDVI over the Grumsin (WNE) beech forest, gap-filled.
+# The greenness counterpart to wne_2yr_gapfill.example.yaml (temperature) and
+# wne_2yr_rgb.example.yaml (true colour) — same AOI, same period, same strategy, so
+# the three series are directly comparable.
+#
+# NDVI = (NIR - Red) / (NIR + Red). High where leaves are dense and photosynthesising;
+# near zero over bare soil; negative over water.
+name: wne_2yr_ndvi
+project: hnee-331218
+
+aoi:
+  frame:
+    bbox: [13.7949, 52.9299, 13.9985, 53.0421]   # region + 5 km -> 13.7 x 12.5 km
+  region:
+    shapefile: docs/aoi/wne/wne.shp
+  region_max_cloud_percent: 20
+
+start: "2021-01-01"
+end: "2023-01-01"
+
+sensor: sentinel2           # 10 m native -> ~1368 px over this frame, near 1:1 at 1440p
+index: ndvi
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+
+pool_years: [2018, 2024]
+pool_strategy: gap_fill     # keep 2021/2022 where they have data; borrow only for gaps
+
+viz:
+  # The index default is -1..1, but almost nothing on land sits below 0, so half that
+  # ramp is wasted. 0..0.95 spends the colours where the land actually varies; water
+  # clips to the bottom of the scale.
+  min: 0.0
+  max: 0.95
+
+render:
+  fps: 1
+  scale: 10
+  dimensions: 1440          # caps to ~1368 px native at 10 m
+  crs: auto
+  preset: 1440p
+  aspect: match
+  upscale: lanczos
+  region_line_width: 5
+
+# Record per-frame stats to out/metadata.db (mean NDVI over the AOI's clear pixels,
+# scene count, cloud fraction) so the series can be plotted afterwards.
+metadata: true
