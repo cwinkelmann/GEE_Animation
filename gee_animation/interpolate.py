@@ -30,3 +30,25 @@ def blend(a_vals, a_valid, b_vals, b_valid, t: float):
     a_only = (a_valid & ~b_valid)[..., None] if blended.ndim == 3 else (a_valid & ~b_valid)
     values = np.where(sel, blended, np.where(a_only, a_vals, b_vals))
     return values, valid
+
+
+def expand(items, steps: int, period_gap):
+    """Yield ``(values, valid, label, is_real)`` with generated frames between items.
+
+    `steps` is the number of generated frames per **one-period** step. Periods are
+    not evenly spaced — bins below `min_scenes` are dropped — so a gap of k periods
+    gets ``k * steps`` generated frames and playback speed tracks elapsed time. A
+    fixed count per pair would play a three-month absence as fast as a one-month
+    step, implying change happened faster than it did.
+    """
+    items = list(items)
+    for i, (values, valid, label) in enumerate(items):
+        yield values, valid, label, True
+        if steps <= 0 or i + 1 >= len(items):
+            continue
+        b_vals, b_valid, b_label = items[i + 1]
+        n = max(1, int(period_gap(label, b_label))) * steps
+        for k in range(1, n + 1):
+            t = k / (n + 1)
+            gen_vals, gen_valid = blend(values, valid, b_vals, b_valid, t)
+            yield gen_vals, gen_valid, f"{label} -> {b_label}  {round(100 * t)}%", False
