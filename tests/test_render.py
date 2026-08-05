@@ -1160,3 +1160,282 @@ def test_colorbar_draws_a_backing_panel_for_contrast():
     assert label_band.mean() < 200, "no backing panel behind the colorbar labels"
     # Well away from the colorbar the imagery is untouched.
     assert out[h - 4, w - 4].tolist() == [255, 255, 255]
+
+
+# --- frame interpolation (render.interpolate) -------------------------------------
+
+def _flat_fetch(image, cfg, geometry=None):
+    return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
+
+
+def test_render_interpolates_between_frames(tmp_path, monkeypatch):
+    # Generated frames carry their own "a -> b  NN%" label; the observed ones keep
+    # exactly the text they had before.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.interpolate = 2
+    drawn = []
+    monkeypatch.setattr(r, "annotate", lambda rgb, label: (drawn.append(label) or rgb))
+    render([Frame("2022-05", object()), Frame("2022-06", object())], cfg,
+           fetch=_flat_fetch, geometry=None)
+    assert drawn == ["2022-05", "2022-05 -> 2022-06  33%",
+                     "2022-05 -> 2022-06  67%", "2022-06"]
+
+
+def test_render_scales_generated_frames_with_the_gap(tmp_path, monkeypatch):
+    # A three-period absence gets three times the generated frames, so playback speed
+    # tracks elapsed time instead of implying the change happened in one step.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.interpolate = 1
+    drawn = []
+    monkeypatch.setattr(r, "annotate", lambda rgb, label: (drawn.append(label) or rgb))
+    render([Frame("2022-05", object()), Frame("2022-08", object())], cfg,
+           fetch=_flat_fetch, geometry=None)
+    assert len(drawn) == 5                       # 2 observed + 3 * 1 generated
+    assert drawn[0] == "2022-05" and drawn[-1] == "2022-08"
+
+
+def test_render_interpolate_zero_is_untouched(tmp_path, monkeypatch):
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.interpolate = 0
+    drawn = []
+    monkeypatch.setattr(r, "annotate", lambda rgb, label: (drawn.append(label) or rgb))
+    render([Frame("2022-05", object(), 3), Frame("2022-06", object())], cfg,
+           fetch=_flat_fetch, geometry=None)
+    assert drawn == ["2022-05  n=3", "2022-06"]
+
+
+@pytest.mark.parametrize("mode", ["auto", "crossfade", "data"])
+@pytest.mark.parametrize("index", ["ndvi", "rgb"])
+def test_render_observed_frames_are_byte_identical_with_and_without_interpolation(
+        tmp_path, mode, index):
+    """The central guarantee: interpolation adds frames, it never alters a real one.
+
+    Compared as rendered PNG bytes, over every mode/index combination that resolves —
+    `data` on a composite is rejected by config.validate, so it is skipped here rather
+    than pinning behaviour no valid run can reach.
+    """
+    if mode == "data" and index == "rgb":
+        pytest.skip("config.validate rejects interpolate_mode: data on a composite")
+    composite = index == "rgb"
+    rng = np.random.default_rng(3)
+    shot = ((rng.random((18, 22, 3)) * 255 if composite else rng.random((18, 22)) - 0.2),
+            np.ones((18, 22), dtype=bool))
+
+    def _run(sub, steps):
+        cfg = _cfg(tmp_path / sub)
+        cfg.index = index
+        cfg.palette = [] if composite else cfg.palette
+        cfg.interpolate = steps
+        cfg.interpolate_mode = mode
+        render([Frame("2022-05", object(), 4), Frame("2022-06", object(), 1, 2021)],
+               cfg, fetch=lambda image, c, geometry=None: shot, geometry=None)
+
+    _run("a", 0)
+    _run("b", 3)
+    for label in ("2022-05", "2022-06"):
+        a = (tmp_path / "a" / f"anim_{label}.png").read_bytes()
+        b = (tmp_path / "b" / f"anim_{label}.png").read_bytes()
+        assert a == b, f"{label} changed when interpolation was enabled"
+
+
+def test_render_writes_pngs_for_observed_frames_only(tmp_path):
+    # 600 PNGs of which 540 are generated would be noise, and a generated frame has no
+    # period key to name a file after.
+    cfg = _cfg(tmp_path)
+    cfg.interpolate = 5
+    paths = render([Frame("2022-05", object()), Frame("2022-06", object())], cfg,
+                   fetch=_flat_fetch, geometry=None)
+    pngs = [p for p in paths if p.suffix == ".png"]
+    assert sorted(p.stem for p in pngs) == ["anim_2022-05", "anim_2022-06"]
+    assert sorted(p.stem for p in tmp_path.glob("*.png")) == ["anim_2022-05", "anim_2022-06"]
+
+
+def test_render_pooled_png_filename_survives_interpolation(tmp_path):
+    # The PNG is named from the clean period key, never from the drawn display text
+    # (which carries the provenance arrow and the scene count).
+    cfg = _cfg(tmp_path)
+    cfg.interpolate = 2
+    paths = render([Frame("2022-05", object(), 1, 2021), Frame("2022-06", object(), 2)],
+                   cfg, fetch=_flat_fetch, geometry=None)
+    pngs = [p for p in paths if p.suffix == ".png"]
+    assert [p.name for p in pngs] == ["anim_2022-05.png", "anim_2022-06.png"]
+
+
+def test_render_interpolated_frames_reach_the_encoder(tmp_path, monkeypatch):
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.interpolate = 3
+    seen = []
+    monkeypatch.setattr(r, "_write_mp4",
+                        lambda path, frames, fps: seen.extend(list(frames)))
+    render([Frame("2022-05", object()), Frame("2022-06", object())], cfg,
+           fetch=_flat_fetch, geometry=None)
+    assert len(seen) == 5                        # 2 observed + 3 generated
+
+
+def test_info_text_names_the_interpolation():
+    from gee_animation.render import _info_text
+    cfg = types.SimpleNamespace(index="ndvi", interpolate=10)
+    assert "interpolated: 10 frames between observations" in _info_text(cfg)
+    assert "interpolated" not in _info_text(types.SimpleNamespace(index="ndvi",
+                                                                 interpolate=0))
+
+
+def _seq(cfg, frames, fetch, composite=False):
+    from gee_animation.render import _imagery_sequence
+    return list(_imagery_sequence(frames, cfg, fetch, None, 1, composite))
+
+
+def test_imagery_sequence_data_mode_colorizes_the_blended_index(tmp_path):
+    """`auto` on a single-band index interpolates index units *before* colouring, so a
+    generated frame is coloured with the run's fixed viz range and the colour bar stays
+    exactly valid. A three-stop palette makes the two modes distinguishable: blending
+    -1 and 1 gives 0 -> the middle stop, while blending their colours gives grey."""
+    cfg = _cfg(tmp_path)
+    cfg.viz_min, cfg.viz_max = -1.0, 1.0
+    cfg.palette = ["#000000", "#ff0000", "#ffffff"]
+    cfg.interpolate = 1
+
+    vals = iter([-1.0, 1.0])
+
+    def fetch(image, cfg_, geometry=None):
+        return np.full((4, 4), next(vals)), np.ones((4, 4), dtype=bool)
+
+    out = _seq(cfg, [Frame("2022-05", object()), Frame("2022-06", object())], fetch)
+    assert [lb for *_x, lb in out] == ["2022-05", None, "2022-06"]
+    mid = out[1][0]
+    assert np.allclose(mid[0, 0], [255, 0, 0])        # colorize(0.0) — the middle stop
+
+
+def test_imagery_sequence_crossfade_blends_finished_colour(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.viz_min, cfg.viz_max = -1.0, 1.0
+    cfg.palette = ["#000000", "#ff0000", "#ffffff"]
+    cfg.interpolate = 1
+    cfg.interpolate_mode = "crossfade"
+
+    vals = iter([-1.0, 1.0])
+
+    def fetch(image, cfg_, geometry=None):
+        return np.full((4, 4), next(vals)), np.ones((4, 4), dtype=bool)
+
+    out = _seq(cfg, [Frame("2022-05", object()), Frame("2022-06", object())], fetch)
+    assert np.allclose(out[1][0][0, 0], [127.5, 127.5, 127.5])   # black/white midpoint
+
+
+def test_imagery_sequence_auto_crossfades_a_composite(tmp_path):
+    """A composite arrives from EE already coloured — there are no index units left to
+    interpolate — and where only one endpoint observed a pixel its colour is *held*,
+    not faded toward the other frame, so a cloud hole doesn't pulse on every transition.
+    """
+    cfg = _cfg(tmp_path, name="rgbtest")
+    cfg.index = "rgb"
+    cfg.palette = []
+    cfg.interpolate = 1
+
+    valid_b = np.ones((4, 6), dtype=bool)
+    valid_b[:, :3] = False                       # left half unobserved in frame B
+    shots = iter([(np.full((4, 6, 3), 100.0), np.ones((4, 6), dtype=bool)),
+                  (np.full((4, 6, 3), 200.0), valid_b)])
+
+    def fetch(image, cfg_, geometry=None):
+        return next(shots)
+
+    out = _seq(cfg, [Frame("2022-05", object()), Frame("2022-06", object())], fetch,
+               composite=True)
+    mid, mid_valid, text, label = out[1]
+    assert label is None and text == "2022-05 -> 2022-06  50%"
+    assert np.allclose(mid[:, :3], 100.0)        # only A observed it -> A's colour held
+    assert np.allclose(mid[:, 3:], 150.0)        # both observed -> blended
+    assert mid_valid.all()                       # a pixel A saw is not no-data
+
+
+def test_render_propagates_a_producer_failure_instead_of_a_truncated_animation(tmp_path):
+    """A fetch that fails mid-sequence must fail the run.
+
+    `assemble_stream` catches Exception around the MP4 write so a missing ffmpeg can
+    fall back to a GIF — and a frame *producer* raising surfaces at exactly the same
+    place. Without a marker the run logs "MP4 write failed", writes a GIF of however
+    many frames happened to arrive, and reports that truncation as success.
+    """
+    cfg = _cfg(tmp_path)
+    cfg.workers = 1                              # deterministic: call 3 == frame 3
+    seen = []
+
+    def flaky_fetch(image, cfg_, geometry=None):
+        seen.append(1)
+        if len(seen) == 3:
+            raise OSError("Earth Engine hiccup")
+        return np.zeros((16, 16)), np.ones((16, 16), dtype=bool)
+
+    frames = [Frame(f"2022-{m:02d}", object()) for m in range(1, 7)]
+    with pytest.raises(RuntimeError, match="2022-03"):
+        render(frames, cfg, fetch=flaky_fetch, geometry=None)
+    assert not (tmp_path / f"{cfg.name}.gif").exists()
+    assert not (tmp_path / f"{cfg.name}.mp4").exists()
+
+
+def test_render_propagates_a_producer_failure_while_interpolating(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.workers = 1
+    cfg.interpolate = 4
+    seen = []
+
+    def flaky_fetch(image, cfg_, geometry=None):
+        seen.append(1)
+        if len(seen) == 2:
+            raise OSError("Earth Engine hiccup")
+        return np.zeros((16, 16)), np.ones((16, 16), dtype=bool)
+
+    frames = [Frame(f"2022-{m:02d}", object()) for m in range(1, 5)]
+    with pytest.raises(RuntimeError, match="2022-02"):
+        render(frames, cfg, fetch=flaky_fetch, geometry=None)
+    assert not (tmp_path / f"{cfg.name}.gif").exists()
+
+
+def test_assemble_stream_reraises_a_producer_failure(tmp_path):
+    # The unit-level guarantee behind the two render() tests above.
+    from gee_animation.render import _produced, assemble_stream
+    cfg = _cfg(tmp_path)
+
+    def gen():
+        for i in range(6):
+            if i == 3:
+                raise ValueError("producer died")
+            yield np.full((16, 16, 3), 40 * i, np.uint8)
+
+    with pytest.raises(RuntimeError, match="producer died"):
+        assemble_stream(_produced(gen()), cfg)
+    assert not (tmp_path / f"{cfg.name}.gif").exists()
+    assert not (tmp_path / f"{cfg.name}.mp4").exists()
+
+
+def test_render_defaults_the_gif_off_when_interpolating(tmp_path):
+    # Several hundred quantized frames is an enormous, slow GIF; the MP4 and the
+    # observed-frame PNGs are unaffected.
+    cfg = _cfg(tmp_path)
+    cfg.gif = None                               # unset (RunConfig's default)
+    cfg.interpolate = 3
+    paths = render([Frame("2022-05", object()), Frame("2022-06", object())], cfg,
+                   fetch=_flat_fetch, geometry=None)
+    assert not any(p.suffix == ".gif" for p in paths)
+    assert any(p.suffix == ".mp4" for p in paths)
+
+
+def test_render_explicit_gif_true_wins_over_the_interpolation_default(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.gif = True
+    cfg.interpolate = 3
+    paths = render([Frame("2022-05", object()), Frame("2022-06", object())], cfg,
+                   fetch=_flat_fetch, geometry=None)
+    assert any(p.suffix == ".gif" and p.exists() for p in paths)
+
+
+def test_render_unset_gif_still_defaults_on_without_interpolation(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.gif = None
+    paths = render([Frame("2022-05", object())], cfg, fetch=_flat_fetch, geometry=None)
+    assert any(p.suffix == ".gif" and p.exists() for p in paths)

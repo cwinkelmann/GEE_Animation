@@ -15,7 +15,7 @@ import imageio.v2 as imageio
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from . import cache
+from . import cache, interpolate
 from .aoi import _load_geojson_geometry, _read_shapefile_geometry
 from .imaging import colorize
 from .products import INDICES, native_scale_m
@@ -276,6 +276,11 @@ def _info_text(cfg) -> str:
                 if getattr(cfg, "pool_strategy", None) == "gap_fill"
                 else "cosmetic: frames may be from different years")
         text += f"   pooled years {int(pool[0])}-{int(pool[-1])} ({note})"
+    steps = int(getattr(cfg, "interpolate", 0) or 0)
+    if steps:
+        # Most frames of an interpolated run were never observed; saying so on every
+        # frame keeps the animation from reading as that many real acquisitions.
+        text += f"   interpolated: {steps} frames between observations"
     return text
 
 
@@ -803,6 +808,29 @@ def _write_frames(out_dir: Path, name: str, frames_rgb: list[np.ndarray],
     return paths
 
 
+class _ProducerError(RuntimeError):
+    """A failure raised by whatever *produces* frames, not by the encoder consuming them.
+
+    `assemble_stream` wraps the MP4 write in `except Exception` so a missing ffmpeg can
+    fall back to a GIF — but the producer is pulled from inside that write, so a fetch
+    that fails halfway through surfaces at exactly the same place. Undistinguished, it
+    is logged as "MP4 write failed" and the run returns a GIF holding only the frames
+    that happened to arrive first: a silently truncated animation reported as success.
+    This marker is what lets `assemble_stream` tell the two apart. A `RuntimeError` so
+    `cli.main` still turns it into a clean exit code 1.
+    """
+
+
+def _produced(frames_iter: Iterable[np.ndarray]) -> Iterator[np.ndarray]:
+    """Tag every failure of `frames_iter` as producer-side (see `_ProducerError`)."""
+    try:
+        yield from frames_iter
+    except _ProducerError:
+        raise
+    except Exception as exc:            # noqa: BLE001 (re-raised, tagged, not swallowed)
+        raise _ProducerError(f"rendering frames failed: {exc}") from exc
+
+
 def assemble_stream(frames_iter: Iterable[np.ndarray], cfg) -> list[Path]:
     """Encode an *iterator* of frames to MP4 and (unless `render.gif` is false) GIF.
 
@@ -821,7 +849,10 @@ def assemble_stream(frames_iter: Iterable[np.ndarray], cfg) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     gif_path = out_dir / f"{cfg.name}.gif"
     mp4_path = out_dir / f"{cfg.name}.mp4"
-    want_gif = bool(getattr(cfg, "gif", True))
+    gif_flag = getattr(cfg, "gif", True)
+    # None means "not configured" — `render()` resolves it (an interpolated run turns
+    # the GIF off); anything reaching here unresolved keeps the historical default.
+    want_gif = True if gif_flag is None else bool(gif_flag)
     paths: list[Path] = []
     frames_iter = iter(frames_iter)
     gif_frames: list[np.ndarray] = []
@@ -836,6 +867,12 @@ def assemble_stream(frames_iter: Iterable[np.ndarray], cfg) -> list[Path]:
     try:
         _write_mp4(mp4_path, _tee(frames_iter), cfg.fps)
         paths.append(mp4_path)
+    except _ProducerError:
+        # Not an encode failure: the frames themselves could not be produced. There is
+        # nothing to fall back to — a GIF of the frames that did arrive would be a
+        # truncated animation returned as a successful run (see `_ProducerError`).
+        mp4_path.unlink(missing_ok=True)
+        raise
     except Exception as exc:  # ffmpeg missing / encode error
         # A partial .mp4 beside the GIF reads as a successful render, so drop it.
         mp4_path.unlink(missing_ok=True)
@@ -933,6 +970,72 @@ def _resolve(frame, call):
         raise RuntimeError(f"fetching frame {where} failed: {exc}") from exc
 
 
+def _imagery_sequence(frames, cfg, fetch, geometry, workers, composite):
+    """Yield ``(rgb, valid, display_text, label)`` — the imagery for every frame of the
+    animation, generated ones included, before any overlay is drawn.
+
+    `label` is the clean period key for an observed frame and None for a generated one:
+    a frame that was never observed names no file and belongs in no metadata row, and
+    carrying the key here is what keeps the PNG filenames off the *display* text (which
+    holds the provenance arrow and the scene count).
+
+    Interpolating here rather than on finished frames is deliberate: blending completed
+    frames would cross-fade the period label, the n= count and the colour bar into
+    illegible ghosting.
+    """
+    steps = int(getattr(cfg, "interpolate", 0) or 0)
+    mode = getattr(cfg, "interpolate_mode", "auto") or "auto"
+    if mode == "auto":
+        mode = "crossfade" if composite else "data"
+
+    def display_for(frame):
+        # `frame.label` stays a clean period key (it is also the PNG filename and the
+        # metadata `month` column — see compositing.pooled_composite), so a pooled
+        # frame's provenance is appended only for drawing.
+        n = getattr(frame, "n_scenes", None)
+        source = getattr(frame, "source", None)
+        shown = f"{frame.label} ← {source}" if source is not None else frame.label
+        return f"{shown}  n={n}" if n is not None else shown
+
+    def as_rgb(arr):
+        # composite fetch already returns colour (H×W×3); an index returns 2-D.
+        return arr if arr.ndim == 3 else colorize(arr, cfg.viz_min, cfg.viz_max,
+                                                  cfg.palette)
+
+    fetched = _fetch_in_order(frames, cfg, fetch, geometry, workers)
+    if steps <= 0:
+        # Interpolation off: fetch one, draw one, retain nothing.
+        for frame, (arr, valid) in fetched:
+            yield as_rgb(arr), valid, display_for(frame), frame.label
+        return
+
+    # `data` interpolates index units *before* colouring, so every generated frame is
+    # coloured with the run's fixed viz range and the colour bar stays exactly valid.
+    # `crossfade` blends finished colour — the only option for a composite, which
+    # arrives from EE already coloured with no index units left to blend.
+    data_mode = mode == "data" and not composite
+    post = as_rgb if data_mode else (lambda values: values)
+    items, display = [], {}
+    for frame, (arr, valid) in fetched:
+        items.append((arr if data_mode else as_rgb(arr), valid, frame.label))
+        display[frame.label] = display_for(frame)
+    # `expand` needs both endpoints of every pair, so the observed arrays are held for
+    # the run. That is bounded by the number of *observations* (a handful of dozens);
+    # the generated frames — the several hundred that made streaming necessary — are
+    # still produced and encoded one at a time.
+    #
+    # `gap_for(cadence)`, not the bare `period_gap`: a "YYYY-MM-01" label starts a
+    # period under both `semimonthly` and `10day`, and only the cadence says how many
+    # periods fill the rest of the month. Guessing monthly would silently double the
+    # generated frames across every month boundary of a sub-monthly run.
+    gap = interpolate.gap_for(getattr(cfg, "cadence", None) or "monthly")
+    for values, valid, label, is_real in interpolate.expand(items, steps, gap):
+        # An observed frame keeps its full display text; a generated one is labelled
+        # with the transition it sits in ("2022-05 -> 2022-06  30%").
+        yield post(values), valid, (display[label] if is_real else label), (
+            label if is_real else None)
+
+
 def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     frame_aoi = getattr(cfg, "frame_aoi", None)
     bounds = _aoi_bounds(frame_aoi) if frame_aoi else None
@@ -952,58 +1055,91 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     output = None      # (cw, ch, pw, ph, method) screen layout, computed on frame 1
     region_width = getattr(cfg, "region_line_width", None) or 2
     region_masks = None   # (casing_mask, core_mask); built once below, then reused
-    rgb_frames: list[np.ndarray] = []
     workers = max(1, int(getattr(cfg, "workers", DEFAULT_WORKERS) or DEFAULT_WORKERS))
-    # Fetches run concurrently with a bounded lookahead; everything below stays
-    # strictly ordered and single-threaded, so output is identical to workers=1.
-    for frame, (arr, valid) in _fetch_in_order(frames, cfg, fetch, geometry, workers):
-        # composite fetch already returns colour (H×W×3); an index returns 2-D.
-        rgb = arr if arr.ndim == 3 else colorize(arr, cfg.viz_min, cfg.viz_max, cfg.palette)
-        rgb = apply_nodata(rgb, valid)
-        # Screen output: smoothly upscale the native-resolution imagery, then draw the
-        # overlays at the output size so text/lines stay crisp; letterbox at the end.
-        if getattr(cfg, "preset", None):
-            if output is None:
-                output = _output_spec(cfg, (rgb.shape[1], rgb.shape[0]))
+    if getattr(cfg, "gif", None) is None:
+        # `render.gif` unconfigured: on for a normal run (unchanged), but an
+        # interpolated one is several hundred frames and quantising them into a GIF is
+        # enormous and slow. An explicit `gif: true` is left alone and still wins.
+        cfg.gif = not int(getattr(cfg, "interpolate", 0) or 0)
+    out_dir = Path(cfg.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    want_frames = bool(getattr(cfg, "frames", True))
+    png_paths: list[Path] = []
+
+    def _finished():
+        """Draw every frame, streaming them to the encoder as they are finished.
+
+        A generator, not a list: an interpolated run reaches several hundred frames and
+        at 4K holding them all is tens of gigabytes. Fetches still run concurrently with
+        a bounded lookahead; everything here stays strictly ordered and single-threaded,
+        so output is identical to workers=1.
+        """
+        nonlocal output, region_masks
+        # Observed frames are written out in small batches rather than one at a time
+        # (`_write_frames` encodes a batch across `workers` threads — a real ~2.8x, zlib
+        # releases the GIL) or all at the end (which would retain every frame, the very
+        # thing streaming avoids). Peak retention is `workers` frames, the same order as
+        # the fetch lookahead already holds.
+        batch_rgb: list[np.ndarray] = []
+        batch_labels: list[str] = []
+
+        def flush():
+            if batch_rgb:
+                png_paths.extend(
+                    _write_frames(out_dir, cfg.name, batch_rgb, batch_labels, workers))
+                batch_rgb.clear()
+                batch_labels.clear()
+
+        for rgb, valid, text, label in _imagery_sequence(frames, cfg, fetch, geometry,
+                                                         workers, composite):
+            rgb = apply_nodata(rgb, valid)
+            # Screen output: smoothly upscale the native-resolution imagery, then draw
+            # the overlays at the output size so text/lines stay crisp; letterbox last.
+            if getattr(cfg, "preset", None):
+                if output is None:
+                    output = _output_spec(cfg, (rgb.shape[1], rgb.shape[0]))
+                if output:
+                    rgb = _upscale_rgb(rgb, output[2], output[3], output[4])
+            # Georeferenced overlays go on first, while the array is still pure imagery:
+            # draw_region maps lon/lat linearly across the *whole* array, so drawing it
+            # once the label margins exist would slide the outline off its pixels.
+            if draw_overlay:
+                # The rings, bounds and frame size are identical every frame, so the
+                # (comparatively expensive) supersampled masks are built once here on
+                # the first frame; every later frame only pays for the cheap alpha
+                # composite in draw_region/_composite_region.
+                if region_masks is None:
+                    region_masks = _region_masks(proj_bounds, proj_rings,
+                                                 rgb.shape[:2], region_width)
+                # masks is always non-None here, so draw_region would just forward
+                # straight to _composite_region without reading `width` — call it direct.
+                rgb = _composite_region(rgb, *region_masks, color=REGION_OUTLINE_RGB)
+            if bounds is not None:
+                rgb = draw_scale_bar(rgb, frame_width_m)
+            # Now grow the canvas and let the (shape-preserving) bar drawers fill the new
+            # top/bottom strips, so the labels sit beside the imagery instead of over it.
+            top_h, bottom_h = _margins(rgb.shape[0])
+            rgb = add_margins(rgb, top_h, bottom_h)
+            rgb = draw_info_bar(rgb, info_text)
+            # `text` is already composed (see `_imagery_sequence`); Pillow's default font
+            # can't render "←", so it is folded right here, in one place, before drawing.
+            rgb = annotate(rgb, _drawable(text))
+            if not composite:                            # colorbar needs a palette
+                rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4)  # just inside the imagery
             if output:
-                rgb = _upscale_rgb(rgb, output[2], output[3], output[4])
-        # Georeferenced overlays go on first, while the array is still pure imagery:
-        # draw_region maps lon/lat linearly across the *whole* array, so drawing it
-        # once the label margins exist would silently slide the outline off its pixels.
-        if draw_overlay:
-            # The rings, bounds and frame size are identical every frame, so the
-            # (comparatively expensive) supersampled masks are built once here on the
-            # first frame; every later frame only pays for the cheap alpha composite
-            # in draw_region/_composite_region.
-            if region_masks is None:
-                region_masks = _region_masks(proj_bounds, proj_rings, rgb.shape[:2], region_width)
-            # masks is always non-None here, so draw_region would just forward straight
-            # to _composite_region without ever reading `width` — call it directly.
-            rgb = _composite_region(rgb, *region_masks, color=REGION_OUTLINE_RGB)
-        if bounds is not None:
-            rgb = draw_scale_bar(rgb, frame_width_m)
-        # Now grow the canvas and let the (shape-preserving) bar drawers fill the new
-        # top/bottom strips, so the labels sit beside the imagery instead of over it.
-        top_h, bottom_h = _margins(rgb.shape[0])
-        rgb = add_margins(rgb, top_h, bottom_h)
-        rgb = draw_info_bar(rgb, info_text)
-        n = getattr(frame, "n_scenes", None)
-        source = getattr(frame, "source", None)
-        # Compose the *display* string here: `frame.label` stays a clean period key
-        # (it is also the PNG filename and the metadata `month` column — see
-        # compositing.pooled_composite), so a pooled frame's provenance is appended
-        # only for drawing. Pillow's default font can't render "←", so the composed
-        # text is folded right here, in one place, before it reaches `annotate`.
-        display = f"{frame.label} ← {source}" if source is not None else frame.label
-        text = f"{display}  n={n}" if n is not None else display
-        rgb = annotate(rgb, _drawable(text))
-        if not composite:                            # colorbar needs a palette
-            rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4)   # just inside the imagery
-        if output:
-            rgb = _letterbox(rgb, output[0], output[1])
-        rgb_frames.append(rgb)
-    paths = assemble(rgb_frames, cfg)
-    if getattr(cfg, "frames", True):
-        paths += _write_frames(Path(cfg.out_dir), cfg.name, rgb_frames,
-                               [f.label for f in frames], workers=workers)
-    return paths
+                rgb = _letterbox(rgb, output[0], output[1])
+            if want_frames and label is not None:
+                # Observed frames only: 600 PNGs of which 540 were never observed would
+                # be noise, and a generated frame has no period key to name a file with.
+                batch_rgb.append(rgb)
+                batch_labels.append(label)
+                if len(batch_rgb) >= workers:
+                    flush()
+            yield rgb
+        flush()
+
+    # `_produced` marks anything raised while drawing as producer-side, so a fetch that
+    # fails mid-run cannot be mistaken for an encode failure and quietly demoted to a
+    # truncated GIF (see `_ProducerError`).
+    paths = assemble_stream(_produced(_finished()), cfg)
+    return paths + png_paths

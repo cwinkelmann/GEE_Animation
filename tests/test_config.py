@@ -534,9 +534,21 @@ def test_pool_years_with_landsat_and_no_missions_warns(tmp_path, caplog):
 
 def test_render_output_flags_default_to_true(tmp_path):
     # Both outputs stay on unless a config explicitly opts out, so an existing
-    # config's deliverables (MP4 + GIF + per-frame PNGs) are unchanged.
+    # config's deliverables (MP4 + GIF + per-frame PNGs) are unchanged. `gif` records
+    # that it was never configured (None) rather than defaulting here, because the
+    # answer depends on the run: render() turns it on for a normal one and off for an
+    # interpolated one (several hundred quantized frames). Only an explicit value
+    # overrides that — see test_render.py's gif-default tests for the resolution.
     cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: lst\n")))
-    assert cfg.gif is True and cfg.frames is True
+    assert cfg.gif is None and cfg.frames is True
+    cfg.validate()                      # "unconfigured" is valid, unlike a non-boolean
+
+
+def test_render_gif_explicitly_true_is_kept_distinct_from_unset(tmp_path):
+    body = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, gif: true}")
+    assert RunConfig.from_yaml(_write(tmp_path, body)).gif is True
 
 
 def test_render_output_flags_can_be_switched_off(tmp_path):

@@ -31,14 +31,21 @@ class ConfigError(ValueError):
 _RENDER_FLAGS = ("gif", "frames")
 
 
-def _flag(render: dict, key: str, default: bool = True) -> bool:
-    """A `render.<key>` boolean, defaulting to `default`.
+def _flag(render: dict, key: str, default=True):
+    """A `render.<key>` boolean, or `default` when the key is absent.
 
     Deliberately not `bool(...)`: YAML turns a *quoted* ``gif: "false"`` into a
     non-empty string, and truthy-coercing it would silently keep writing the very
     output the user asked to skip. Anything that isn't a real boolean is rejected.
+
+    `default` may be ``None`` — "not configured", which `render.gif` needs so that an
+    interpolated run can default the GIF off while an explicit ``gif: true`` still
+    wins. The absent case returns the default untouched; a value that *is* present is
+    held to the same boolean rule either way.
     """
-    value = render.get(key, default)
+    if key not in render:
+        return default
+    value = render[key]
     if not isinstance(value, bool):
         raise ConfigError(f"render.{key} must be true or false (got {value!r})")
     return value
@@ -76,9 +83,13 @@ class RunConfig:
     upscale: str = "lanczos"
     # Which outputs render writes (from render.gif / render.frames). The MP4 is always
     # written; the GIF is a preview format and by far the slowest encode (~5 s of a
-    # 24 s run), and the per-frame PNGs are ~6 s more. Both default True so an existing
-    # config's deliverables are unchanged. See render.assemble / render._write_frames.
-    gif: bool = True
+    # 24 s run), and the per-frame PNGs are ~6 s more. Both effectively default on, so
+    # an existing config's deliverables are unchanged. See render.assemble_stream /
+    # render._write_frames.
+    # `gif` is three-state: None means "not configured", which `render()` resolves —
+    # on for a normal run, off for an interpolated one (several hundred quantized
+    # frames). Only an explicit True/False here can override that.
+    gif: bool | None = None
     frames: bool = True
     # Anomaly rendering (from top-level `anomaly` / `baseline_years`). "climatology"
     # => per-pixel z-score vs baseline monthly climatology; "reference" => LST minus
@@ -168,7 +179,7 @@ class RunConfig:
                 preset=(str(render["preset"]) if render.get("preset") is not None else None),
                 aspect=render.get("aspect"),
                 upscale=str(render.get("upscale", "lanczos")),
-                gif=_flag(render, "gif"),
+                gif=_flag(render, "gif", default=None),
                 frames=_flag(render, "frames"),
                 out_dir=str(raw.get("out_dir", "out")),
                 draw_region=bool(raw.get("draw_region", True)),
@@ -239,9 +250,12 @@ class RunConfig:
         # Also checked here (not only in from_yaml) because the GUI and api.animate
         # build RunConfig directly and validate() is their only gate.
         for flag in _RENDER_FLAGS:
-            if not isinstance(getattr(self, flag), bool):
+            value = getattr(self, flag)
+            if flag == "gif" and value is None:
+                continue          # "not configured" — resolved in render() (see above)
+            if not isinstance(value, bool):
                 raise ConfigError(
-                    f"render.{flag} must be true or false (got {getattr(self, flag)!r})")
+                    f"render.{flag} must be true or false (got {value!r})")
         if self.anomaly is not None:
             from .products import THERMAL_INDICES
             if self.cadence != "monthly":
