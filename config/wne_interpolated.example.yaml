@@ -33,8 +33,12 @@ viz:
                               # where the land actually varies; water clips low
 
 render:
-  fps: 24                    # 24-30 reads as filmed; 1 fps (the other examples'
-                              # rate) would defeat the point of interpolating
+  fps: 2                     # cinema pacing, not "filmed": 122 frames -> ~61 s, with
+                              # each month-to-month transition taking ~5.5 s. High frame
+                              # rates compress a year of canopy change into a few seconds
+                              # and read as a technical demo; the point of interpolating
+                              # is a transition slow enough to actually watch. Raise it
+                              # only if you want a short clip rather than a long one.
   interpolate: 10            # generated frames per one-period step; proportional
                               # spacing means a skipped month still costs 2x this
   interpolate_mode: auto     # data-space for NDVI (single-band); would be
