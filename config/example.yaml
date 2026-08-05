@@ -26,3 +26,10 @@ render:
   dimensions: 768           # max width/height of each frame (drives thumbnail size)
   crs: auto                 # UTM from AOI centroid -> square pixels + correct scale bar
   # region_line_width: 4      # region outline core width in px (default: max(2, h/430))
+  workers: 4                # concurrent thumbnail fetches (default 4; EE throttles
+                            # beyond ~4, so more is slower). 1 = serial, for debugging.
+  # cache: false              # disable the on-disk cache of raw thumbnail bytes
+  # cache_dir: /path/to/cache # default: $GEE_ANIMATION_CACHE_DIR, else the platform
+                            # user cache dir (~/.cache/gee_animation/thumbs; on macOS
+                            # ~/Library/Caches/gee_animation/thumbs). Clear it with:
+                            #   python -c "from gee_animation import cache; cache.clear()"

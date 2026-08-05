@@ -4,7 +4,9 @@ from __future__ import annotations
 import io
 import logging
 import math
-from functools import lru_cache
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache, partial
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -12,6 +14,7 @@ import imageio.v2 as imageio
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from . import cache
 from .aoi import _load_geojson_geometry, _read_shapefile_geometry
 from .imaging import colorize
 from .products import INDICES, native_scale_m
@@ -95,24 +98,12 @@ def _thumb_params(cfg, geometry) -> dict:
     return params
 
 
-def _fetch_thumbnail(image, cfg, geometry):
-    """Download the frame via EE getThumbURL.
-
-    For a normal index returns ``(index_arr, valid)`` — a 2-D array in INDEX units
-    plus a validity mask. For a composite (rgb/cir) returns ``(rgb_arr, valid)``
-    where ``rgb_arr`` is H×W×3 (0..255, already colour). ``valid`` is False where
-    EE returned no data (masked/cloud pixels are transparent).
-    """
-    if _is_composite(cfg):
-        url = image.select(["R", "G", "B"]).getThumbURL(_thumb_params(cfg, geometry))
-        with urlopen(url, timeout=180) as resp:  # noqa: S310 (trusted EE URL; timeout avoids hangs)
-            data = resp.read()
+def _decode_thumbnail(data: bytes, cfg, composite: bool):
+    """Decode raw PNG bytes from EE into ``(array, valid)`` — see _fetch_thumbnail."""
+    if composite:
         arr = np.asarray(Image.open(io.BytesIO(data)).convert("RGBA"), dtype=float)
         return arr[..., :3], arr[..., 3] > 0
 
-    url = image.select("INDEX").getThumbURL(_thumb_params(cfg, geometry))
-    with urlopen(url, timeout=180) as resp:  # noqa: S310 (trusted EE URL; timeout avoids hangs)
-        data = resp.read()
     img = Image.open(io.BytesIO(data)).convert("LA")   # grayscale + alpha
     arr = np.asarray(img, dtype=float)
     gray = arr[..., 0] / 255.0
@@ -120,6 +111,39 @@ def _fetch_thumbnail(image, cfg, geometry):
     # EE scales min..max into 0..255; map back to INDEX units.
     index_arr = cfg.viz_min + gray * (cfg.viz_max - cfg.viz_min)
     return index_arr, valid
+
+
+def _fetch_thumbnail(image, cfg, geometry):
+    """Download the frame via EE getThumbURL (memoised on disk by `cache`).
+
+    For a normal index returns ``(index_arr, valid)`` — a 2-D array in INDEX units
+    plus a validity mask. For a composite (rgb/cir) returns ``(rgb_arr, valid)``
+    where ``rgb_arr`` is H×W×3 (0..255, already colour). ``valid`` is False where
+    EE returned no data (masked/cloud pixels are transparent).
+
+    The *raw bytes* are cached before decoding, so a cache hit is byte-identical
+    to a fresh fetch. Anything wrong with a cached entry — unreadable file,
+    truncated PNG — is downgraded to a miss; the cache can never break a run.
+    """
+    composite = _is_composite(cfg)
+    params = _thumb_params(cfg, geometry)
+    key = cache.thumb_key(cfg, params, composite)
+
+    data = cache.load(cfg, key)
+    if data is not None:
+        try:
+            return _decode_thumbnail(data, cfg, composite)
+        except Exception as exc:                    # noqa: BLE001 (any decode failure = miss)
+            log.warning("discarding corrupt thumbnail cache entry %s (%s); refetching",
+                        key[:12], exc)
+            cache.discard(cfg, key)
+
+    bands = ["R", "G", "B"] if composite else "INDEX"
+    url = image.select(bands).getThumbURL(params)
+    with urlopen(url, timeout=180) as resp:  # noqa: S310 (trusted EE URL; timeout avoids hangs)
+        data = resp.read()
+    cache.store(cfg, key, data)
+    return _decode_thumbnail(data, cfg, composite)
 
 
 def apply_nodata(rgb: np.ndarray, valid: np.ndarray, color=NODATA_RGB) -> np.ndarray:
@@ -744,6 +768,72 @@ def assemble(frames_rgb: list[np.ndarray], cfg) -> list[Path]:
     return paths
 
 
+#: Default fetch concurrency. Measured on a 22-frame Landsat LST run: serial
+#: 2.65 s/frame, 4 workers 0.81 s/frame (3.3x), 8 workers 1.04 s/frame (2.5x) —
+#: Earth Engine throttles beyond ~4 concurrent computes, so more is slower.
+DEFAULT_WORKERS = 4
+
+#: How many frames may be fetched ahead of the one being drawn, as a multiple of
+#: the worker count. Bounding the *lookahead* (not just the worker count) is what
+#: bounds memory: each in-flight frame holds an H×W×3 float64 array (~41 MB for a
+#: Sentinel-2 RGB frame), so prefetching a whole 24-frame run would cost ~1 GB.
+#: Peak in-flight arrays = workers, plus the one currently being drawn.
+_LOOKAHEAD = 1
+
+
+def _fetch_one(frame, cfg, fetch, geometry):
+    """Fetch one frame, publishing its identity for the on-disk cache key.
+
+    Runs on the worker thread, so `cache.frame_identity` (a thread-local) tags the
+    right fetch. The injected `fetch` still sees exactly `(image, cfg, geometry)`.
+    """
+    with cache.frame_identity(getattr(frame, "label", None),
+                              getattr(frame, "source", None)):
+        return fetch(frame.image, cfg, geometry)
+
+
+def _fetch_in_order(frames, cfg, fetch, geometry, workers):
+    """Yield ``(frame, (arr, valid))`` in frame order, fetching up to `workers` ahead.
+
+    Only the fetch is parallel — it is pure I/O wait on `urlopen`, which releases
+    the GIL while Earth Engine computes — and results are consumed strictly in
+    order, so the drawing loop downstream is unchanged and produces byte-identical
+    frames. `workers=1` takes a genuinely serial path (no pool, no threads).
+    """
+    if workers <= 1:
+        for frame in frames:
+            yield frame, _resolve(frame, partial(_fetch_one, frame, cfg, fetch, geometry))
+        return
+
+    window = workers * _LOOKAHEAD          # bounded lookahead == bounded memory
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="gee-fetch")
+    pending: deque = deque()
+    try:
+        for frame in frames:
+            pending.append((frame, pool.submit(_fetch_one, frame, cfg, fetch, geometry)))
+            if len(pending) >= window:
+                done, fut = pending.popleft()
+                yield done, _resolve(done, fut.result)
+        while pending:
+            done, fut = pending.popleft()
+            yield done, _resolve(done, fut.result)
+    finally:
+        # cancel_futures so an error (or an abandoned generator) never waits for
+        # frames that have not started; the few already running finish quickly.
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
+def _resolve(frame, call):
+    """Run `call`, re-raising any failure with the offending frame named."""
+    try:
+        return call()
+    except Exception as exc:                 # noqa: BLE001 (re-raised with context)
+        label = getattr(frame, "label", "?")
+        source = getattr(frame, "source", None)
+        where = f"{label} (source {source})" if source is not None else label
+        raise RuntimeError(f"fetching frame {where} failed: {exc}") from exc
+
+
 def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     frame_aoi = getattr(cfg, "frame_aoi", None)
     bounds = _aoi_bounds(frame_aoi) if frame_aoi else None
@@ -764,8 +854,10 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     region_width = getattr(cfg, "region_line_width", None) or 2
     region_masks = None   # (casing_mask, core_mask); built once below, then reused
     rgb_frames: list[np.ndarray] = []
-    for frame in frames:
-        arr, valid = fetch(frame.image, cfg, geometry)
+    workers = max(1, int(getattr(cfg, "workers", DEFAULT_WORKERS) or DEFAULT_WORKERS))
+    # Fetches run concurrently with a bounded lookahead; everything below stays
+    # strictly ordered and single-threaded, so output is identical to workers=1.
+    for frame, (arr, valid) in _fetch_in_order(frames, cfg, fetch, geometry, workers):
         # composite fetch already returns colour (H×W×3); an index returns 2-D.
         rgb = arr if arr.ndim == 3 else colorize(arr, cfg.viz_min, cfg.viz_max, cfg.palette)
         rgb = apply_nodata(rgb, valid)

@@ -85,6 +85,15 @@ class RunConfig:
     # Debug: if set to "YYYY-MM", export that month's individual input scenes + the
     # median they collapse into (to <out_dir>/debug/<month>/) instead of the animation.
     debug_month: str = None
+    # Concurrent thumbnail fetches (from render.workers). Each frame is an EE
+    # compute + stream, so overlapping them dominates runtime; 4 is the measured
+    # sweet spot (EE throttles beyond it). 1 => genuinely serial (debugging).
+    workers: int = 4
+    # On-disk cache of raw thumbnail bytes (from render.cache / render.cache_dir).
+    # cache_dir None => $GEE_ANIMATION_CACHE_DIR, else the platform user cache dir
+    # (never inside out/, which is the shared deliverable). See cache.py.
+    cache: bool = True
+    cache_dir: str = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RunConfig":
@@ -140,6 +149,9 @@ class RunConfig:
                 min_scenes=int(raw.get("min_scenes", 1)),
                 allow_upsample=bool(raw.get("allow_upsample", False)),
                 debug_month=(str(raw["debug_month"]) if raw.get("debug_month") else None),
+                workers=int(render.get("workers", 4)),
+                cache=bool(render.get("cache", True)),
+                cache_dir=(str(render["cache_dir"]) if render.get("cache_dir") else None),
             )
         except KeyError as exc:
             raise ConfigError(f"missing required config key: {exc}") from exc
@@ -176,6 +188,8 @@ class RunConfig:
             raise ConfigError("min_scenes must be >= 1")
         if self.region_line_width is not None and self.region_line_width < 1:
             raise ConfigError("render.region_line_width must be >= 1")
+        if self.workers < 1:
+            raise ConfigError("render.workers must be >= 1")
         if self.anomaly is not None:
             from .products import THERMAL_INDICES
             if self.cadence != "monthly":

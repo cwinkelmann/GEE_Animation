@@ -208,6 +208,39 @@ def test_rejects_non_positive_region_line_width(tmp_path):
         RunConfig.from_yaml(p)
 
 
+def test_workers_defaults_to_four(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.workers == 4
+
+
+def test_workers_read_from_render_block(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, workers: 8}"))
+    assert RunConfig.from_yaml(p).workers == 8
+
+
+def test_rejects_non_positive_workers(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, workers: 0}"))
+    with pytest.raises(ConfigError, match="workers"):
+        RunConfig.from_yaml(p)
+
+
+def test_cache_defaults_on_and_dir_unset(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.cache is True and cfg.cache_dir is None
+
+
+def test_cache_can_be_disabled_and_redirected(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, cache: false, cache_dir: /tmp/x}"))
+    cfg = RunConfig.from_yaml(p)
+    assert cfg.cache is False and cfg.cache_dir == "/tmp/x"
+
+
 def test_rejects_unsupported_sensor_index_pair(tmp_path):
     p = _write(tmp_path, """
         name: t
