@@ -1216,13 +1216,26 @@ def test_render_observed_frames_are_byte_identical_with_and_without_interpolatio
     Compared as rendered PNG bytes, over every mode/index combination that resolves —
     `data` on a composite is rejected by config.validate, so it is skipped here rather
     than pinning behaviour no valid run can reach.
+
+    The two observations carry **distinct** imagery and complementary cloud holes, so
+    the property has teeth: with one shared shot every generated frame equals the
+    observed ones and an implementation that blended a neighbour into a real frame
+    would still pass. Here A's hole is where B has data (and vice versa), so any
+    bleed-through changes both the imagery and the grey no-data patches.
     """
     if mode == "data" and index == "rgb":
         pytest.skip("config.validate rejects interpolate_mode: data on a composite")
     composite = index == "rgb"
     rng = np.random.default_rng(3)
-    shot = ((rng.random((18, 22, 3)) * 255 if composite else rng.random((18, 22)) - 0.2),
-            np.ones((18, 22), dtype=bool))
+
+    def _shot(offset, hole):
+        vals = (rng.random((18, 22, 3)) * 255 if composite
+                else rng.random((18, 22)) - offset)
+        valid = np.ones((18, 22), dtype=bool)
+        valid[4:9, hole] = False                     # a cloud hole, different per frame
+        return vals, valid
+
+    shots = {"A": _shot(0.2, slice(2, 9)), "B": _shot(0.6, slice(12, 19))}
 
     def _run(sub, steps):
         cfg = _cfg(tmp_path / sub)
@@ -1230,8 +1243,8 @@ def test_render_observed_frames_are_byte_identical_with_and_without_interpolatio
         cfg.palette = [] if composite else cfg.palette
         cfg.interpolate = steps
         cfg.interpolate_mode = mode
-        render([Frame("2022-05", object(), 4), Frame("2022-06", object(), 1, 2021)],
-               cfg, fetch=lambda image, c, geometry=None: shot, geometry=None)
+        render([Frame("2022-05", "A", 4), Frame("2022-06", "B", 1, 2021)],
+               cfg, fetch=lambda image, c, geometry=None: shots[image], geometry=None)
 
     _run("a", 0)
     _run("b", 3)
@@ -1353,6 +1366,46 @@ def test_imagery_sequence_auto_crossfades_a_composite(tmp_path):
     assert mid_valid.all()                       # a pixel A saw is not no-data
 
 
+def test_imagery_sequence_does_not_retain_every_observation(tmp_path):
+    """Peak retained *observations* must not scale with the run length.
+
+    Streaming the generated frames is only half the win: an implementation that
+    drains every fetch into a list before yielding anything still holds N
+    full-resolution observations (a 60-observation 1440p crossfade run is ~2.5 GB).
+    `expand` only ever needs a pair, so at most two may be alive at once.
+
+    Liveness is measured with weakrefs, not by counting the producer's own list:
+    a test that inspects a list the producer clears would pass against the
+    accumulating implementation. Here only `_imagery_sequence` can keep a fetched
+    array alive, so listing them all makes `peak` == the observation count.
+    """
+    import gc
+    import weakref
+    from gee_animation.render import _imagery_sequence
+    cfg = _cfg(tmp_path)
+    cfg.interpolate = 2
+    refs: list = []
+
+    def fetch(image, cfg_, geometry=None):
+        arr = np.zeros((8, 8))
+        refs.append(weakref.ref(arr))
+        return arr, np.ones((8, 8), dtype=bool)
+
+    frames = [Frame(f"2022-{m:02d}", object()) for m in range(1, 13)]
+    peak, at_first_frame = 0, None
+    for out in _imagery_sequence(frames, cfg, fetch, None, 1, False):
+        if at_first_frame is None:
+            at_first_frame = len(refs)
+        del out                       # consumer drops its own reference each frame
+        gc.collect()
+        peak = max(peak, sum(r() is not None for r in refs))
+    assert len(refs) == 12, "every observation should have been fetched"
+    assert peak <= 2, f"held up to {peak} observations at once"
+    # Pipelining: drawing starts on the first frame, not after the last fetch — a
+    # run that fetched everything up front would appear to hang, then burst.
+    assert at_first_frame == 2, f"{at_first_frame} fetches before the first frame"
+
+
 def test_render_propagates_a_producer_failure_instead_of_a_truncated_animation(tmp_path):
     """A fetch that fails mid-sequence must fail the run.
 
@@ -1378,22 +1431,27 @@ def test_render_propagates_a_producer_failure_instead_of_a_truncated_animation(t
     assert not (tmp_path / f"{cfg.name}.mp4").exists()
 
 
-def test_render_propagates_a_producer_failure_while_interpolating(tmp_path):
+@pytest.mark.parametrize("workers", [1, 4])
+def test_render_propagates_a_producer_failure_while_interpolating(tmp_path, workers):
+    """A mid-sequence fetch failure must fail the run on both the serial and the
+    threaded fetch path — `expand` streams the fetch generator, so the exception now
+    surfaces through the sliding window rather than out of a materialising list."""
     cfg = _cfg(tmp_path)
-    cfg.workers = 1
+    cfg.workers = workers
     cfg.interpolate = 4
-    seen = []
+    # Keyed off the frame's image, not the call count: with workers > 1 the fetches
+    # are not issued in frame order, so "the second call" is not "the second frame".
+    frames = [Frame(f"2022-{m:02d}", f"img{m}") for m in range(1, 5)]
 
     def flaky_fetch(image, cfg_, geometry=None):
-        seen.append(1)
-        if len(seen) == 2:
+        if image == "img2":
             raise OSError("Earth Engine hiccup")
         return np.zeros((16, 16)), np.ones((16, 16), dtype=bool)
 
-    frames = [Frame(f"2022-{m:02d}", object()) for m in range(1, 5)]
     with pytest.raises(RuntimeError, match="2022-02"):
         render(frames, cfg, fetch=flaky_fetch, geometry=None)
     assert not (tmp_path / f"{cfg.name}.gif").exists()
+    assert not (tmp_path / f"{cfg.name}.mp4").exists()
 
 
 def test_assemble_stream_reraises_a_producer_failure(tmp_path):

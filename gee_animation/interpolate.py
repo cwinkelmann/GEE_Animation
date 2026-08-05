@@ -42,18 +42,39 @@ def expand(items, steps: int, period_gap):
     gets ``k * steps`` generated frames and playback speed tracks elapsed time. A
     fixed count per pair would play a three-month absence as fast as a one-month
     step, implying change happened faster than it did.
+
+    `items` may be any iterable of ``(values, valid, label)`` — a list, or a lazy
+    fetch generator. Only a **two-element sliding window** is held, never the whole
+    sequence: an observation is a full-resolution float array (~41 MB for a
+    Sentinel-2 RGB frame at native size, far more at 4K), so materialising a
+    60-observation run would cost gigabytes and defeat the streaming the generated
+    frames already get. Pulling the next item *before* yielding the current one is
+    also what keeps a concurrent fetcher's lookahead busy while frames are drawn.
+
+    Every input item is yielded exactly once, in order, with ``is_real=True``;
+    generated frames appear between consecutive pairs. `render._imagery_sequence`
+    relies on that ordering to match per-observation display text to its frame
+    without keeping a label-keyed map.
     """
-    items = list(items)
-    for i, (values, valid, label) in enumerate(items):
+    source = iter(items)
+    current = next(source, None)
+    if current is None:
+        return
+    for nxt in source:
+        values, valid, label = current
         yield values, valid, label, True
-        if steps <= 0 or i + 1 >= len(items):
-            continue
-        b_vals, b_valid, b_label = items[i + 1]
-        n = max(1, int(period_gap(label, b_label))) * steps
-        for k in range(1, n + 1):
-            t = k / (n + 1)
-            gen_vals, gen_valid = blend(values, valid, b_vals, b_valid, t)
-            yield gen_vals, gen_valid, f"{label} -> {b_label}  {round(100 * t)}%", False
+        if steps > 0:
+            b_vals, b_valid, b_label = nxt
+            n = max(1, int(period_gap(label, b_label))) * steps
+            for k in range(1, n + 1):
+                t = k / (n + 1)
+                gen_vals, gen_valid = blend(values, valid, b_vals, b_valid, t)
+                yield gen_vals, gen_valid, f"{label} -> {b_label}  {round(100 * t)}%", False
+        # Drop the left endpoint *before* pulling the next item, so the fetch that
+        # the next iteration triggers overlaps with two observations alive, not three.
+        current, values, valid = nxt, None, None
+    values, valid, label = current
+    yield values, valid, label, True
 
 
 # Day-of-month a sub-monthly period starts on, per cadence. Mirrors

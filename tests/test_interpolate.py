@@ -48,6 +48,21 @@ def test_blend_handles_colour_frames():
     assert np.allclose(vals, 5.0)
 
 
+def test_blend_holds_the_valid_endpoint_for_colour_frames():
+    # The one branch where the 3-D path differs from the 2-D one: the hold has to
+    # broadcast the 2-D mask over the colour axis. This is what `crossfade` mode
+    # runs on every composite in production.
+    a = np.zeros((1, 1, 3)); b = np.full((1, 1, 3), 10.0)
+    a_ok = np.array([[True]]); b_ok = np.array([[False]])
+    vals, valid = blend(a, a_ok, b, b_ok, 0.5)
+    assert np.allclose(vals, 0.0)                 # A's colour held, not a blend to 5.0
+    assert valid[0, 0]
+
+    vals, valid = blend(b, b_ok, a, a_ok, 0.5)    # mirror: invalid on the left
+    assert np.allclose(vals, 0.0)
+    assert valid[0, 0]
+
+
 def _items(*labels):
     import numpy as np
     ok = np.ones((1, 1), dtype=bool)
@@ -95,6 +110,28 @@ def test_expand_generated_values_lie_between_the_endpoints():
     out = list(expand(_items("a", "b"), steps=1, period_gap=_adjacent))
     mid = [v for v, _ok, _lab, real in out if not real][0]
     assert 0.0 < float(mid.item()) < 1.0
+
+
+def test_expand_accepts_a_lazy_iterator_and_pulls_it_incrementally():
+    # `expand` must not drain its source: retaining every observation is what the
+    # sliding window exists to avoid. Consuming one output frame may pull at most
+    # one item beyond the pair currently being blended.
+    pulled = []
+
+    def source():
+        for item in _items("a", "b", "c"):
+            pulled.append(item[2])
+            yield item
+
+    out = expand(source(), steps=2, period_gap=_adjacent)
+    next(out)                                     # the "a" observation
+    assert pulled == ["a", "b"]                   # "c" not fetched yet
+    assert [lab for _v, _ok, lab, _r in out][-1] == "c"
+    assert pulled == ["a", "b", "c"]
+
+
+def test_expand_of_an_empty_sequence_yields_nothing():
+    assert list(expand(iter([]), steps=3, period_gap=_adjacent)) == []
 
 
 def test_period_gap_counts_months_for_monthly_labels():

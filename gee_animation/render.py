@@ -1015,24 +1015,34 @@ def _imagery_sequence(frames, cfg, fetch, geometry, workers, composite):
     # arrives from EE already coloured with no index units left to blend.
     data_mode = mode == "data" and not composite
     post = as_rgb if data_mode else (lambda values: values)
-    items, display = [], {}
-    for frame, (arr, valid) in fetched:
-        items.append((arr if data_mode else as_rgb(arr), valid, frame.label))
-        display[frame.label] = display_for(frame)
-    # `expand` needs both endpoints of every pair, so the observed arrays are held for
-    # the run. That is bounded by the number of *observations* (a handful of dozens);
-    # the generated frames — the several hundred that made streaming necessary — are
-    # still produced and encoded one at a time.
+    # Display text is derived as each observation arrives and queued, rather than
+    # collected into a label-keyed map up front: the source is a lazy generator, so
+    # there is no complete list to key off — and a map would silently collapse two
+    # frames that share a label (a pooled run can repeat one). `expand` yields every
+    # input item exactly once and in order, so the queue head is always the text for
+    # the observed frame being yielded. It never holds more than the two items
+    # `expand`'s sliding window has in flight.
+    texts: deque = deque()
+
+    def observations():
+        for frame, (arr, valid) in fetched:
+            texts.append(display_for(frame))
+            yield (arr if data_mode else as_rgb(arr)), valid, frame.label
+
+    # `expand` streams: it holds a two-observation window, never the whole run. The
+    # generated frames — the several hundred that made streaming necessary — are
+    # produced and encoded one at a time, and the fetch lookahead stays busy because
+    # `expand` pulls its right endpoint before yielding the left one.
     #
     # `gap_for(cadence)`, not the bare `period_gap`: a "YYYY-MM-01" label starts a
     # period under both `semimonthly` and `10day`, and only the cadence says how many
     # periods fill the rest of the month. Guessing monthly would silently double the
     # generated frames across every month boundary of a sub-monthly run.
     gap = interpolate.gap_for(getattr(cfg, "cadence", None) or "monthly")
-    for values, valid, label, is_real in interpolate.expand(items, steps, gap):
+    for values, valid, label, is_real in interpolate.expand(observations(), steps, gap):
         # An observed frame keeps its full display text; a generated one is labelled
         # with the transition it sits in ("2022-05 -> 2022-06  30%").
-        yield post(values), valid, (display[label] if is_real else label), (
+        yield post(values), valid, (texts.popleft() if is_real else label), (
             label if is_real else None)
 
 
