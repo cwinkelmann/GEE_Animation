@@ -7,6 +7,7 @@ import math
 from collections import deque
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, timedelta
 from functools import lru_cache, partial
 from importlib import resources
 from pathlib import Path
@@ -332,6 +333,67 @@ def _header_text(cfg) -> tuple:
             _caveats(cfg))
 
 
+#: Sensor-specific attribution lines that carry no vintage (unlike Sentinel-2's,
+#: whose exact Copernicus wording needs the year(s) actually shown — see
+#: `_default_credit`). Landsat/MODIS courtesy lines are sensor-wide, not licence
+#: text tied to a particular acquisition year.
+_SENSOR_CREDITS = {
+    "landsat": "Landsat imagery courtesy of the U.S. Geological Survey",
+    "modis": "MODIS data courtesy of NASA LP DAAC",
+    "modis_lst": "MODIS data courtesy of NASA LP DAAC",
+}
+
+
+def _credit_years(cfg) -> str:
+    """Year or year-span for the Sentinel-2 auto-credit line ("2022" / "2018–2024").
+
+    Spans `cfg.start`'s year through the year before `cfg.end` (end is exclusive,
+    same convention as everywhere else this codebase reads a date range). Widened
+    to cover `cfg.pool_years` when cross-year pooling is on: a pooled frame's
+    pixels can come from any year in that range, so the notice has to cover it
+    too, not just the nominal run span. A single year renders bare; a real span
+    uses an en dash, which the bundled DejaVu font (see `_font`) actually draws.
+    Returns "" if `cfg.start`/`cfg.end` are missing or unparseable (defensive only
+    — a real `RunConfig` always has valid dates by the time this runs).
+    """
+    try:
+        y0 = date.fromisoformat(str(cfg.start)).year
+        y1 = (date.fromisoformat(str(cfg.end)) - timedelta(days=1)).year
+    except (TypeError, ValueError, AttributeError):
+        return ""
+    pool = getattr(cfg, "pool_years", None)
+    if pool:
+        y0 = min(y0, int(pool[0]))
+        y1 = max(y1, int(pool[-1]))
+    return str(y0) if y0 == y1 else f"{y0}–{y1}"
+
+
+def _default_credit(cfg) -> str:
+    """The attribution line drawn bottom-right, or "" to draw none.
+
+    `cfg.credit` wins verbatim whenever it is *set* — including an explicit `""`,
+    which is a conscious "no credit line" decision (see `config.RunConfig.validate`,
+    which warns about it for sentinel2, since the Copernicus licence requires this
+    notice on published products) rather than an unset field. `None` (the default —
+    nobody wrote a `credit:` key) falls back to a sensor-appropriate default, so a
+    completely default config still carries correct attribution: that zero-config
+    behaviour is the whole point, not a nice-to-have.
+
+    Sentinel-2's notice is the exact required Copernicus wording plus the year(s)
+    actually shown (`_credit_years`); Landsat/MODIS get a fixed courtesy line
+    (`_SENSOR_CREDITS`). An unrecognised/absent sensor gets no auto-credit ("").
+    """
+    explicit = getattr(cfg, "credit", None)
+    if explicit is not None:
+        return explicit
+    sensor = getattr(cfg, "sensor", None)
+    if sensor == "sentinel2":
+        years = _credit_years(cfg)
+        return f"Contains modified Copernicus Sentinel data {years}".rstrip() \
+            if years else "Contains modified Copernicus Sentinel data"
+    return _SENSOR_CREDITS.get(sensor, "")
+
+
 def _two_line_header(cfg) -> bool:
     """Whether the header needs a second line — decidable from `cfg` alone.
 
@@ -546,21 +608,57 @@ def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
     return out
 
 
-def annotate(rgb: np.ndarray, label: str) -> np.ndarray:
-    """Draw a translucent bottom bar with `label`.
+#: How much smaller the bottom-bar credit line is than the body text
+#: (`_annot_scale`) — small enough to read as a footnote, not compete with the
+#: period label. `_font`'s own 10 px floor (see `_font`) is applied on top.
+_CREDIT_SCALE = 0.8
+
+
+def annotate(rgb: np.ndarray, label: str, credit: str = "") -> np.ndarray:
+    """Draw a translucent bottom bar with `label` (left) and `credit` (right).
 
     `label` is drawn as given — the bundled font (see `_font`) renders it directly.
     `render()` still routes the pooled-frame provenance text through `_drawable`
     before calling this (now a no-op fold, kept as a seam) when composing it.
+
+    `credit` is the attribution/licence line (see `_default_credit`) — small text,
+    `_CREDIT_SCALE` of the body size with a 10 px floor, right-aligned in the same
+    bar. It is drawn only when non-empty and never at the cost of `label`: the two
+    are different kinds of text — `label` is the data (what period/source this
+    frame shows), `credit` is a compliance line (e.g. the Copernicus licence
+    notice) — and neither may be silently dropped to make room for the other. If
+    they would collide even at the credit's floor size (an extremely narrow
+    frame), `credit` is the one that gives: it is clipped with a trailing "…" at
+    the point where `label` ends, rather than shrinking/truncating `label` or
+    omitting `credit` outright. This is a last-resort degradation, not a routine
+    truncation — on any realistic output width both draw whole.
     """
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
     w, h = img.size
     font, _ = _annot_scale(h)
     bar_h = _bar_h(h)
+    x = max(4, w // 200)
+    y = h - bar_h + max(1, h // 200)
     draw.rectangle([0, h - bar_h, w, h], fill=(0, 0, 0, 140))
-    draw.text((max(4, w // 200), h - bar_h + max(1, h // 200)), label,
-              fill=(255, 255, 255, 255), font=font)
+    draw.text((x, y), label, fill=(255, 255, 255, 255), font=font)
+    if credit:
+        base_px = max(11, h // 40)              # same size _annot_scale would use
+        credit_px = max(10, round(base_px * _CREDIT_SCALE))
+        credit_font = _font(credit_px)
+        gap = max(4, w // 200)
+        label_right = x + _text_w(draw, label, font)
+        right_margin = w - x
+        avail = right_margin - label_right - gap
+        if avail > 0:
+            if _text_w(draw, credit, credit_font) > avail:
+                credit = _truncate(draw, credit, credit_font, avail)
+        else:
+            credit = ""                          # no room at all: drop, don't overlap
+        if credit:
+            credit_w = _text_w(draw, credit, credit_font)
+            credit_x = right_margin - credit_w
+            draw.text((credit_x, y), credit, fill=(255, 255, 255, 255), font=credit_font)
     return np.asarray(img)
 
 
@@ -782,25 +880,24 @@ def _frame_width_m(bounds, proj_bounds, crs) -> float:
     return (maxx - minx) * 111320.0 * math.cos(math.radians((miny + maxy) / 2.0))
 
 
-def draw_scale_bar(rgb: np.ndarray, frame_width_m: float, target_frac: float = 0.25,
-                   color=(255, 255, 255)) -> np.ndarray:
-    """Draw a ground-distance scale bar (bottom-right) onto an RGB frame.
+def _scale_bar_layout(draw: ImageDraw.ImageDraw, w: int, h: int, frame_width_m: float,
+                      target_frac: float) -> dict | None:
+    """Geometry for `draw_scale_bar`'s panel, or None where it would be a no-op.
 
-    `frame_width_m` is the frame's x-extent in metres (the image width maps to it),
-    so the bar is correct whether the render is plate carrée or a metric CRS. A
-    "nice" round distance near `target_frac` of the frame width is chosen.
+    Factored out of `draw_scale_bar` so `draw_north_arrow` can find out exactly
+    where the scale bar's panel sits (to stack directly above it) without
+    duplicating — and risking drifting from — the arithmetic that decides it. Both
+    callers therefore always agree on the scale bar's position, including the case
+    where there is no scale bar at all (frame too narrow, or no usable
+    `frame_width_m`), which is mirrored here via the same guard.
     """
-    img = Image.fromarray(rgb.astype(np.uint8), "RGB")
-    h, w = rgb.shape[:2]
     if w < 24 or frame_width_m <= 0:      # too small to annotate meaningfully
-        return np.asarray(img)
+        return None
     nice_m = _nice_distance(frame_width_m * target_frac)
     bar_px = int(round(nice_m / (frame_width_m / w)))
     if bar_px < 1:
-        return np.asarray(img)
+        return None
     label = f"{nice_m / 1000:g} km" if nice_m >= 1000 else f"{nice_m:g} m"
-
-    draw = ImageDraw.Draw(img, "RGBA")
     font, lw = _annot_scale(h)
     margin, tick = max(6, w // 100), max(4, h // 80)
     x1 = w - margin
@@ -811,11 +908,87 @@ def draw_scale_bar(rgb: np.ndarray, frame_width_m: float, target_frac: float = 0
     tw, th = tb[2] - tb[0], tb[3] - tb[1]
     pad = max(4, h // 200)
     panel_top = y - tick - th - pad
-    draw.rectangle([x0 - pad, panel_top, x1 + pad, y + pad], fill=(0, 0, 0, 120))
+    panel_bottom = y + pad
+    return dict(x0=x0, x1=x1, y=y, tick=tick, label=label, tw=tw, th=th, pad=pad,
+               panel_top=panel_top, panel_bottom=panel_bottom, font=font, lw=lw)
+
+
+def draw_scale_bar(rgb: np.ndarray, frame_width_m: float, target_frac: float = 0.25,
+                   color=(255, 255, 255)) -> np.ndarray:
+    """Draw a ground-distance scale bar (bottom-right) onto an RGB frame.
+
+    `frame_width_m` is the frame's x-extent in metres (the image width maps to it),
+    so the bar is correct whether the render is plate carrée or a metric CRS. A
+    "nice" round distance near `target_frac` of the frame width is chosen.
+    """
+    img = Image.fromarray(rgb.astype(np.uint8), "RGB")
+    h, w = rgb.shape[:2]
+    draw = ImageDraw.Draw(img, "RGBA")
+    geo = _scale_bar_layout(draw, w, h, frame_width_m, target_frac)
+    if geo is None:
+        return np.asarray(img)
+    x0, x1, y, tick = geo["x0"], geo["x1"], geo["y"], geo["tick"]
+    label, tw = geo["label"], geo["tw"]
+    pad, panel_top, panel_bottom = geo["pad"], geo["panel_top"], geo["panel_bottom"]
+    font, lw = geo["font"], geo["lw"]
+    draw.rectangle([x0 - pad, panel_top, x1 + pad, panel_bottom], fill=(0, 0, 0, 120))
     draw.line([(x0, y), (x1, y)], fill=color, width=lw)
     draw.line([(x0, y - tick), (x0, y)], fill=color, width=lw)   # end ticks
     draw.line([(x1, y - tick), (x1, y)], fill=color, width=lw)
     draw.text(((x0 + x1) / 2 - tw / 2, panel_top + pad // 2), label, fill=color, font=font)
+    return np.asarray(img)
+
+
+def draw_north_arrow(rgb: np.ndarray, frame_width_m: float, target_frac: float = 0.25,
+                     color=(255, 255, 255)) -> np.ndarray:
+    """Draw a north indicator (upward arrow + "N") directly above the scale bar panel.
+
+    Both CRSs this renderer ever produces pixels in are north-up by construction:
+    plate carrée (EPSG:4326, unprojected — rows are lines of latitude, "up" is
+    increasing latitude) and the UTM zones `_resolve_crs`/`_utm_epsg` pick for
+    `crs: "auto"` (a projected, north-aligned grid). So "up" on the frame is always
+    geographic north, unconditionally, and this draws a fixed vertical glyph rather
+    than computing (or pretending to support) a rotation for an oblique CRS this
+    codebase never produces.
+
+    Shares `_scale_bar_layout` with `draw_scale_bar`, so the two panels always
+    agree on where the scale bar sits: this one is centred on the same x-span, its
+    panel bottom sitting a small gap above the scale bar panel's top. It is a
+    no-op (frame unchanged) in exactly the cases `draw_scale_bar` itself would be
+    — too narrow a frame, or no usable `frame_width_m` — since there would be
+    nothing to stack it above.
+
+    `target_frac` must match whatever `draw_scale_bar` was (or will be) called
+    with for the same frame — `render()` uses the shared default for both — or the
+    two panels' geometry would be computed against different scale bars.
+    """
+    img = Image.fromarray(rgb.astype(np.uint8), "RGB")
+    h, w = rgb.shape[:2]
+    draw = ImageDraw.Draw(img, "RGBA")
+    geo = _scale_bar_layout(draw, w, h, frame_width_m, target_frac)
+    if geo is None:
+        return np.asarray(img)
+    font, lw, pad = geo["font"], geo["lw"], geo["pad"]
+    gap = max(4, h // 100)                    # visual gap between the two stacked panels
+    tb = draw.textbbox((0, 0), "N", font=font)
+    n_w, n_h = tb[2] - tb[0], tb[3] - tb[1]
+    arrow_h = max(10, h // 30)
+    arrow_w = max(8, round(arrow_h * 0.7))
+    panel_w = max(arrow_w, n_w) + 2 * pad
+    panel_h = arrow_h + n_h + 3 * pad
+    cx = (geo["x0"] + geo["x1"]) / 2.0
+    panel_bottom = geo["panel_top"] - gap
+    panel_top = panel_bottom - panel_h
+    x0, x1 = cx - panel_w / 2.0, cx + panel_w / 2.0
+    draw.rectangle([x0, panel_top, x1, panel_bottom], fill=(0, 0, 0, 120))
+    # Upward arrow: a triangular head over a short shaft, both centred on cx.
+    head_top = panel_top + pad
+    shaft_top = head_top + arrow_h * 0.35
+    shaft_bottom = head_top + arrow_h
+    hw = arrow_w / 2.0
+    draw.polygon([(cx, head_top), (cx - hw, shaft_top), (cx + hw, shaft_top)], fill=color)
+    draw.line([(cx, shaft_bottom), (cx, shaft_top)], fill=color, width=lw)
+    draw.text((cx - n_w / 2.0, shaft_bottom + pad // 2), "N", fill=color, font=font)
     return np.asarray(img)
 
 
@@ -1263,6 +1436,9 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     # and for the `_margins`/`_output_spec` geometry.
     header_title, header_subtitle, header_caveats = _header_text(cfg)
     two_line_header = bool(header_subtitle or header_caveats)
+    # Attribution is also run-level (same line on every frame) and, like the
+    # header, resolved once rather than per frame — see `_default_credit`.
+    credit_text = _default_credit(cfg)
     output = None      # (cw, ch, pw, ph, method) screen layout, computed on frame 1
     region_width = getattr(cfg, "region_line_width", None) or 2
     region_masks = None   # (casing_mask, core_mask); built once below, then reused
@@ -1327,6 +1503,9 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                 rgb = _composite_region(rgb, *region_masks, color=REGION_OUTLINE_RGB)
             if bounds is not None:
                 rgb = draw_scale_bar(rgb, frame_width_m)
+                # Georeferenced-adjacent, same as the scale bar it stacks above: drawn
+                # on pure imagery, before the margins exist (Trap 1 — see draw_region).
+                rgb = draw_north_arrow(rgb, frame_width_m)
             # Now grow the canvas and let the (shape-preserving) bar drawers fill the new
             # top/bottom strips, so the labels sit beside the imagery instead of over it.
             top_h, bottom_h = _margins(rgb.shape[0], two_line_header)
@@ -1335,7 +1514,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
             # `text` is already composed (see `_imagery_sequence`). `_drawable` is a
             # no-op now (the bundled font draws "←" directly) but stays as the single
             # seam this composed text passes through on its way to `annotate`.
-            rgb = annotate(rgb, _drawable(text))
+            rgb = annotate(rgb, _drawable(text), credit_text)
             if not composite:                            # colorbar needs a palette
                 rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4)  # just inside the imagery
             if output:

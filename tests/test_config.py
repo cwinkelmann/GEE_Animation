@@ -636,3 +636,48 @@ def test_title_and_subtitle_default_to_none(tmp_path):
     # display_name for the title and omit the second line entirely.
     cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
     assert cfg.title is None and cfg.subtitle is None
+
+
+def test_credit_defaults_to_none_for_zero_config_auto_attribution(tmp_path):
+    # An absent `credit:` key must stay None (not ""), so render._default_credit
+    # falls back to the sensor's auto attribution — zero-config compliance is the
+    # whole point of this field.
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.credit is None
+
+
+def test_credit_round_trips_verbatim_from_top_level_yaml(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+        'index: ndvi\ncredit: "Imagery courtesy of ACME Corp"\n')))
+    assert cfg.credit == "Imagery courtesy of ACME Corp"
+
+
+def test_credit_explicit_empty_string_survives_as_empty_not_none(tmp_path, caplog):
+    # Unlike title/subtitle, an explicit "" is a distinct, deliberate choice (omit
+    # the attribution line) that must not collapse to None (which would mean
+    # "unset, pick the sensor default" and silently restore the Copernicus notice).
+    body = _base('index: ndvi\ncredit: ""\n').replace("sensor: landsat", "sensor: sentinel2")
+    with caplog.at_level("WARNING"):
+        cfg = RunConfig.from_yaml(_write(tmp_path, body))
+    assert cfg.credit == ""
+
+
+def test_empty_credit_on_sentinel2_warns_about_the_copernicus_licence(tmp_path, caplog):
+    body = _base('index: ndvi\ncredit: ""\n').replace("sensor: landsat", "sensor: sentinel2")
+    with caplog.at_level("WARNING"):
+        cfg = RunConfig.from_yaml(_write(tmp_path, body))
+    assert cfg.credit == ""
+    assert "Copernicus" in caplog.text
+    caplog.clear()
+    # Landsat has no such licence requirement: no warning for the same empty credit.
+    with caplog.at_level("WARNING"):
+        RunConfig.from_yaml(_write(tmp_path, _base('index: ndvi\ncredit: ""\n')))
+    assert "Copernicus" not in caplog.text
+    caplog.clear()
+    # And a non-empty credit on sentinel2 is a deliberate override, not an
+    # omission — no warning either.
+    with caplog.at_level("WARNING"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            'index: ndvi\ncredit: "Custom credit"\n').replace(
+            "sensor: landsat", "sensor: sentinel2")))
+    assert "Copernicus" not in caplog.text

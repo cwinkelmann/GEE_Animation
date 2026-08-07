@@ -888,6 +888,42 @@ def test_draw_scale_bar_skips_tiny_frames():
     assert out.sum() == 0                                 # too small: no-op
 
 
+def test_draw_north_arrow_panel_sits_above_scale_bar_panel():
+    """The north indicator must share the scale bar's x-span and sit strictly
+    above its panel — same pixel-region style as test_draw_scale_bar_labels_and_
+    marks_frame, plus the "above" relationship the two panels are required to
+    keep (they share `_scale_bar_layout` precisely so this holds)."""
+    from gee_animation.render import _scale_bar_layout, draw_north_arrow
+    from PIL import ImageDraw
+
+    rgb = np.zeros((240, 480, 3), np.uint8)
+    scaled = draw_scale_bar(rgb, 111320.0)
+    both = draw_north_arrow(scaled, 111320.0)
+    assert both.shape == rgb.shape and both.dtype == np.uint8
+    assert both.sum() > scaled.sum(), "the arrow panel must add ink"
+
+    # Where is the scale bar panel, per the shared geometry?
+    probe = Image.fromarray(rgb, "RGB")
+    geo = _scale_bar_layout(ImageDraw.Draw(probe, "RGBA"), 480, 240, 111320.0, 0.25)
+    assert geo is not None
+    # Nothing north-arrow-related may land at or below the scale bar panel's top —
+    # that band belongs to the scale bar alone.
+    assert both[int(geo["panel_top"]):].sum() == scaled[int(geo["panel_top"]):].sum(), \
+        "north arrow ink found at/below the scale bar panel's top"
+    # And something must have been drawn strictly above it, in roughly the same
+    # x-span (bottom-right quadrant, not top-left).
+    above = both[:int(geo["panel_top"]), :]
+    assert above.sum() > 0, "nothing drawn above the scale bar panel"
+    assert both[:60, :120].sum() == 0, "arrow bled into the top-left quadrant"
+
+
+def test_draw_north_arrow_skips_tiny_frames():
+    from gee_animation.render import draw_north_arrow
+    rgb = np.zeros((8, 8, 3), np.uint8)
+    out = draw_north_arrow(rgb, 111320.0)
+    assert out.sum() == 0                                 # too small: no-op, like the scale bar
+
+
 def test_utm_epsg_and_resolve_crs():
     from gee_animation.render import _utm_epsg, _resolve_crs
     assert _utm_epsg(13.9, 53.0) == "EPSG:32633"          # Brandenburg -> UTM 33N
@@ -1078,7 +1114,7 @@ def test_render_annotates_scene_count_when_present(tmp_path, monkeypatch):
     import gee_animation.render as r
     cfg = _cfg(tmp_path)
     labels = []
-    monkeypatch.setattr(r, "annotate", lambda rgb, label: (labels.append(label) or rgb))
+    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="": (labels.append(label) or rgb))
 
     def fake_fetch(image, cfg, geometry=None):
         return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
@@ -1103,7 +1139,7 @@ def test_render_composes_pooled_provenance_into_the_drawn_text(tmp_path, monkeyp
     monkeypatch.setattr(r, "_drawable",
                         lambda text: (composed.append(text) or orig_drawable(text)))
     drawn = []
-    monkeypatch.setattr(r, "annotate", lambda rgb, label: (drawn.append(label) or rgb))
+    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="": (drawn.append(label) or rgb))
 
     def fake_fetch(image, cfg, geometry=None):
         return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
@@ -1122,7 +1158,7 @@ def test_render_leaves_gap_fill_nominal_frames_unmarked(tmp_path, monkeypatch):
     import gee_animation.render as r
     cfg = _cfg(tmp_path)
     drawn = []
-    monkeypatch.setattr(r, "annotate", lambda rgb, label: (drawn.append(label) or rgb))
+    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="": (drawn.append(label) or rgb))
 
     def fake_fetch(image, cfg, geometry=None):
         return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
@@ -1368,6 +1404,139 @@ def test_pooled_label_source_year_is_drawn_not_a_notdef_box():
     assert not np.array_equal(with_year, without)      # the source year really lands
 
 
+# --- data attribution: _default_credit, annotate's credit line -------------------
+
+def test_default_credit_sentinel2_names_the_copernicus_licence_and_year():
+    # Zero-config compliance: an unset credit on a sentinel2 run must still carry
+    # the exact wording the Copernicus licence requires, plus the year shown.
+    from gee_animation.render import _default_credit
+    cfg = types.SimpleNamespace(sensor="sentinel2", credit=None,
+                                start="2022-01-01", end="2022-06-01", pool_years=None)
+    assert _default_credit(cfg) == "Contains modified Copernicus Sentinel data 2022"
+
+
+@pytest.mark.parametrize("sensor,expected", [
+    ("landsat", "Landsat imagery courtesy of the U.S. Geological Survey"),
+    ("modis", "MODIS data courtesy of NASA LP DAAC"),
+    ("modis_lst", "MODIS data courtesy of NASA LP DAAC"),
+])
+def test_default_credit_non_sentinel_sensors_get_a_fixed_courtesy_line(sensor, expected):
+    from gee_animation.render import _default_credit
+    cfg = types.SimpleNamespace(sensor=sensor, credit=None,
+                                start="2022-01-01", end="2022-06-01", pool_years=None)
+    assert _default_credit(cfg) == expected
+
+
+def test_default_credit_year_span_widens_to_the_pool_years():
+    # Borrowed (pooled) frames contain pixels from any year in pool_years, so the
+    # notice must cover the whole borrowed span, not just the nominal run dates.
+    # start 2021 / end 2023 alone would be "2021"; pool [2018, 2024] widens it.
+    from gee_animation.render import _default_credit
+    cfg = types.SimpleNamespace(sensor="sentinel2", credit=None,
+                                start="2021-01-01", end="2023-01-01",
+                                pool_years=[2018, 2024])
+    assert _default_credit(cfg) == "Contains modified Copernicus Sentinel data 2018–2024"
+
+
+def test_default_credit_explicit_string_wins_verbatim():
+    from gee_animation.render import _default_credit
+    cfg = types.SimpleNamespace(sensor="sentinel2", credit="My custom credit line",
+                                start="2022-01-01", end="2022-06-01", pool_years=None)
+    assert _default_credit(cfg) == "My custom credit line"
+
+
+def test_default_credit_explicit_empty_string_omits_the_line():
+    # A conscious compliance decision (config.validate warns about it for
+    # sentinel2), not the zero-config default — but _default_credit must still
+    # honour it rather than silently falling back to the sensor auto-text.
+    from gee_animation.render import _default_credit
+    cfg = types.SimpleNamespace(sensor="sentinel2", credit="",
+                                start="2022-01-01", end="2022-06-01", pool_years=None)
+    assert _default_credit(cfg) == ""
+
+
+def test_annotate_draws_credit_right_aligned_beside_the_label():
+    from gee_animation.render import annotate, _bar_h
+    w, h = 800, 240
+    rgb = np.zeros((h, w, 3), np.uint8)
+    plain = annotate(rgb.copy(), "May 2022")
+    credited = annotate(rgb.copy(), "May 2022",
+                        "Contains modified Copernicus Sentinel data 2022")
+    assert credited.sum() > plain.sum()                    # credit really adds ink
+    bar_h = _bar_h(h)
+    # right-hand side of the bar (well clear of the left-aligned label) gains ink
+    # only in the credited version.
+    right_band = slice(h - bar_h, h), slice(600, w)
+    assert credited[right_band].sum() > 0
+    assert plain[right_band].sum() == 0
+
+
+def test_annotate_credit_clips_with_ellipsis_rather_than_touch_the_label():
+    """The period label is the data (what/when this frame shows); the credit is a
+    compliance line. Neither may be silently dropped. At a width too narrow for
+    both whole, the credit -- never the label -- degrades: it is clipped with a
+    trailing ellipsis at the point the label ends, rather than the label shrinking
+    or the credit vanishing outright."""
+    from gee_animation.render import annotate, _text_w, _annot_scale, _bar_h
+    w, h = 260, 120                    # sized so the full credit cannot fit beside it
+    label = "May 2022 · image from 2021 · 1 pass"
+    credit = "Contains modified Copernicus Sentinel data 2018–2024"
+    rgb = np.zeros((h, w, 3), np.uint8)
+    label_only = annotate(rgb.copy(), label)
+    out = annotate(rgb.copy(), label, credit)
+
+    probe = Image.new("RGB", (w, h))
+    draw = ImageDraw.Draw(probe)
+    font, _ = _annot_scale(h)
+    x = max(4, w // 200)
+    label_right = x + _text_w(draw, label, font)
+    bar_h = _bar_h(h)
+    # the label's own pixels are byte-identical whether or not a credit is present
+    assert np.array_equal(out[h - bar_h:, :label_right], label_only[h - bar_h:, :label_right])
+    # but the credit still draws something (clipped, not dropped) to its right
+    assert out[h - bar_h:, label_right:].sum() > 0
+    assert not np.array_equal(out, label_only)
+
+
+def test_annotate_drops_credit_entirely_when_there_is_no_room_at_all():
+    # An even narrower frame than the ellipsis case: no width remains for even a
+    # single truncated character beside the label. The label still must not move
+    # or shrink; here the credit degrades all the way to nothing rather than
+    # overlapping it.
+    from gee_animation.render import annotate
+    w, h = 66, 80
+    label = "May 2022"
+    credit = "Contains modified Copernicus Sentinel data 2018–2024"
+    rgb = np.zeros((h, w, 3), np.uint8)
+    label_only = annotate(rgb.copy(), label)
+    out = annotate(rgb.copy(), label, credit)
+    assert np.array_equal(out, label_only)
+
+
+def test_render_credit_lands_in_the_bottom_margin_never_the_imagery(tmp_path):
+    # Same imagery-untouched discipline as Task 3's header tests: the credit must
+    # be confined to the bottom label margin, byte-for-byte, never bleeding into
+    # the picture itself.
+    from gee_animation.render import _margins
+    h, w = 240, 320
+    cfg = _cfg(tmp_path, name="credit")
+    cfg.index, cfg.palette = "rgb", []       # composite: no colorbar overlay
+    cfg.frame_aoi = None                     # and no scale bar/north arrow
+    cfg.sensor = "sentinel2"
+    cfg.start, cfg.end = "2022-01-01", "2022-06-01"
+
+    def fake_fetch(image, cfg_, geometry=None):
+        return np.full((h, w, 3), 123, dtype=float), np.ones((h, w), dtype=bool)
+
+    paths = render([Frame("2022-05", object(), 1)], cfg, fetch=fake_fetch, geometry=None)
+    arr = np.asarray(Image.open(next(p for p in paths if p.suffix == ".png")))
+    top_h, bottom_h = _margins(h, False)
+    assert arr.shape[:2] == (h + top_h + bottom_h, w)
+    assert np.all(arr[top_h:top_h + h] == 123)     # every imagery pixel untouched
+    bottom_margin = arr[top_h + h:]
+    assert bottom_margin.sum() > 0                 # the credit (and label) really drew
+
+
 def test_colorbar_drops_zero_label_when_it_collides_with_min():
     """A lopsided range puts 0 close to the min end: over -3..46 the zero tick sits at
     6% of the ramp and its label lands on the "-3", which drew as "-30". The min label
@@ -1435,7 +1604,7 @@ def test_render_interpolates_between_frames(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     cfg.interpolate = 2
     drawn = []
-    monkeypatch.setattr(r, "annotate", lambda rgb, label: (drawn.append(label) or rgb))
+    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="": (drawn.append(label) or rgb))
     render([Frame("2022-05", object()), Frame("2022-06", object())], cfg,
            fetch=_flat_fetch, geometry=None)
     assert drawn == ["May 2022", "between May and June 2022 · 33%",
@@ -1449,7 +1618,7 @@ def test_render_scales_generated_frames_with_the_gap(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     cfg.interpolate = 1
     drawn = []
-    monkeypatch.setattr(r, "annotate", lambda rgb, label: (drawn.append(label) or rgb))
+    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="": (drawn.append(label) or rgb))
     render([Frame("2022-05", object()), Frame("2022-08", object())], cfg,
            fetch=_flat_fetch, geometry=None)
     assert len(drawn) == 5                       # 2 observed + 3 * 1 generated
@@ -1461,7 +1630,7 @@ def test_render_interpolate_zero_is_untouched(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     cfg.interpolate = 0
     drawn = []
-    monkeypatch.setattr(r, "annotate", lambda rgb, label: (drawn.append(label) or rgb))
+    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="": (drawn.append(label) or rgb))
     render([Frame("2022-05", object(), 3), Frame("2022-06", object())], cfg,
            fetch=_flat_fetch, geometry=None)
     assert drawn == ["May 2022 · 3 passes", "June 2022"]

@@ -100,6 +100,14 @@ class RunConfig:
     # both are in cache.CLIENT_SIDE_FIELDS and retitling a run is a cache hit.
     title: str = None
     subtitle: str = None
+    # Attribution line drawn bottom-right (from top-level `credit`). None (default,
+    # no key in YAML) => auto by sensor (see render._default_credit) — this is what
+    # makes the Copernicus "Contains modified Copernicus Sentinel data <year>"
+    # notice appear with zero configuration, since the licence requires it on
+    # published sentinel2 products. A non-empty string overrides verbatim. An
+    # *explicit* "" omits the line entirely — a conscious choice, not the default —
+    # and validate() warns about it for sentinel2 so that omission is deliberate.
+    credit: str = None
     # Anomaly rendering (from top-level `anomaly` / `baseline_years`). "climatology"
     # => per-pixel z-score vs baseline monthly climatology; "reference" => LST minus
     # ERA5 air temp (thermal only). None => raw values.
@@ -163,6 +171,12 @@ class RunConfig:
                 d_min, d_max, d_pal = ANOMALY_VIZ.get(anomaly, (-3.0, 3.0, ["#000000", "#ffffff"]))
             else:
                 d_min, d_max, d_pal = spec.default_viz if spec else (0.0, 1.0, ["#000000", "#ffffff"])
+            # Unlike title/subtitle, an explicit "" must survive as "" (not collapse
+            # to None): "" is a distinct, deliberate "no credit line" choice that
+            # render._default_credit and validate() both need to tell apart from
+            # "not configured, pick the sensor default".
+            credit = (str(raw["credit"]) if raw.get("credit")
+                     else ("" if "credit" in raw and raw["credit"] == "" else None))
             cfg = cls(
                 name=str(raw["name"]),
                 project=str(raw["project"]),
@@ -193,6 +207,7 @@ class RunConfig:
                 out_dir=str(raw.get("out_dir", "out")),
                 title=(str(raw["title"]) if raw.get("title") else None),
                 subtitle=(str(raw["subtitle"]) if raw.get("subtitle") else None),
+                credit=credit,
                 draw_region=bool(raw.get("draw_region", True)),
                 region_line_width=(int(render["region_line_width"])
                                    if render.get("region_line_width") is not None else None),
@@ -221,6 +236,17 @@ class RunConfig:
             get_product(self.sensor, self.index)
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
+        if self.credit == "" and self.sensor == "sentinel2":
+            # An explicit empty credit suppresses the frame's only attribution line.
+            # For sentinel2 that line is not decoration: the Copernicus licence
+            # requires "Contains modified Copernicus Sentinel data <year>" on
+            # published products, so omitting it must be a conscious choice, flagged
+            # here, not a silent default.
+            log.warning(
+                "credit: \"\" omits the attribution line; the Copernicus licence "
+                "requires \"Contains modified Copernicus Sentinel data <year>\" on "
+                "published Sentinel-2 products — make sure that notice appears "
+                "elsewhere if you suppress it here")
         if self.cadence not in SUPPORTED_CADENCES:
             raise ConfigError(
                 f"unsupported cadence {self.cadence!r}; supported: {sorted(SUPPORTED_CADENCES)}"

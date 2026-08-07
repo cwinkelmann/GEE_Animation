@@ -73,7 +73,7 @@ def _cfg(tmp_path, **over):
         region_line_width=None, missions=None, min_scenes=1,
         allow_upsample=False, debug_month=None,
         workers=4, cache=True, cache_dir=str(tmp_path / "cache"),
-        title=None, subtitle=None,
+        title=None, subtitle=None, credit=None,
     )
     base.update(over)
     return types.SimpleNamespace(**base)
@@ -146,6 +146,9 @@ def test_frame_label_is_part_of_the_key(tmp_path, urlopen_counter):
     # cost a full Earth Engine recompute of every frame.
     ("title", "Grumsiner Forst"),
     ("subtitle", "Brandenburg, Germany"),
+    # the attribution line is drawn locally too (render._default_credit); changing
+    # or overriding it must not force a refetch of every frame.
+    ("credit", "Custom credit line"),
     ("fps", 12.0),
     ("region_line_width", 9),
     ("preset", "1080p"),
