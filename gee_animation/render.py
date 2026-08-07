@@ -640,6 +640,10 @@ def annotate(rgb: np.ndarray, label: str, credit: str = "") -> np.ndarray:
     bar_h = _bar_h(h)
     x = max(4, w // 200)
     y = h - bar_h + max(1, h // 200)
+    # No crop-and-write-back needed here (unlike draw_info_bar): text is anchored at
+    # the TOP of this bottom bar and grows downward, toward the frame's bottom edge
+    # and away from the imagery above — the direction draw_info_bar's header text
+    # could spill into imagery in is not available to this bar at all.
     draw.rectangle([0, h - bar_h, w, h], fill=(0, 0, 0, 140))
     draw.text((x, y), label, fill=(255, 255, 255, 255), font=font)
     if credit:

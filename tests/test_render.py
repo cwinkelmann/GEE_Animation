@@ -1514,27 +1514,46 @@ def test_annotate_drops_credit_entirely_when_there_is_no_room_at_all():
 
 
 def test_render_credit_lands_in_the_bottom_margin_never_the_imagery(tmp_path):
-    # Same imagery-untouched discipline as Task 3's header tests: the credit must
-    # be confined to the bottom label margin, byte-for-byte, never bleeding into
-    # the picture itself.
+    """Same imagery-untouched discipline as Task 3's header tests, and discriminating
+    about the credit specifically (not just "something is drawn"): the period label
+    alone already lights up the bottom margin, so a bare `bottom_margin.sum() > 0`
+    passes even with the credit forced off — it was proven to pass that way by a
+    reviewer sabotage run (see the fix report). This renders the real `render()` ->
+    `_default_credit` -> `annotate` path twice, default vs. an explicit `credit=""`,
+    and requires the right half of the bar (left of which the label lives,
+    left-aligned; see `annotate`) to actually differ: ink with the auto credit, none
+    without it.
+    """
     from gee_animation.render import _margins
     h, w = 240, 320
-    cfg = _cfg(tmp_path, name="credit")
-    cfg.index, cfg.palette = "rgb", []       # composite: no colorbar overlay
-    cfg.frame_aoi = None                     # and no scale bar/north arrow
-    cfg.sensor = "sentinel2"
-    cfg.start, cfg.end = "2022-01-01", "2022-06-01"
 
-    def fake_fetch(image, cfg_, geometry=None):
-        return np.full((h, w, 3), 123, dtype=float), np.ones((h, w), dtype=bool)
+    def _run(credit):
+        cfg = _cfg(tmp_path, name=f"credit-{credit!r}")
+        cfg.index, cfg.palette = "rgb", []       # composite: no colorbar overlay
+        cfg.frame_aoi = None                     # and no scale bar/north arrow
+        cfg.sensor = "sentinel2"
+        cfg.start, cfg.end = "2022-01-01", "2022-06-01"
+        cfg.credit = credit
 
-    paths = render([Frame("2022-05", object(), 1)], cfg, fetch=fake_fetch, geometry=None)
-    arr = np.asarray(Image.open(next(p for p in paths if p.suffix == ".png")))
-    top_h, bottom_h = _margins(h, False)
-    assert arr.shape[:2] == (h + top_h + bottom_h, w)
-    assert np.all(arr[top_h:top_h + h] == 123)     # every imagery pixel untouched
-    bottom_margin = arr[top_h + h:]
-    assert bottom_margin.sum() > 0                 # the credit (and label) really drew
+        def fake_fetch(image, cfg_, geometry=None):
+            return np.full((h, w, 3), 123, dtype=float), np.ones((h, w), dtype=bool)
+
+        paths = render([Frame("2022-05", object(), 1)], cfg, fetch=fake_fetch, geometry=None)
+        arr = np.asarray(Image.open(next(p for p in paths if p.suffix == ".png")))
+        top_h, bottom_h = _margins(h, False)
+        assert arr.shape[:2] == (h + top_h + bottom_h, w)
+        assert np.all(arr[top_h:top_h + h] == 123)     # every imagery pixel untouched
+        return arr[top_h + h:]                          # the bottom margin only
+
+    default_margin = _run(None)     # unset -> auto sentinel2 credit
+    omitted_margin = _run("")       # explicit "" -> no credit line
+
+    right_half = slice(w // 2, w)
+    default_right = int(default_margin[:, right_half].sum())
+    omitted_right = int(omitted_margin[:, right_half].sum())
+    assert default_right > 0, "the auto credit must draw ink in the bar's right half"
+    assert omitted_right == 0, "credit='' must draw nothing in the right half"
+    assert default_right > omitted_right
 
 
 def test_colorbar_drops_zero_label_when_it_collides_with_min():
