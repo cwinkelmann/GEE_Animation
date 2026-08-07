@@ -23,6 +23,60 @@ def _cfg(tmp_path, name="anim", fps=2):
     )
 
 
+# --- bundled font (DejaVu Sans replaces Pillow's bitmap default) ------------------
+
+def test_font_is_bundled_truetype_with_needed_glyphs():
+    # Pillow's own bundled default (Aileron, or the pre-10.1 bitmap font on older
+    # Pillow) is what we are replacing. getbbox() alone isn't proof of a real glyph
+    # -- FreeType renders a nonzero-width notdef box for *missing* characters too
+    # (verified: Aileron's cmap has no U+2190/U+2013, yet getbbox still returns a
+    # nonzero box for both) -- so pin the font identity via its name table as well.
+    from gee_animation.render import _font
+    from PIL import ImageFont
+    f = _font(24)
+    assert isinstance(f, ImageFont.FreeTypeFont)
+    assert f.getname()[0] == "DejaVu Sans"
+    for ch in ("←", "–", "°"):
+        box = f.getbbox(ch)
+        assert box[2] > box[0], f"no glyph for {ch!r}"
+
+
+def test_drawable_no_longer_mangles_the_arrow():
+    # _drawable is kept as a seam (call sites unchanged) but the fold table is now
+    # empty: DejaVu draws "←"/"–" directly, so nothing needs replacing.
+    from gee_animation.render import _drawable
+    assert _drawable("2022-05 ← 2021") == "2022-05 ← 2021"
+
+
+def test_font_loads_via_importlib_resources_from_the_installed_package():
+    # Guards against the classic setuptools package-data trap: the font must resolve
+    # as installed package data (importlib.resources), not via a path relative to
+    # this repo checkout, or it would silently vanish from a built wheel/install.
+    from importlib import resources
+    ref = resources.files("gee_animation.fonts") / "DejaVuSans.ttf"
+    assert ref.is_file()
+    with resources.as_file(ref) as path:
+        from PIL import ImageFont
+        f = ImageFont.truetype(str(path), size=24)
+        assert isinstance(f, ImageFont.FreeTypeFont)
+
+
+def test_font_falls_back_to_pillow_default_when_bundle_is_missing(monkeypatch, caplog):
+    # If the bundled TTF is missing/corrupt (e.g. a broken install), _font must not
+    # raise -- frame generation should degrade to Pillow's default font, not crash.
+    import logging
+    import gee_animation.render as r
+    monkeypatch.setattr(r, "_FONT_FILENAME", "does-not-exist.ttf")
+    r._font.cache_clear()
+    try:
+        with caplog.at_level(logging.WARNING):
+            f = r._font(24)
+        assert f is not None
+        assert "does-not-exist.ttf" in caplog.text or "font" in caplog.text.lower()
+    finally:
+        r._font.cache_clear()   # don't leak the monkeypatched miss into other tests
+
+
 def test_bar_h_matches_draw_info_bar_and_annotate():
     # draw_info_bar (top) and annotate (bottom) must stay the same height — extracted
     # into one helper so the two call sites can't drift apart.
@@ -836,8 +890,8 @@ def test_render_annotates_scene_count_when_present(tmp_path, monkeypatch):
 def test_render_composes_pooled_provenance_into_the_drawn_text(tmp_path, monkeypatch):
     # Frame.label is the clean period key; Frame.source (added for pooled frames)
     # carries where the imagery actually came from. render() must recombine them into
-    # the same drawn text as before ("2022-05 ← 2021  n=1"), folded down to a glyph
-    # Pillow's default font can draw, right where the string is composed.
+    # the drawn text ("2022-05 ← 2021  n=1"), routed through `_drawable` (now a no-op
+    # identity fold, kept as the seam) right where the string is composed.
     import gee_animation.render as r
     cfg = _cfg(tmp_path)
     composed = []
@@ -851,11 +905,11 @@ def test_render_composes_pooled_provenance_into_the_drawn_text(tmp_path, monkeyp
         return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
 
     render([Frame("2022-05", object(), 1, 2021)], cfg, fetch=fake_fetch, geometry=None)
-    # what render composed, before folding: the real arrow, the source year, n=1
+    # what render composed, before the (now no-op) fold: the real arrow, the source
+    # year, n=1
     assert composed == ["2022-05 ← 2021  n=1"]
-    # what actually reaches Pillow: folded to a glyph the default font has
-    assert drawn == ["2022-05 <- 2021  n=1"]
-    assert "←" not in drawn[0]
+    # the bundled DejaVu font draws the real arrow directly -- nothing is folded away
+    assert drawn == ["2022-05 ← 2021  n=1"]
 
 
 def test_render_leaves_gap_fill_nominal_frames_unmarked(tmp_path, monkeypatch):
@@ -872,7 +926,7 @@ def test_render_leaves_gap_fill_nominal_frames_unmarked(tmp_path, monkeypatch):
 
     render([Frame("2022-05", object(), 3, None), Frame("2022-06", object(), 1, 2019)],
            cfg, fetch=fake_fetch, geometry=None)
-    assert drawn == ["2022-05  n=3", "2022-06 <- 2019  n=1"]
+    assert drawn == ["2022-05  n=3", "2022-06 ← 2019  n=1"]
 
 
 def test_render_composite_passes_rgb_through_without_colorbar(tmp_path):
@@ -1017,11 +1071,14 @@ def test_colorbar_ticks_zero_dedupes_with_midpoint():
 
 
 def test_colorbar_drops_mid_label_on_narrow_ramp():
-    # Genuinely narrow: bar_w == 64px (comparable to the brief's own "dimensions: 256
+    # Genuinely narrow: bar_w == 80px (comparable to the brief's own "dimensions: 256
     # -> ~100px bar" example), with the default LST range — the reviewer-verified
-    # real-world case where the mid ("15") label collides with its neighbours.
+    # real-world case where the mid ("15") label collides with its neighbours. (Width
+    # re-derived for the bundled DejaVu font: its glyphs are narrower than Pillow's
+    # own default, so the same collision needs more of the ramp to reproduce -- at
+    # the old 160px width "15" no longer collides with anything.)
     from gee_animation.render import _annot_scale, _colorbar_ticks
-    w, h = 160, 300
+    w, h = 200, 300
     rgb = np.zeros((h, w, 3), np.uint8)
     cfg = types.SimpleNamespace(index="lst", viz_min=-10.0, viz_max=40.0,
                                 palette=["#0000ff", "#ff0000"])
@@ -1095,13 +1152,13 @@ def test_info_text_states_the_pooled_year_range():
 
 
 def test_pooled_label_source_year_is_drawn_not_a_notdef_box():
-    # The bundled default font has no U+2190 glyph, so a raw "←" draws as an empty
-    # box. `_drawable` folds it to "<-"; `annotate`/`draw_info_bar` draw whatever text
-    # they are given verbatim, so callers (render(), for the pooled provenance string)
-    # must fold before calling them.
+    # The bundled DejaVu font (see `_font`) has real "←"/"–" glyphs, so the arrow
+    # actually renders instead of an empty notdef box. `annotate`/`draw_info_bar` draw
+    # whatever text they are given verbatim; `render()` still routes the pooled
+    # provenance string through `_drawable` (now identity, kept as a seam) first.
     from gee_animation.render import _drawable, annotate
-    assert _drawable("2022-05 ← 2021") == "2022-05 <- 2021"
-    assert _drawable("pooled years 2019–2024") == "pooled years 2019-2024"
+    assert _drawable("2022-05 ← 2021") == "2022-05 ← 2021"
+    assert _drawable("pooled years 2019–2024") == "pooled years 2019–2024"
     rgb = np.zeros((240, 800, 3), np.uint8)
     with_year = annotate(rgb.copy(), _drawable("2022-05 ← 2021"))
     without = annotate(rgb.copy(), "2022-05")

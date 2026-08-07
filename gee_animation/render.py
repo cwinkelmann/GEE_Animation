@@ -8,6 +8,7 @@ from collections import deque
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache, partial
+from importlib import resources
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -36,22 +37,49 @@ UPSCALE_METHODS = {"lanczos": Image.LANCZOS, "bicubic": Image.BICUBIC,
 _GIF_MAX_EDGE = 1280   # GIFs stay preview-sized even when the MP4 is 4K
 
 
+_FONT_PACKAGE = "gee_animation.fonts"
+_FONT_FILENAME = "DejaVuSans.ttf"
+
+
 @lru_cache(maxsize=64)
 def _font(px: int):
-    """A default font at the given pixel size (cached). Falls back for old Pillow."""
+    """The bundled DejaVu Sans at the given pixel size (cached).
+
+    Pillow's own bundled default font (a limited-character-set "Aileron", or on
+    Pillow < 10.1 a small fixed-size bitmap font) has no glyph for "←" (pooled-frame
+    provenance arrow) or "–" (en dash, e.g. a pooled year range) — Pillow silently
+    substitutes a notdef box, which reads as a corrupted frame to a viewer. DejaVu
+    Sans is a real, fully-hinted TrueType font that has both, so frames can be drawn
+    with the actual characters instead of an ASCII-folded stand-in (see `_drawable`).
+
+    Loaded via `importlib.resources` (not a repo-relative path) so it resolves
+    correctly from an installed wheel, not just a source checkout — matplotlib
+    ships the same font, but matplotlib is only an optional extra here, so the
+    font is bundled into this package rather than borrowed from it at runtime.
+    Falls back to Pillow's own default font, logged once, only if the bundled TTF
+    is missing or unreadable (e.g. a broken/partial install) — better a plainer
+    frame than a crash.
+    """
     try:
-        return ImageFont.load_default(size=max(10, int(px)))
-    except TypeError:            # Pillow < 10 has no size argument
-        return ImageFont.load_default()
+        with resources.as_file(resources.files(_FONT_PACKAGE) / _FONT_FILENAME) as path:
+            return ImageFont.truetype(str(path), size=max(10, int(px)))
+    except Exception:
+        log.warning(
+            "Bundled font %s could not be loaded (missing/corrupt install?); "
+            "falling back to Pillow's default font, which lacks some glyphs "
+            "('←', '–') used in provenance/unit labels.",
+            _FONT_FILENAME, exc_info=True,
+        )
+        try:
+            return ImageFont.load_default(size=max(10, int(px)))
+        except TypeError:        # Pillow < 10 has no size argument
+            return ImageFont.load_default()
 
 
-# Pillow's bundled default font has no glyph for "←" (pooled-frame provenance arrow)
-# or "–" (en dash, e.g. a pooled year range), and draws an empty notdef box instead —
-# which reads as a corrupted frame. `Frame.label`/`.source` keep the real characters
-# (they also feed filenames and DB rows); only the composed *display* string that
-# `render()` hands to `annotate` is folded down. "2022-05 <- 2021" is still
-# unambiguous provenance.
-_DRAWABLE = {"←": "<-", "–": "-"}
+# DejaVu Sans (see _font) has real glyphs for "←"/"–", so no ASCII fold is needed any
+# more. `_DRAWABLE` is kept empty and `_drawable` kept as an identity function so its
+# call sites — and the M5 history of why they exist — stay greppable.
+_DRAWABLE: dict[str, str] = {}
 
 
 def _drawable(text: str) -> str:
@@ -266,8 +294,8 @@ def _info_text(cfg) -> str:
     pool = getattr(cfg, "pool_years", None)
     if pool:
         # Plain ASCII hyphen, not an en dash: this string is drawn straight into
-        # `draw_info_bar` with no fold step, and Pillow's default font has no en-dash
-        # glyph (see _DRAWABLE).
+        # `draw_info_bar` with no fold step, so it stays legible even if `_font`
+        # (see `_DRAWABLE`) ever falls back to a font without one.
         # gap_fill keeps the requested year wherever it has data and only borrows for
         # otherwise-empty periods, so its unmarked frames really are that year —
         # calling the whole run "cosmetic" would overstate it. The other strategies
@@ -339,8 +367,8 @@ def _fit_bar_text(draw: ImageDraw.ImageDraw, text: str, px: int, avail_w: int) -
     if tb[2] - tb[0] <= avail_w:
         return font, text
     # Still too wide at the size floor: binary-search the longest prefix (+ "…") that
-    # fits. "…" (U+2026) is a real glyph in Pillow's bundled default font — unlike
-    # "←"/"–" (see _DRAWABLE), it does not draw as a notdef box.
+    # fits. "…" (U+2026) is a real glyph in the bundled font (see `_font`), so it
+    # draws as an ellipsis, not a notdef box.
     lo, hi = 0, len(text)
     while lo < hi:
         mid = (lo + hi + 1) // 2
@@ -355,10 +383,11 @@ def _fit_bar_text(draw: ImageDraw.ImageDraw, text: str, px: int, avail_w: int) -
 def draw_info_bar(rgb: np.ndarray, text: str) -> np.ndarray:
     """Draw a translucent top bar naming the bands used and the formula (if any).
 
-    `text` is drawn as given — callers must pre-fold any character Pillow's default
-    font cannot render (see `_DRAWABLE`); `_info_text` itself never emits one. Unlike
-    `annotate`'s bottom label (always short), this text can overflow a narrow frame
-    for the long-formula indices (lst_smw, lst_sharp); `_fit_bar_text` shrinks the
+    `text` is drawn as given — the bundled font (see `_font`) renders it directly, no
+    fold step required (`_drawable`, still called by callers that carry pooled-frame
+    provenance text, is now an identity function). Unlike `annotate`'s bottom label
+    (always short), this text can overflow a narrow frame for the long-formula
+    indices (lst_smw, lst_sharp); `_fit_bar_text` shrinks the
     font (and, as a last resort, truncates) so it always stays inside the frame. The
     bar height/rectangle and vertical placement are untouched either way — only the
     font size and, in the worst case, the string itself change.
@@ -380,9 +409,9 @@ def draw_info_bar(rgb: np.ndarray, text: str) -> np.ndarray:
 def annotate(rgb: np.ndarray, label: str) -> np.ndarray:
     """Draw a translucent bottom bar with `label`.
 
-    `label` is drawn as given — callers must pre-fold any character Pillow's default
-    font cannot render (see `_DRAWABLE`); `render()` does this when composing the
-    pooled-frame provenance text.
+    `label` is drawn as given — the bundled font (see `_font`) renders it directly.
+    `render()` still routes the pooled-frame provenance text through `_drawable`
+    before calling this (now a no-op fold, kept as a seam) when composing it.
     """
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
@@ -1131,8 +1160,9 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
             top_h, bottom_h = _margins(rgb.shape[0])
             rgb = add_margins(rgb, top_h, bottom_h)
             rgb = draw_info_bar(rgb, info_text)
-            # `text` is already composed (see `_imagery_sequence`); Pillow's default font
-            # can't render "←", so it is folded right here, in one place, before drawing.
+            # `text` is already composed (see `_imagery_sequence`). `_drawable` is a
+            # no-op now (the bundled font draws "←" directly) but stays as the single
+            # seam this composed text passes through on its way to `annotate`.
             rgb = annotate(rgb, _drawable(text))
             if not composite:                            # colorbar needs a palette
                 rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4)  # just inside the imagery
