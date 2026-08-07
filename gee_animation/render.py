@@ -695,24 +695,89 @@ def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
 _CREDIT_SCALE = 0.8
 
 
-def annotate(rgb: np.ndarray, label: str, credit: str = "") -> np.ndarray:
-    """Draw a translucent bottom bar with `label` (left) and `credit` (right).
+def _frame_marker(draw: ImageDraw.ImageDraw, xy: tuple, size: int, filled: bool,
+                  color: tuple = (255, 255, 255, 255)) -> None:
+    """Draw the observed/generated marker: a filled dot or a same-diameter hollow ring.
+
+    Review finding H5: at cinema-mode playback (2 fps+) nobody reads a label that
+    changes every ~0.5s, but a dot/ring reads peripherally at any size — this is a
+    pre-attentive ADDITION beside the label, not a replacement for it (the label's
+    own wording, `labels.observed_text`/`generated_text`, is untouched). `xy` is the
+    marker's centre; `size` its diameter. A filled circle marks an observed frame; a
+    hollow ring (same outer diameter) marks a generated/interpolated one.
+
+    The ring's stroke width is derived from `size` rather than threaded through as a
+    separate argument: `size` is already proportional to frame height (it comes from
+    the label font's cap height, itself sized off `_annot_scale`), so deriving the
+    stroke from it achieves the same height-proportional scaling `_annot_scale`'s own
+    `line_width` gives other overlays, without widening this helper's signature.
+    `bbox` is passed to `ImageDraw.ellipse` unchanged for both variants (no inset):
+    Pillow draws a stroked ellipse's outline *inward* from the given box rather than
+    centred on/straddling it (verified empirically — a filled and an outlined ellipse
+    given the same bbox share the exact same outer extent), so the ring's outer edge
+    already lands on `size` exactly, matching the filled dot's footprint.
+    """
+    cx, cy = xy
+    r = size / 2.0
+    bbox = [cx - r, cy - r, cx + r, cy + r]
+    if filled:
+        draw.ellipse(bbox, fill=color)
+        return
+    width = max(2, round(size / 6))
+    draw.ellipse(bbox, outline=color, width=width)
+
+
+def _marker_layout(draw: ImageDraw.ImageDraw, font, x: int, y: int, w: int) -> tuple:
+    """(marker_cx, marker_cy, diameter, label_x) for the bottom bar's left-hand marker.
+
+    Diameter is the label font's cap height — the "H" glyph's own ink extent, not the
+    full ascender-to-descender box `_fit_line_height`'s "Ag" probe uses elsewhere —
+    so the dot sits close to a capital letter's height rather than an arbitrary
+    constant. The marker's vertical centre is the midpoint of that same "H" ink box
+    computed at `y` (the label's own draw origin), so it lines up with the label text
+    that will be drawn at the same `y`. `label_x` is `x` (the bar's usual left inset)
+    plus the marker's diameter and a gap — the label shifts right to make room,
+    exactly as far as the marker actually needs.
+
+    Factored out of `annotate` so tests can reproduce this exact geometry instead of
+    duplicating a second, driftable copy of the arithmetic (see test_render.py's
+    label/credit collision tests, which probe where the label text starts).
+    """
+    cap = draw.textbbox((0, 0), "H", font=font)
+    diameter = cap[3] - cap[1]
+    gap = max(4, w // 200)
+    cx = x + diameter / 2.0
+    cy = y + (cap[1] + cap[3]) / 2.0
+    return cx, cy, diameter, x + diameter + gap
+
+
+def annotate(rgb: np.ndarray, label: str, credit: str = "", is_real: bool = True) -> np.ndarray:
+    """Draw a translucent bottom bar with a marker + `label` (left) and `credit` (right).
 
     `label` is drawn as given — the bundled font (see `_font`) renders it directly.
     `render()` still routes the pooled-frame provenance text through `_drawable`
     before calling this (now a no-op fold, kept as a seam) when composing it.
 
+    `is_real` selects the pre-attentive observed/generated marker drawn immediately
+    before `label` (see `_frame_marker`/`_marker_layout`, review H5): filled for an
+    observed frame (the default — a plain, non-interpolated run's every frame is
+    observed, so filled applies universally there too, which is deliberate: a single-
+    valued, always-consistent marker beats one that only sometimes means something),
+    hollow for a generated/interpolated one. `label` shifts right by the marker's
+    width + a gap to make room; nothing about the label's own wording changes.
+
     `credit` is the attribution/licence line (see `_default_credit`) — small text,
     `_CREDIT_SCALE` of the body size with a 10 px floor, right-aligned in the same
-    bar. It is drawn only when non-empty and never at the cost of `label`: the two
-    are different kinds of text — `label` is the data (what period/source this
-    frame shows), `credit` is a compliance line (e.g. the Copernicus licence
-    notice) — and neither may be silently dropped to make room for the other. If
-    they would collide even at the credit's floor size (an extremely narrow
-    frame), `credit` is the one that gives: it is clipped with a trailing "…" at
-    the point where `label` ends, rather than shrinking/truncating `label` or
-    omitting `credit` outright. This is a last-resort degradation, not a routine
-    truncation — on any realistic output width both draw whole.
+    bar. It is drawn only when non-empty and never at the cost of the marker or
+    `label`: those are the data side of the bar (what period/source this frame shows,
+    and whether it was observed or generated) — `credit` is a compliance line (e.g.
+    the Copernicus licence notice) — and neither may be silently dropped to make room
+    for the other. If they would collide even at the credit's floor size (an
+    extremely narrow frame), `credit` is the one that gives: it is clipped with a
+    trailing "…" at the point where `label` ends, rather than shrinking/truncating
+    the marker/`label` or omitting `credit` outright. This is a last-resort
+    degradation, not a routine truncation — on any realistic output width both draw
+    whole.
     """
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
@@ -726,13 +791,15 @@ def annotate(rgb: np.ndarray, label: str, credit: str = "") -> np.ndarray:
     # and away from the imagery above — the direction draw_info_bar's header text
     # could spill into imagery in is not available to this bar at all.
     draw.rectangle([0, h - bar_h, w, h], fill=(0, 0, 0, 140))
-    draw.text((x, y), label, fill=(255, 255, 255, 255), font=font)
+    marker_cx, marker_cy, marker_d, label_x = _marker_layout(draw, font, x, y, w)
+    _frame_marker(draw, (marker_cx, marker_cy), marker_d, filled=is_real)
+    draw.text((label_x, y), label, fill=(255, 255, 255, 255), font=font)
     if credit:
         base_px = max(11, h // 40)              # same size _annot_scale would use
         credit_px = max(10, round(base_px * _CREDIT_SCALE))
         credit_font = _font(credit_px)
         gap = max(4, w // 200)
-        label_right = x + _text_w(draw, label, font)
+        label_right = label_x + _text_w(draw, label, font)
         right_margin = w - x
         avail = right_margin - label_right - gap
         if avail > 0:
@@ -1599,7 +1666,9 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
             # `text` is already composed (see `_imagery_sequence`). `_drawable` is a
             # no-op now (the bundled font draws "←" directly) but stays as the single
             # seam this composed text passes through on its way to `annotate`.
-            rgb = annotate(rgb, _drawable(text), credit_text)
+            # `label` is the clean period key for an observed frame, None for a
+            # generated one (see `_imagery_sequence`) — exactly `is_real`.
+            rgb = annotate(rgb, _drawable(text), credit_text, is_real=(label is not None))
             if not composite:                            # colorbar needs a palette
                 rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4)  # just inside the imagery
             if output:

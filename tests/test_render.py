@@ -1114,7 +1114,7 @@ def test_render_annotates_scene_count_when_present(tmp_path, monkeypatch):
     import gee_animation.render as r
     cfg = _cfg(tmp_path)
     labels = []
-    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="": (labels.append(label) or rgb))
+    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="", **kw: (labels.append(label) or rgb))
 
     def fake_fetch(image, cfg, geometry=None):
         return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
@@ -1139,7 +1139,7 @@ def test_render_composes_pooled_provenance_into_the_drawn_text(tmp_path, monkeyp
     monkeypatch.setattr(r, "_drawable",
                         lambda text: (composed.append(text) or orig_drawable(text)))
     drawn = []
-    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="": (drawn.append(label) or rgb))
+    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="", **kw: (drawn.append(label) or rgb))
 
     def fake_fetch(image, cfg, geometry=None):
         return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
@@ -1158,7 +1158,7 @@ def test_render_leaves_gap_fill_nominal_frames_unmarked(tmp_path, monkeypatch):
     import gee_animation.render as r
     cfg = _cfg(tmp_path)
     drawn = []
-    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="": (drawn.append(label) or rgb))
+    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="", **kw: (drawn.append(label) or rgb))
 
     def fake_fetch(image, cfg, geometry=None):
         return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
@@ -1477,7 +1477,9 @@ def test_annotate_credit_clips_with_ellipsis_rather_than_touch_the_label():
     both whole, the credit -- never the label -- degrades: it is clipped with a
     trailing ellipsis at the point the label ends, rather than the label shrinking
     or the credit vanishing outright."""
-    from gee_animation.render import annotate, _text_w, _annot_scale, _bar_h
+    from gee_animation.render import (
+        annotate, _text_w, _annot_scale, _bar_h, _marker_layout,
+    )
     w, h = 260, 120                    # sized so the full credit cannot fit beside it
     label = "May 2022 · image from 2021 · 1 pass"
     credit = "Contains modified Copernicus Sentinel data 2018–2024"
@@ -1488,9 +1490,11 @@ def test_annotate_credit_clips_with_ellipsis_rather_than_touch_the_label():
     probe = Image.new("RGB", (w, h))
     draw = ImageDraw.Draw(probe)
     font, _ = _annot_scale(h)
-    x = max(4, w // 200)
-    label_right = x + _text_w(draw, label, font)
     bar_h = _bar_h(h)
+    x = max(4, w // 200)
+    y = h - bar_h + max(1, h // 200)
+    _cx, _cy, _d, label_x = _marker_layout(draw, font, x, y, w)   # marker + gap shift
+    label_right = label_x + _text_w(draw, label, font)
     # the label's own pixels are byte-identical whether or not a credit is present
     assert np.array_equal(out[h - bar_h:, :label_right], label_only[h - bar_h:, :label_right])
     # but the credit still draws something (clipped, not dropped) to its right
@@ -1800,7 +1804,7 @@ def test_render_interpolates_between_frames(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     cfg.interpolate = 2
     drawn = []
-    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="": (drawn.append(label) or rgb))
+    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="", **kw: (drawn.append(label) or rgb))
     render([Frame("2022-05", object()), Frame("2022-06", object())], cfg,
            fetch=_flat_fetch, geometry=None)
     assert drawn == ["May 2022", "between May and June 2022 · 33%",
@@ -1814,7 +1818,7 @@ def test_render_scales_generated_frames_with_the_gap(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     cfg.interpolate = 1
     drawn = []
-    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="": (drawn.append(label) or rgb))
+    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="", **kw: (drawn.append(label) or rgb))
     render([Frame("2022-05", object()), Frame("2022-08", object())], cfg,
            fetch=_flat_fetch, geometry=None)
     assert len(drawn) == 5                       # 2 observed + 3 * 1 generated
@@ -1826,7 +1830,7 @@ def test_render_interpolate_zero_is_untouched(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     cfg.interpolate = 0
     drawn = []
-    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="": (drawn.append(label) or rgb))
+    monkeypatch.setattr(r, "annotate", lambda rgb, label, credit="", **kw: (drawn.append(label) or rgb))
     render([Frame("2022-05", object(), 3), Frame("2022-06", object())], cfg,
            fetch=_flat_fetch, geometry=None)
     assert drawn == ["May 2022 · 3 passes", "June 2022"]
@@ -1926,6 +1930,158 @@ def test_render_interpolated_frames_reach_the_encoder(tmp_path, monkeypatch):
     render([Frame("2022-05", object()), Frame("2022-06", object())], cfg,
            fetch=_flat_fetch, geometry=None)
     assert len(seen) == 5                        # 2 observed + 3 generated
+
+
+# --- observed/generated marker (review H5) -----------------------------------------
+#
+# At cinema-mode playback nobody reads a label that changes every ~0.5s (91% of
+# frames in a heavily-interpolated run are generated); a filled/hollow marker beside
+# the label reads peripherally at any speed. This is additive — the percentage text
+# stays exactly as Task 3 left it (labels.generated_text wording); only ink is added,
+# never removed or reworded.
+
+def test_frame_marker_filled_paints_the_centre():
+    from gee_animation.render import _frame_marker
+    img = Image.new("RGB", (60, 60))
+    draw = ImageDraw.Draw(img, "RGBA")
+    _frame_marker(draw, (30, 30), 40, filled=True)
+    arr = np.asarray(img)
+    assert arr[30, 30].sum() > 0                 # solid disc: centre is painted
+
+
+def test_frame_marker_hollow_leaves_a_readable_hole():
+    # The whole point of the ring is that it reads as *hollow* even at small output
+    # sizes -- the centre must stay unpainted with real margin either side of it, not
+    # just a single unlit pixel that would vanish under any compression/resize.
+    from gee_animation.render import _frame_marker
+    size = 40
+    img = Image.new("RGB", (60, 60))
+    draw = ImageDraw.Draw(img, "RGBA")
+    _frame_marker(draw, (30, 30), size, filled=False)
+    arr = np.asarray(img)
+    assert arr[30, 30].sum() == 0                                    # centre: the hole
+    assert arr[30 - 1: 30 + 2, 30 - 1: 30 + 2].sum() == 0             # hole has real margin
+    assert arr[30, 30 - size // 2 + 2].sum() > 0                     # the ring itself draws ink
+
+
+def test_frame_marker_hollow_and_filled_share_the_same_outer_diameter():
+    # A hollow ring that reads as *bigger* than the filled dot would look like a
+    # different, unrelated shape rather than "the same marker, generated version".
+    from gee_animation.render import _frame_marker
+    size = 40
+
+    def _outer_extent(filled):
+        img = Image.new("RGB", (80, 80))
+        draw = ImageDraw.Draw(img, "RGBA")
+        _frame_marker(draw, (40, 40), size, filled=filled)
+        ys, xs = np.nonzero(np.asarray(img).sum(axis=-1))
+        return xs.min(), xs.max(), ys.min(), ys.max()
+
+    fx0, fx1, fy0, fy1 = _outer_extent(True)
+    hx0, hx1, hy0, hy1 = _outer_extent(False)
+    # allow a 1px antialiasing/rounding tolerance either side
+    assert abs(fx0 - hx0) <= 1 and abs(fx1 - hx1) <= 1
+    assert abs(fy0 - hy0) <= 1 and abs(fy1 - hy1) <= 1
+
+
+def test_annotate_draws_a_filled_marker_for_an_observed_frame_by_default():
+    from gee_animation.render import annotate, _marker_layout, _annot_scale, _bar_h
+    w, h = 320, 240
+    rgb = np.zeros((h, w, 3), np.uint8)
+    out = annotate(rgb.copy(), "May 2022")               # is_real defaults True
+
+    probe = Image.new("RGB", (w, h))
+    draw = ImageDraw.Draw(probe)
+    font, _ = _annot_scale(h)
+    bar_h = _bar_h(h)
+    x = max(4, w // 200)
+    y = h - bar_h + max(1, h // 200)
+    cx, cy, _d, _label_x = _marker_layout(draw, font, x, y, w)
+    assert out[round(cy), round(cx)].sum() > 0            # marker centre is painted -> filled
+
+
+def test_annotate_draws_a_hollow_marker_for_a_generated_frame():
+    from gee_animation.render import annotate, _marker_layout, _annot_scale, _bar_h
+    w, h = 320, 240
+    rgb = np.zeros((h, w, 3), np.uint8)
+    out = annotate(rgb.copy(), "between May and June 2022 · 33%", is_real=False)
+
+    probe = Image.new("RGB", (w, h))
+    draw = ImageDraw.Draw(probe)
+    font, _ = _annot_scale(h)
+    bar_h = _bar_h(h)
+    x = max(4, w // 200)
+    y = h - bar_h + max(1, h // 200)
+    cx, cy, _d, _label_x = _marker_layout(draw, font, x, y, w)
+    assert out[round(cy), round(cx)].sum() == 0            # marker centre unpainted -> hollow
+
+
+def test_render_marks_observed_and_generated_frames_with_a_draw_spy(tmp_path, monkeypatch):
+    """2 observations, interpolate: 2 -> [obs, gen, gen, obs]. Review H5's marker must
+    track exactly the same real/generated pattern `_generated_display`/`labels`
+    already draw text for -- frames 0 and 3 filled (observed), 1-2 hollow (generated).
+    """
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.interpolate = 2
+    seen_filled = []
+    real_marker = r._frame_marker
+
+    def spy(draw, xy, size, filled):
+        seen_filled.append(filled)
+        return real_marker(draw, xy, size, filled)
+
+    monkeypatch.setattr(r, "_frame_marker", spy)
+    render([Frame("2022-05", object()), Frame("2022-06", object())], cfg,
+           fetch=_flat_fetch, geometry=None)
+    assert seen_filled == [True, False, False, True]
+
+
+def test_render_non_interpolated_run_marks_every_frame_filled(tmp_path, monkeypatch):
+    # Constraint: a plain run never observes anything but real frames, so "filled"
+    # applies universally there too -- it is a harmless, single-valued marker, not
+    # something that only sometimes means "observed".
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.interpolate = 0
+    seen_filled = []
+    real_marker = r._frame_marker
+
+    def spy(draw, xy, size, filled):
+        seen_filled.append(filled)
+        return real_marker(draw, xy, size, filled)
+
+    monkeypatch.setattr(r, "_frame_marker", spy)
+    render([Frame("2022-05", object(), 3), Frame("2022-06", object())], cfg,
+           fetch=_flat_fetch, geometry=None)
+    assert seen_filled == [True, True]
+
+
+def test_render_marker_lands_in_the_bottom_margin_never_the_imagery(tmp_path):
+    """Same imagery-untouched discipline as the credit/header margin tests: the
+    marker (like the label and credit) belongs to the bottom bar, never the picture,
+    at every frame of an interpolated run -- including the generated (hollow-marker)
+    ones, not just the observed ones the other margin tests exercise."""
+    from gee_animation.render import _margins
+    h, w = 240, 320
+    cfg = _cfg(tmp_path)
+    cfg.index, cfg.palette = "rgb", []       # composite: no colorbar overlay
+    cfg.frame_aoi = None                     # and no scale bar/north arrow
+    cfg.interpolate = 2
+
+    def fake_fetch(image, cfg_, geometry=None):
+        return np.full((h, w, 3), 123, dtype=float), np.ones((h, w), dtype=bool)
+
+    paths = render([Frame("2022-05", "A"), Frame("2022-06", "B")], cfg,
+                   fetch=fake_fetch, geometry=None)
+    top_h, bottom_h = _margins(h, True)     # interpolate>0 adds a caveat -> two-line header
+    for p in sorted(pp for pp in paths if pp.suffix == ".png"):
+        arr = np.asarray(Image.open(p))
+        assert arr.shape[:2] == (h + top_h + bottom_h, w)
+        assert np.all(arr[top_h:top_h + h] == 123)      # imagery untouched
+        bottom_margin = arr[top_h + h:]
+        left_region = bottom_margin[:, :40]              # well inside the marker's zone
+        assert left_region.sum() > 0                      # marker(+label) draws ink there
 
 
 def test_header_names_the_interpolation():
