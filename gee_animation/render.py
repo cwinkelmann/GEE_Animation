@@ -182,6 +182,34 @@ def apply_nodata(rgb: np.ndarray, valid: np.ndarray, color=NODATA_RGB) -> np.nda
     return out
 
 
+_NICE_MID_BASES = (1, 1.5, 2, 2.5, 3, 4, 5)
+
+
+def _nice_mid(vmin: float, vmax: float) -> float:
+    """The roundest value nearest the true midpoint of (vmin, vmax), strictly inside it.
+
+    An exact midpoint like 0.475 reads as false precision on a colorbar tick a lay
+    viewer glances at; a human would round it to "0.5". Candidates are
+    ``{1, 1.5, 2, 2.5, 3, 4, 5} x 10**k`` (k any integer, both signs) — the same
+    round-number ladder a person reaches for when reading an axis. On an exact tie in
+    distance to the true midpoint, the candidate with the smaller absolute value wins
+    (an arbitrary but deterministic, pinned choice). Falls back to the exact midpoint
+    when no candidate lands strictly inside (vmin, vmax) — e.g. a very narrow range.
+    """
+    mid = (vmin + vmax) / 2.0
+    best, best_key = None, None
+    for k in range(-9, 10):
+        scale = 10.0 ** k
+        for base in _NICE_MID_BASES:
+            for cand in (base * scale, -base * scale):
+                if not (vmin < cand < vmax):
+                    continue
+                key = (abs(cand - mid), abs(cand))
+                if best_key is None or key < best_key:
+                    best_key, best = key, cand
+    return best if best is not None else mid
+
+
 def _colorbar_ticks(vmin: float, vmax: float, units: str) -> list:
     """Ordered tick specs ``(value, label, anchor, droppable)`` for the colorbar.
 
@@ -190,15 +218,18 @@ def _colorbar_ticks(vmin: float, vmax: float, units: str) -> list:
     the range straddles it. Both the 0 and the midpoint are always *ticked* but their
     labels are droppable: the caller omits a label that would collide with another.
     A lopsided range makes this necessary — over -3..46 the 0 tick sits at 6% of the
-    ramp and its label lands on top of the "-3", drawing as "-30".
+    ramp and its label lands on top of the "-3", drawing as "-30". The midpoint tick
+    is the *nice* value nearest the true midpoint (see `_nice_mid`), drawn at its own
+    true proportional position — not centred.
     """
     ticks = [(vmin, f"{vmin:g}", "l", False)]
     zero_shown = vmin < 0 < vmax
     if zero_shown:
         ticks.append((0.0, "0", "m", True))
-    vmid = (vmin + vmax) / 2.0
-    if not (zero_shown and vmid == 0.0):   # avoid a duplicate "0" tick (e.g. -3..3)
-        ticks.append((vmid, f"{vmid:g}", "m", True))
+    exact_mid = (vmin + vmax) / 2.0
+    if not (zero_shown and exact_mid == 0.0):   # avoid a duplicate "0" tick (e.g. -3..3)
+        mid = _nice_mid(vmin, vmax)
+        ticks.append((mid, f"{mid:g}", "m", True))
     max_label = f"{vmax:g} {units}" if units else f"{vmax:g}"
     ticks.append((vmax, max_label, "r", False))
     return ticks
@@ -252,18 +283,57 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4) -> np.ndarray:
 
     tick_top, tick_bot = y0 + bar_h, y0 + bar_h + lw + 2
     text_y = tick_bot + 1
+    text_h = draw.textbbox((0, 0), "0", font=font)[3]
+
+    # Word anchors ("bare" / "dense vegetation", "cooler" / "warmer", ...) sit on
+    # their own line below the numeric labels, so a lay viewer reads what the ramp
+    # *means* as well as its numbers — the numbers stay (they're the data; anchors
+    # only supplement). Left-anchored under the ramp's left end / right-anchored under
+    # its right end, mirroring how the min/max ticks are anchored. "" (composites,
+    # or an index the registry has no words for) draws no anchor at all.
+    low_label = getattr(meta, "low_label", "") if meta else ""
+    high_label = getattr(meta, "high_label", "") if meta else ""
+    line_h = draw.textbbox((0, 0), "Ag", font=font)[3]   # incl. descenders
+    anchor_y = text_y + text_h + max(2, lw)
+    low_bounds = _label_bounds(low_label, x0, "l") if low_label else None
+    high_bounds = _label_bounds(high_label, x0 + bar_w, "r") if high_label else None
+    # A narrow ramp can make the two anchor words collide with each other (long words
+    # like "dense vegetation" over a small bar_w). Numbers are the data and never
+    # yield; on a collision the anchors do, and both drop together rather than
+    # leaving one lone, asymmetric word.
+    if low_bounds and high_bounds and low_bounds[1] + gap > high_bounds[0]:
+        show_low = show_high = False
+    else:
+        show_low, show_high = low_bounds is not None, high_bounds is not None
+
+    # No-data swatch: a small NODATA_RGB square + "no data" to the right of the ramp,
+    # so the neutral grey `apply_nodata` paints over cloud/no-data pixels is explained
+    # on the frame instead of reading as a broken render (e.g. an honest 85%-grey
+    # April frame). This is the legend's fix, not a change to the no-data colour
+    # itself.
+    swatch_gap = max(6, lw * 4)
+    swatch_size = bar_h
+    swatch_x0 = x0 + bar_w + swatch_gap
+    swatch_text_x = swatch_x0 + swatch_size + max(3, lw * 2)
+    swatch_label = "no data"
+    swatch_label_bounds = _label_bounds(swatch_label, swatch_text_x, "l")
 
     # Translucent panel behind the whole block. The ramp and its white labels sit on
     # top of the imagery, which can be any colour — white-on-pale-yellow was
     # unreadable. draw_scale_bar already backs its label the same way; without this
     # the legend's legibility depends on whatever the scene happens to look like.
     pad = max(3, lw * 2)
-    text_h = draw.textbbox((0, 0), "0", font=font)[3]
     shown = [(_label_bounds(lb, _x(v), a)) for i, (v, lb, a, _d) in enumerate(ticks)
              if show_label[i]]
-    right = max([x0 + bar_w] + [hi for _lo, hi in shown])
+    if show_low:
+        shown.append(low_bounds)
+    if show_high:
+        shown.append(high_bounds)
+    shown.append(swatch_label_bounds)
+    right = max([x0 + bar_w, swatch_x0 + swatch_size] + [hi for _lo, hi in shown])
     left = min([x0] + [lo for lo, _hi in shown])
-    draw.rectangle([left - pad, y0 - pad, right + pad, text_y + text_h + pad],
+    panel_bottom = anchor_y + line_h if (show_low or show_high) else text_y + text_h
+    draw.rectangle([left - pad, y0 - pad, right + pad, panel_bottom + pad],
                    fill=(0, 0, 0, 130))
 
     for i in range(bar_w):
@@ -277,6 +347,17 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4) -> np.ndarray:
         if show_label[i]:
             lo, _hi = _label_bounds(label, x, anchor)
             draw.text((lo, text_y), label, fill=(255, 255, 255, 255), font=font)
+
+    if show_low:
+        draw.text((low_bounds[0], anchor_y), low_label, fill=(255, 255, 255, 255), font=font)
+    if show_high:
+        draw.text((high_bounds[0], anchor_y), high_label, fill=(255, 255, 255, 255), font=font)
+
+    draw.rectangle([swatch_x0, y0, swatch_x0 + swatch_size, y0 + swatch_size],
+                   fill=tuple(NODATA_RGB) + (255,))
+    draw.text((swatch_text_x, y0 + max(0, (swatch_size - text_h) // 2)), swatch_label,
+              fill=(255, 255, 255, 255), font=font)
+
     return np.asarray(img)
 
 

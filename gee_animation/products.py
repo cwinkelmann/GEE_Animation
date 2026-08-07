@@ -267,6 +267,11 @@ class Index:
     # Physical unit of the index values (e.g. "°C" for thermal indices); "" if
     # unitless (normalized-difference indices, composites). Shown on the colorbar.
     units: str = ""
+    # Word anchors for the colorbar ends -- e.g. "bare"/"dense vegetation" -- so a lay
+    # viewer reads what the ramp *means*, not just its numbers. "" (the default) draws
+    # no anchor; composites have no colorbar at all, so both stay "".
+    low_label: str = ""
+    high_label: str = ""
 
 
 SENSORS = {
@@ -312,25 +317,30 @@ INDICES = {
     "ndvi": Index("ndvi", _REFL,
                   (-1.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _ndvi,
                   bands="NIR, Red", formula="(NIR - Red) / (NIR + Red)",
-                  display_name="Vegetation greenness (NDVI)"),
+                  display_name="Vegetation greenness (NDVI)",
+                  low_label="bare", high_label="dense vegetation"),
     "lst": Index("lst", frozenset({"landsat"}),
                  (-10.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
                  _lst, bands="Thermal (ST_B6/ST_B10)",
                  formula="ST_B * 0.00341802 + 149.0 - 273.15 [C]", units="°C",
-                 display_name="Land surface temperature"),
+                 display_name="Land surface temperature",
+                 low_label="cooler", high_label="warmer"),
     "evi": Index("evi", _REFL,
                  (-1.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _evi,
                  bands="NIR, Red, Blue",
                  formula="2.5*(NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1)",
-                 display_name="Vegetation greenness (EVI)"),
+                 display_name="Vegetation greenness (EVI)",
+                 low_label="bare", high_label="dense vegetation"),
     "ndwi": Index("ndwi", _REFL,
                   (-1.0, 1.0, ["#a1622f", "#f6e8c3", "#2166ac"]), _ndwi,
                   bands="Green, NIR", formula="(Green - NIR) / (Green + NIR)",
-                  display_name="Surface water index (NDWI)"),
+                  display_name="Surface water index (NDWI)",
+                  low_label="dry", high_label="water"),
     "ndmi": Index("ndmi", _REFL,
                   (-1.0, 1.0, ["#8c510a", "#f6e8c3", "#01665e"]), _ndmi,
                   bands="NIR, SWIR1", formula="(NIR - SWIR1) / (NIR + SWIR1)",
-                  display_name="Vegetation moisture (NDMI)"),
+                  display_name="Vegetation moisture (NDMI)",
+                  low_label="dry", high_label="moist"),
     "rgb": Index("rgb", _REFL, (0.0, 0.3, None), _rgb,
                  bands="Red, Green, Blue", composite=True,
                  display_name="True colour"),
@@ -342,7 +352,8 @@ INDICES = {
                        _lst_sharp, bands="Thermal(100m) + NIRv(30m)",
                        formula="TsHARP: fit LST~NIRv @100m, apply @30m, +coarse residual",
                        units="°C",
-                       display_name="Land surface temperature (sharpened)"),
+                       display_name="Land surface temperature (sharpened)",
+                       low_label="cooler", high_label="warmer"),
 }
 
 
@@ -357,7 +368,8 @@ INDICES["lst_smw"] = Index("lst_smw", frozenset({"landsat"}),
                            build_collection=smw_lst.landsat_collection,
                            bands="TOA Tb, NIR, Red, Green, QA",
                            formula="A*Tb/e + B/e + C  (Ermida 2020 SMW)", units="°C",
-                           display_name="Land surface temperature (split-window)")
+                           display_name="Land surface temperature (split-window)",
+                           low_label="cooler", high_label="warmer")
 
 # MODIS LST (MOD11A1 Terra daily, 1 km) — coarse but ~daily, so it fills the
 # cloud-locked months Landsat's 16-day revisit misses.
@@ -365,7 +377,8 @@ INDICES["lst_modis"] = Index("lst_modis", frozenset({"modis_lst"}),
                              (-10.0, 40.0, _LST_PALETTE), _lst_modis,
                              bands="MOD11A1 LST_Day_1km (1 km, daily)",
                              formula="LST_Day_1km * 0.02 - 273.15 [C]", units="°C",
-                             display_name="Land surface temperature (MODIS)")
+                             display_name="Land surface temperature (MODIS)",
+                             low_label="cooler", high_label="warmer")
 
 
 def get_product(sensor: str, index: str):

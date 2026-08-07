@@ -1610,6 +1610,183 @@ def test_colorbar_draws_a_backing_panel_for_contrast():
     assert out[h - 4, w - 4].tolist() == [255, 255, 255]
 
 
+# --- _nice_mid: honest (round) mid tick, not the exact/false-precision midpoint ---
+
+def test_nice_mid_worked_table():
+    # Hand-verified: an exact midpoint like 0.475 or 30.5 reads as false precision to
+    # a lay viewer; the nice value a human would round to is what's drawn.
+    from gee_animation.render import _nice_mid
+    assert _nice_mid(0, 0.95) == 0.5
+    assert _nice_mid(18, 43) == 30
+    assert _nice_mid(-3, 46) == 20
+    assert _nice_mid(-0.25, 1.0) == 0.4
+
+
+def test_nice_mid_tie_breaks_to_the_smaller_absolute_value():
+    # Midpoint 1.25 is exactly equidistant from candidates 1 and 1.5 (both 0.25 away)
+    # -- the tie is pinned to the smaller absolute value (1), not left to iteration
+    # order or the sign of the candidate.
+    from gee_animation.render import _nice_mid
+    assert _nice_mid(0, 2.5) == 1.0
+
+
+def test_nice_mid_falls_back_to_the_exact_midpoint_when_nothing_fits_inside():
+    # No {1, 1.5, 2, 2.5, 3, 4, 5} x 10**k candidate lies strictly inside (1.0, 1.05):
+    # 1.0 itself is the boundary (excluded, not strictly inside) and 1.5 overshoots.
+    # The only honest answer left is the exact midpoint.
+    from gee_animation.render import _nice_mid
+    assert _nice_mid(1.0, 1.05) == pytest.approx(1.025)
+
+
+def test_colorbar_mid_tick_drawn_at_the_nice_values_true_position_not_centre():
+    # 18..43's nice mid is 30, not the exact-midpoint 30.5 -- and 30 sits at 48% of
+    # the ramp, not its geometric centre. The tick must land there, not at bar_w // 2.
+    from gee_animation.render import _nice_mid
+    w, h = 300, 80
+    rgb = np.zeros((h, w, 3), np.uint8)
+    cfg = types.SimpleNamespace(index="lst", viz_min=18.0, viz_max=43.0,
+                                palette=["#0000ff", "#ff0000"])
+    out = add_colorbar(rgb, cfg)
+
+    bar_w = max(20, int(w * 0.4))
+    bar_h = max(6, h // 20)
+    x0, y0 = max(4, w // 200), 4
+    tick_row = y0 + bar_h + 1
+
+    nice = _nice_mid(18.0, 43.0)
+    assert nice == 30.0
+    x_nice = x0 + (nice - 18.0) / (43.0 - 18.0) * bar_w    # float: 61.6, not an int px
+    x_centre = x0 + bar_w // 2
+    assert abs(x_nice - x_centre) > 1, "18..43's nice mid (30) is not the ramp's centre"
+    # a tick line lands within a couple of px of the nice value's own true position
+    # (sub-pixel line rasterisation, not a single exact column)
+    window = out[tick_row, int(x_nice) - 1: int(x_nice) + 3]
+    assert (window == [255, 255, 255]).all(axis=-1).any(), \
+        "no tick near the nice mid's true (non-centred) position"
+    # and nothing was drawn at the old exact-midpoint centre instead
+    centre_window = out[tick_row, x_centre - 1: x_centre + 2]
+    assert not (centre_window == [255, 255, 255]).all(axis=-1).any(), \
+        "a tick was drawn at the ramp's centre, not the nice mid's true position"
+
+
+# --- word anchors ("bare"/"dense vegetation", "cooler"/"warmer", ...) -------------
+
+def test_colorbar_draws_word_anchors_for_the_index():
+    # "cooler"/"warmer" (lst's low/high labels) land on their own line under the
+    # ramp's ends -- numbers alone don't say what warm/cool means to a lay viewer.
+    from gee_animation.render import _annot_scale
+    w, h = 400, 120
+    rgb = np.zeros((h, w, 3), np.uint8)
+    cfg = types.SimpleNamespace(index="lst", viz_min=-3.0, viz_max=46.0,
+                                palette=["#0000ff", "#ff0000"])
+    out = add_colorbar(rgb.copy(), cfg)
+
+    bar_w = max(20, int(w * 0.4))
+    bar_h = max(6, h // 20)
+    x0, y0 = max(4, w // 200), 4
+    font, lw = _annot_scale(h)
+    scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    text_h = scratch.textbbox((0, 0), "0", font=font)[3]
+    line_h = scratch.textbbox((0, 0), "Ag", font=font)[3]
+    tick_bot = y0 + bar_h + lw + 2
+    text_y = tick_bot + 1
+    anchor_y = text_y + text_h + max(2, lw)
+
+    left_band = out[anchor_y: anchor_y + line_h + 1, x0: x0 + 60]
+    assert left_band.sum() > 0, "the low-end anchor word ('cooler') was not drawn"
+    right_band = out[anchor_y: anchor_y + line_h + 1, x0 + bar_w - 60: x0 + bar_w]
+    assert right_band.sum() > 0, "the high-end anchor word ('warmer') was not drawn"
+
+
+def test_colorbar_omits_word_anchors_when_the_index_has_none():
+    # An index the registry has no low/high words for draws no anchor row at all --
+    # not blank labels, nothing.
+    from gee_animation.render import _annot_scale
+    w, h = 400, 120
+    rgb = np.zeros((h, w, 3), np.uint8)
+    cfg = types.SimpleNamespace(index="not_a_real_index", viz_min=-3.0, viz_max=46.0,
+                                palette=["#0000ff", "#ff0000"])
+    out = add_colorbar(rgb.copy(), cfg)
+
+    bar_w = max(20, int(w * 0.4))
+    bar_h = max(6, h // 20)
+    x0, y0 = max(4, w // 200), 4
+    font, lw = _annot_scale(h)
+    scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    text_h = scratch.textbbox((0, 0), "0", font=font)[3]
+    line_h = scratch.textbbox((0, 0), "Ag", font=font)[3]
+    tick_bot = y0 + bar_h + lw + 2
+    text_y = tick_bot + 1
+    anchor_y = text_y + text_h + max(2, lw)
+
+    anchor_band = out[anchor_y: anchor_y + line_h + 1, :]
+    assert anchor_band.sum() == 0, "no anchor row should be drawn for an unlabeled index"
+
+
+# --- no-data swatch (explains apply_nodata's neutral grey on the frame itself) ----
+
+def test_colorbar_no_data_swatch_matches_nodata_rgb():
+    from gee_animation.render import NODATA_RGB, _annot_scale
+    w, h = 400, 120
+    rgb = np.zeros((h, w, 3), np.uint8)
+    cfg = types.SimpleNamespace(index="lst", viz_min=-3.0, viz_max=46.0,
+                                palette=["#0000ff", "#ff0000"])
+    out = add_colorbar(rgb, cfg)
+
+    bar_w = max(20, int(w * 0.4))
+    bar_h = max(6, h // 20)
+    x0, y0 = max(4, w // 200), 4
+    _font_, lw = _annot_scale(h)
+    swatch_gap = max(6, lw * 4)
+    swatch_size = bar_h
+    swatch_x0 = x0 + bar_w + swatch_gap
+    cy, cx = y0 + swatch_size // 2, swatch_x0 + swatch_size // 2
+    assert out[cy, cx].tolist() == list(NODATA_RGB)
+
+
+def test_colorbar_no_data_swatch_has_a_label():
+    from gee_animation.render import _annot_scale
+    w, h = 400, 120
+    rgb = np.zeros((h, w, 3), np.uint8)
+    cfg = types.SimpleNamespace(index="lst", viz_min=-3.0, viz_max=46.0,
+                                palette=["#0000ff", "#ff0000"])
+    out = add_colorbar(rgb, cfg)
+
+    bar_w = max(20, int(w * 0.4))
+    bar_h = max(6, h // 20)
+    x0, y0 = max(4, w // 200), 4
+    font, lw = _annot_scale(h)
+    swatch_gap = max(6, lw * 4)
+    swatch_size = bar_h
+    swatch_x0 = x0 + bar_w + swatch_gap
+    swatch_text_x = swatch_x0 + swatch_size + max(3, lw * 2)
+
+    band = out[y0: y0 + swatch_size, swatch_text_x: swatch_text_x + 80]
+    assert band.sum() > 0, "the 'no data' label was not drawn beside the swatch"
+
+
+def test_colorbar_composite_has_no_colorbar_and_so_no_swatch(tmp_path):
+    # composites (rgb/cir) never call add_colorbar at all (see render()'s "if not
+    # composite" gate) -- confirm the no-data swatch can't appear on one either, by
+    # checking the composite render path draws no colorbar-shaped ink in that corner.
+    cfg = _cfg(tmp_path)
+    cfg.index, cfg.palette = "rgb", []
+    cfg.frame_aoi = None
+    h, w = 120, 400
+
+    def fake_fetch(image, cfg_, geometry=None):
+        return np.zeros((h, w, 3), dtype=float), np.ones((h, w), dtype=bool)
+
+    paths = render([Frame("2022-05", object(), 1)], cfg, fetch=fake_fetch, geometry=None)
+    from PIL import Image as _Image
+    arr = np.asarray(_Image.open(next(p for p in paths if p.suffix == ".png")))
+    from gee_animation.render import _margins
+    top_h, bottom_h = _margins(h, False)
+    # the imagery band, where a colorbar (and its swatch) would have been drawn, is
+    # untouched -- still pure black, exactly what fake_fetch returned.
+    assert np.all(arr[top_h:top_h + h] == 0)
+
+
 # --- frame interpolation (render.interpolate) -------------------------------------
 
 def _flat_fetch(image, cfg, geometry=None):
