@@ -198,7 +198,12 @@ quantising, so the size difference from the MP4 (§3's table: a few MB at reason
 **Prefer MP4.** It plays natively in every modern browser and every platform in §3's
 table accepts it; the GIF path exists as a fallback for players that genuinely cannot
 show a video (`render.gif: false` turns it off entirely, which is the right default
-for anything meant to be published rather than previewed locally). If a GIF is
+for anything meant to be published rather than previewed locally). Note what that
+costs: the GIF is also the fallback if the MP4 *encode* fails (missing/broken ffmpeg,
+for instance), so with `gif: false` such a run raises and writes no animation at all,
+where with the GIF on it would have degraded to a GIF. That is deliberate — silently
+returning only PNGs would be worse — but if you are rendering somewhere the ffmpeg
+install is not something you control, leave the GIF on. If a GIF is
 unavoidable — an old forum, a README badge, a platform that only takes GIFs — trim the
 run to a handful of representative frames (fewer periods, not more `interpolate`) and
 accept a materially smaller, materially less complete animation; there is no

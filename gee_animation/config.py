@@ -31,6 +31,25 @@ class ConfigError(ValueError):
 _RENDER_FLAGS = ("gif", "frames")
 
 
+def _opt_int(render: dict, key: str):
+    """A `render.<key>` integer, or None when the key is absent/null.
+
+    `int()` on a YAML string raises a bare `ValueError`, which `from_yaml`'s `except
+    KeyError` does not catch — so a typo'd ``quality: abc`` escaped as an unhandled
+    exception and `cli.main` printed a traceback instead of the one-line config error
+    every other bad key gets. The message names both the key and the offending value,
+    because "invalid literal for int()" on its own does not tell you *which* of a
+    config's numbers is wrong.
+    """
+    value = render.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"render.{key} must be a whole number, got {value!r}") from exc
+
+
 def _flag(render: dict, key: str, default=True):
     """A `render.<key>` boolean, or `default` when the key is absent.
 
@@ -233,7 +252,7 @@ class RunConfig:
                 cache_dir=(str(render["cache_dir"]) if render.get("cache_dir") else None),
                 interpolate=int(render.get("interpolate", 0) or 0),
                 interpolate_mode=str(render.get("interpolate_mode") or "auto"),
-                quality=(int(render["quality"]) if render.get("quality") is not None else None),
+                quality=_opt_int(render, "quality"),
             )
         except KeyError as exc:
             raise ConfigError(f"missing required config key: {exc}") from exc

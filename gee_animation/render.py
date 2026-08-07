@@ -235,14 +235,25 @@ def _colorbar_ticks(vmin: float, vmax: float, units: str) -> list:
     return ticks
 
 
-def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4) -> np.ndarray:
+def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
+                 x_offset: int = 0, region_w: int | None = None) -> np.ndarray:
+    """Draw the index legend into the top-left of the imagery.
+
+    `region_w`/`x_offset` describe the *imagery* inside the array, which is not the
+    whole array once `render()` has letterboxed the side bars on: the legend is an
+    overlay on the picture, so it is sized and placed against the picture's width
+    (`region_w`, default: the array's) starting at `x_offset`. The header and bottom
+    bars deliberately do the opposite and span the full canvas — they are frame
+    furniture, not overlays.
+    """
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
-    w, h = img.size
+    _canvas_w, h = img.size
+    w = int(region_w) if region_w else _canvas_w
     font, lw = _annot_scale(h)
     bar_w = max(20, int(w * 0.4))
     bar_h = max(6, h // 20)
-    x0, y0 = max(4, w // 200), y_offset
+    x0, y0 = x_offset + max(4, w // 200), y_offset
     vmin, vmax = cfg.viz_min, cfg.viz_max
     ramp = colorize(
         np.linspace(vmin, vmax, bar_w)[None, :],
@@ -594,33 +605,56 @@ def _fit_line_height(draw: ImageDraw.ImageDraw, px: int, max_h: int, floor_px: i
 #: Enough to read as a headline; the bar height caps it on small frames.
 _TITLE_SCALE = 1.5
 
+#: How far line 2 may shrink below its nominal size to keep subtitle *and* caveats
+#: whole on one row. Deliberately the same fraction as `_CREDIT_SCALE`: 0.8 of the
+#: body size is a size this project already treats as readable on a frame, so
+#: spending it here costs no legibility the credit line does not already cost.
+#: Below that the line stops shrinking and the subtitle starts paying instead.
+_LINE2_MIN_SCALE = 0.8
+
 
 def _fit_header_line2(draw: ImageDraw.ImageDraw, subtitle: str, caveats: str,
                       px: int, avail_w: int) -> tuple:
-    """(font, text) for header line 2, at `px` — never shrunk below it to gain width.
+    """(font, text) for header line 2, starting at `px`.
 
-    Line 2 carries the provenance caveats, which is why it does *not* shrink the way
-    `_fit_bar_text` does for the title: a caveat set at 10 px on a 4K frame is a
-    caveat nobody reads. When the line is too wide, the **subtitle** pays — trimmed
-    with "…", and dropped entirely if even that will not fit. The caveat outranks the
-    decoration; that ordering is an integrity requirement, not a styling preference.
+    Line 2 carries the provenance caveats, so it never shrinks the way `_fit_bar_text`
+    does for the title — a caveat set at 10 px on a 4K frame is a caveat nobody reads.
+    It does, however, shrink a *bounded* amount (down to `_LINE2_MIN_SCALE` of `px`,
+    never below `_font`'s 10 px floor) when that is what it takes to keep the subtitle
+    and the caveats both whole on the row. The nominal size is `h // 40`, i.e. driven
+    by frame *height*, while the room for the line is a *width* — the two are
+    unrelated quantities, and on a tall or near-square frame the nominal size can
+    overshoot the width by a few percent for no reason a viewer would recognise.
+    Giving up those few percent is invisible; dropping a configured subtitle is not.
+
+    When even the smallest permitted size will not hold both, the **subtitle** pays —
+    trimmed with "…", and dropped entirely if even that will not fit. The caveat
+    outranks the decoration; that ordering is an integrity requirement, not a styling
+    preference. `render()` warns when a configured subtitle reaches that point (see
+    `header_subtitle_fits`), because silently dropping user-configured text is worse
+    than an ugly frame.
 
     Only when the caveats alone overflow with no subtitle left to give — a narrow
     frame; measurably below ~524 px wide for the pooled caveat, and portrait aspects
     reach that sooner — does the shrink-then-truncate fallback apply to them, because
     at that point there is nothing left to trade.
 
-    `px` is a *width* floor, which is a separate question from whether the line fits
-    its row vertically: the caller passes a size already capped by `_fit_line_height`
-    so the glyphs cannot spill out of the header zone. On any frame whose bar is tall
-    enough for it — every output at or above roughly 480 px — that cap is inert and
-    `px` is exactly `_annot_scale`'s size.
+    Whether the line fits its *row* vertically is a separate question: the caller
+    passes a size already capped by `_fit_line_height`, and shrinking only ever makes
+    the glyphs shorter, so the glyphs cannot spill out of the header zone either way.
     """
-    font = _font(px)
     joined = " · ".join(p for p in (subtitle, caveats) if p)
+    font = _font(px)
     if _text_w(draw, joined, font) <= avail_w:
         return font, joined
-    if not caveats:                       # decoration only: trim it at the floor size
+    if subtitle and caveats:
+        # Bounded shrink — the cheapest way to keep BOTH strings whole (see docstring).
+        floor = max(10, round(px * _LINE2_MIN_SCALE))
+        for size in range(px - 1, floor - 1, -1):
+            small = _font(size)
+            if _text_w(draw, joined, small) <= avail_w:
+                return small, joined
+    if not caveats:                       # decoration only: trim it at the nominal size
         return font, _truncate(draw, subtitle, font, avail_w)
     if subtitle:
         budget = avail_w - _text_w(draw, f" · {caveats}", font)
@@ -630,6 +664,49 @@ def _fit_header_line2(draw: ImageDraw.ImageDraw, subtitle: str, caveats: str,
         if _text_w(draw, caveats, font) <= avail_w:
             return font, caveats          # subtitle dropped; the caveat stays whole
     return _fit_bar_text(draw, caveats, px, avail_w)      # last resort (see docstring)
+
+
+def _header_metrics(draw: ImageDraw.ImageDraw, w: int, h: int) -> tuple:
+    """`(x, pad, avail_w, bar_h, title_px, line2_px)` for a header on a `w` x `h` frame.
+
+    The single owner of the header's layout arithmetic, so `draw_info_bar` and
+    `header_subtitle_fits` cannot drift into disagreeing about how much room line 2
+    has. `w`/`h` are the dimensions of the array `draw_info_bar` is handed — i.e. the
+    **full padded canvas**, side bars included (see `render()`): the letterbox bars
+    are part of the frame the header spans, and laying the text out against the
+    narrower imagery width would leave up to half the frame's width empty while
+    truncating the text for want of room.
+    """
+    pad = max(1, h // 200)
+    x = max(4, w // 200)
+    avail_w = max(1, w - 2 * x)
+    bar_h = _bar_h(h)                 # sized from the FULL frame, not any crop
+    avail_line_h = bar_h - pad
+    # `_annot_scale`'s size is what line 2 wants; `_fit_line_height` only lowers it on
+    # frames whose bar is too short to hold it (see `_fit_header_line2`). The title is
+    # larger, and never smaller than line 2.
+    base_px = max(11, h // 40)
+    line2_px = _fit_line_height(draw, base_px, avail_line_h, 10)
+    title_px = _fit_line_height(draw, round(base_px * _TITLE_SCALE), avail_line_h, line2_px)
+    return x, pad, avail_w, bar_h, title_px, line2_px
+
+
+def header_subtitle_fits(w: int, h: int, subtitle: str, caveats: str) -> bool:
+    """Whether `draw_info_bar` can draw `subtitle` **in full** on a `w` x `h` frame.
+
+    Asked once per run by `render()` so a configured subtitle that line 2 cannot hold
+    is reported rather than silently swallowed — the failure mode this exists for is a
+    `subtitle:` key that renders nothing at all on exactly the runs (pooled,
+    interpolated) whose caveats make line 2 long. Shares `_header_metrics` and
+    `_fit_header_line2` with the drawing path, so the answer is the drawing path's
+    own, not a second estimate of it.
+    """
+    if not subtitle:
+        return True
+    draw = ImageDraw.Draw(Image.new("RGB", (1, 1)), "RGBA")
+    _x, _pad, avail_w, _bar_h, _title_px, line2_px = _header_metrics(draw, w, h)
+    _font_, text = _fit_header_line2(draw, subtitle, caveats, line2_px, avail_w)
+    return subtitle in text
 
 
 def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
@@ -648,6 +725,14 @@ def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
     `_fit_header_line2`, which protects the caveat instead. The bar rectangle and the
     vertical placement never depend on the text.
 
+    The width the text is laid out against is the width of the array handed in, and
+    `render()` hands in the **already side-padded canvas** — so on a letterboxed
+    aspect the bar spans the black side bars too and the text gets the whole canvas to
+    use. It used to be laid out on the bare imagery, which at 16:9 can be little over
+    half the canvas: the frame was mostly empty black while the header truncated for
+    want of room. `_header_metrics` owns that arithmetic for this function and for
+    `header_subtitle_fits`.
+
     **The header is drawn into its own zone and clipped to it**, rather than onto the
     full frame. Font metrics are not the same quantity as the layout arithmetic: a
     line's row is `_bar_h` tall (12 px floor) while `_font` only shrinks to 10 px, and
@@ -662,23 +747,14 @@ def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
     """
     out = rgb.astype(np.uint8, copy=True)   # our own buffer — safe to write the zone into
     h, w = out.shape[:2]
-    bar_h = _bar_h(h)                 # sized from the FULL frame, not the crop
     two_line = bool(subtitle or caveats)
+    probe = ImageDraw.Draw(Image.new("RGB", (1, 1)), "RGBA")
+    x, pad, avail_w, bar_h, title_px, line2_px = _header_metrics(probe, w, h)
     # The zone this header owns: exactly the top margin `_margins` reserved for it
     # (`bar_h` per line, +1 because PIL's `rectangle` includes its bottom edge).
     zone_h = min(h, bar_h * (2 if two_line else 1) + 1)
     img = Image.fromarray(out[:zone_h], "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
-    pad = max(1, h // 200)
-    x = max(4, w // 200)
-    avail_w = max(1, w - 2 * x)
-    avail_line_h = bar_h - pad
-    # `_annot_scale`'s size is what line 2 wants; `_fit_line_height` only lowers it on
-    # frames whose bar is too short to hold it (see `_fit_header_line2`). The title is
-    # larger, and never smaller than line 2.
-    base_px = max(11, h // 40)
-    line2_px = _fit_line_height(draw, base_px, avail_line_h, 10)
-    title_px = _fit_line_height(draw, round(base_px * _TITLE_SCALE), avail_line_h, line2_px)
     title_font, title = _fit_bar_text(draw, title, title_px, avail_w)
     draw.rectangle([0, 0, w, bar_h * (2 if two_line else 1)], fill=(0, 0, 0, 140))
     draw.text((x, pad), title, fill=(255, 255, 255, 255), font=title_font)
@@ -775,9 +851,16 @@ def annotate(rgb: np.ndarray, label: str, credit: str = "", is_real: bool = True
     for the other. If they would collide even at the credit's floor size (an
     extremely narrow frame), `credit` is the one that gives: it is clipped with a
     trailing "…" at the point where `label` ends, rather than shrinking/truncating
-    the marker/`label` or omitting `credit` outright. This is a last-resort
-    degradation, not a routine truncation — on any realistic output width both draw
-    whole.
+    the marker/`label` or omitting `credit` outright.
+
+    That clipping is a last-resort degradation, and how often it is actually reached
+    is a property of the *width this bar is given*, not of this function. `render()`
+    now hands it the full letterboxed canvas rather than the bare imagery (see
+    `draw_info_bar`), which is what makes "both draw whole" true at ordinary output
+    sizes: on the bare imagery of a 16:9 render the Copernicus notice was clipped
+    mid-word at every preset from 768 px to 4K, because the imagery was little over
+    half the frame. Called directly on a narrow array it will still clip — the
+    guarantee lives in the layout, not here.
     """
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
@@ -1603,6 +1686,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     # header, resolved once rather than per frame — see `_default_credit`.
     credit_text = _default_credit(cfg)
     output = None      # (cw, ch, pw, ph, method) screen layout, computed on frame 1
+    checked_subtitle = False   # the "will the subtitle fit?" warning fires at most once
     region_width = getattr(cfg, "region_line_width", None) or 2
     region_masks = None   # (casing_mask, core_mask); built once below, then reused
     workers = max(1, int(getattr(cfg, "workers", DEFAULT_WORKERS) or DEFAULT_WORKERS))
@@ -1624,7 +1708,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         a bounded lookahead; everything here stays strictly ordered and single-threaded,
         so output is identical to workers=1.
         """
-        nonlocal output, region_masks
+        nonlocal output, region_masks, checked_subtitle
         # Observed frames are written out in small batches rather than one at a time
         # (`_write_frames` encodes a batch across `workers` threads — a real ~2.8x, zlib
         # releases the GIL) or all at the end (which would retain every frame, the very
@@ -1669,10 +1753,31 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                 # Georeferenced-adjacent, same as the scale bar it stacks above: drawn
                 # on pure imagery, before the margins exist (Trap 1 — see draw_region).
                 rgb = draw_north_arrow(rgb, frame_width_m)
+            # Letterbox the SIDE bars on before the label bars are drawn, so the header
+            # and the bottom bar span the full output width instead of only the imagery.
+            # At 16:9 the imagery can be a little over half the canvas — laying the text
+            # out on it left the rest of the frame empty black while truncating the
+            # subtitle and the licence line. Georeferenced overlays are already on
+            # (above), on pure imagery, so Trap 1 is untouched; the vertical half of the
+            # letterbox still happens last, below.
+            imagery_w = rgb.shape[1]
+            canvas_w = max(imagery_w, output[0]) if output else imagery_w
+            rgb = _letterbox(rgb, canvas_w, rgb.shape[0])
             # Now grow the canvas and let the (shape-preserving) bar drawers fill the new
             # top/bottom strips, so the labels sit beside the imagery instead of over it.
             top_h, bottom_h = _margins(rgb.shape[0], two_line_header)
             rgb = add_margins(rgb, top_h, bottom_h)
+            if not checked_subtitle:
+                # Run-level geometry: the same answer for every frame, so ask once.
+                checked_subtitle = True
+                if header_subtitle and not header_subtitle_fits(
+                        rgb.shape[1], rgb.shape[0], header_subtitle, header_caveats):
+                    log.warning(
+                        "subtitle %r does not fit the header beside this run's "
+                        "provenance caveats (%r) and will be shortened or dropped — "
+                        "shorten the subtitle or render wider; the caveats are kept "
+                        "in full because they are an honesty requirement",
+                        header_subtitle, header_caveats)
             rgb = draw_info_bar(rgb, header_title, header_subtitle, header_caveats)
             # `text` is already composed (see `_imagery_sequence`). `_drawable` is a
             # no-op now (the bundled font draws "←" directly) but stays as the single
@@ -1681,9 +1786,13 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
             # generated one (see `_imagery_sequence`) — exactly `is_real`.
             rgb = annotate(rgb, _drawable(text), credit_text, is_real=(label is not None))
             if not composite:                            # colorbar needs a palette
-                rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4)  # just inside the imagery
+                # Just inside the imagery — which is inset by the side bars added above,
+                # hence the explicit imagery origin/width (see `add_colorbar`).
+                rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4,
+                                   x_offset=(canvas_w - imagery_w) // 2,
+                                   region_w=imagery_w)
             if output:
-                rgb = _letterbox(rgb, output[0], output[1])
+                rgb = _letterbox(rgb, output[0], output[1])   # vertical half only now
             if want_frames and label is not None:
                 # Observed frames only: 600 PNGs of which 540 were never observed would
                 # be noise, and a generated frame has no period key to name a file with.

@@ -499,9 +499,15 @@ def test_header_caveats_are_plain_language(monkeypatch):
 
 
 def test_header_line_two_truncates_the_subtitle_never_the_caveat(monkeypatch):
-    # (c) Legibility floor / review M1: line 2 is drawn at the _annot_scale size and
-    # is not allowed to shrink below it, so when it overflows something must give.
-    # The caveat outranks the decoration: the SUBTITLE is what gets the "…".
+    # (c) Legibility floor / review M1: line 2 is held at (or near) the _annot_scale
+    # size, so when it overflows something must give. The caveat outranks the
+    # decoration: the SUBTITLE is what gets the "…".
+    #
+    # Re-derived after the full-canvas header fix, which lets line 2 give up a bounded
+    # few percent (_LINE2_MIN_SCALE) before it starts trimming. The strict equality
+    # below still holds for THIS input -- the subtitle here is ~125 chars, four times
+    # too long for the row, so no size within the permitted band fits it and the
+    # shrink is skipped entirely -- and the band itself is asserted separately.
     from gee_animation.render import draw_info_bar, _annot_scale
     w, h = 640, 300
     caveat = "every frame re-picked from 2018–2024 — not a time series"
@@ -520,7 +526,187 @@ def test_header_line_two_truncates_the_subtitle_never_the_caveat(monkeypatch):
 
     from gee_animation.render import _fit_header_line2
     font, _text = _fit_header_line2(scratch, subtitle, caveat, annot_font.size, w - 8)
-    assert font.size == annot_font.size, "line 2 must never render below the floor size"
+    assert font.size == annot_font.size, "no permitted size fits this subtitle at all"
+
+
+# --- R: the header/bottom bar own the whole canvas width, not the imagery width ----
+#
+# Root cause behind two critical review findings. `draw_info_bar` and `annotate` lay
+# text out against the width of the array they are handed, and `render()` used to hand
+# them the bare *imagery* -- which on a letterboxed aspect is a fraction of the output
+# (at 16:9 with a near-square AOI, ~890 px of a 1920 px canvas). So a configured
+# subtitle and the Copernicus licence notice were truncated for want of room while
+# more than half the frame's width sat empty and black beside them. `render()` now
+# letterboxes the SIDE bars on before the label bars are drawn.
+
+_CAVEAT_POOLED = "every frame re-picked from 2018–2024 — not a time series"
+_SUBTITLE_30 = "Grumsiner Forst, Brandenburg D"          # 29 chars + the run's title
+
+
+def _audience_cfg(tmp_path, preset, aspect, subtitle=_SUBTITLE_30, interpolate=2):
+    """A pooled + interpolated + titled + subtitled run -- the exact shape the
+    audience-communication keys were built for, and the one the header used to fail on."""
+    cfg = _cfg(tmp_path, name="aud")
+    cfg.sensor = "sentinel2"
+    cfg.start, cfg.end = "2022-05-01", "2022-08-01"
+    cfg.preset, cfg.aspect = preset, aspect
+    cfg.title = "Grumsin forest — vegetation greenness"
+    cfg.subtitle = subtitle
+    cfg.pool_years, cfg.pool_strategy = [2018, 2024], "least_cloudy"
+    cfg.interpolate = interpolate
+    cfg.gif, cfg.frames = False, False
+    return cfg
+
+
+def _wide_fetch(image, cfg_, geometry=None):
+    return np.zeros((100, 200)), np.ones((100, 200), dtype=bool)
+
+
+@pytest.mark.parametrize("preset,aspect", [
+    (768, "16:9"), ("480p", "16:9"), ("720p", "16:9"), ("1080p", "16:9"),
+    (1920, "16:9"), ("4k", "16:9"),
+    ("1080p", "match"),          # no side bars at all -- must still fit
+    ("1080p", "4:3"), ("1080p", "1:1"),
+])
+def test_render_draws_subtitle_and_caveats_whole_on_a_pooled_interpolated_run(
+        tmp_path, monkeypatch, preset, aspect):
+    """Critical finding 1: with pool_years + interpolate set, the subtitle rendered as
+    0 of 30 characters at 768, 890, 1280, 1920 AND 3840 px -- line 2's font scales with
+    frame height, so the character budget was resolution-independent and the headline
+    config key of this branch only worked on runs with no caveats, i.e. never on the
+    pooled/interpolated runs it was written for. Both strings must now draw in full."""
+    seen = _text_spy(monkeypatch)
+    cfg = _audience_cfg(tmp_path, preset, aspect)
+    render([Frame("2022-05", "A"), Frame("2022-06", "B")], cfg,
+           fetch=_wide_fetch, geometry=None)
+    line2 = next(t for t in seen if _CAVEAT_POOLED in t)
+    assert cfg.subtitle in line2, "the configured subtitle must be drawn in full"
+    assert "2 generated frames between observations" in line2, "caveats stay whole too"
+    assert "…" not in line2
+
+
+@pytest.mark.parametrize("preset", [768, 1920])
+def test_render_draws_the_copernicus_notice_whole_on_every_frame(tmp_path, monkeypatch,
+                                                                 preset):
+    """Critical finding 2: 'Contains modified Copernicus Sentinel …' truncated mid-word
+    at every resolution from 768 px to 4K. That string is a licence term, not a caption
+    -- a clipped one is not the notice the Copernicus licence asks for. Checked on the
+    generated (hollow-marker) frames as well as the observed ones: interpolation pushes
+    the label wider ('between May and June 2022 · 33%'), which squeezes the credit."""
+    seen = _text_spy(monkeypatch)
+    cfg = _audience_cfg(tmp_path, preset, "16:9")
+    render([Frame("2022-05", "A"), Frame("2022-06", "B")], cfg,
+           fetch=_wide_fetch, geometry=None)
+    credits = [t for t in seen if "Copernicus" in t]
+    # 2 observed + 2 generated frames all carry the notice, and all carry it whole.
+    assert len(credits) == 4
+    assert set(credits) == {"Contains modified Copernicus Sentinel data 2018–2024"}
+
+
+def test_render_bars_span_the_full_canvas_not_just_the_imagery(tmp_path, monkeypatch):
+    """The structural half of the R fix, observed on pixels rather than on strings: the
+    header and bottom bars must reach the canvas edges, so the black side bars are part
+    of the bar and not a strip of unused width beside a cramped one."""
+    import gee_animation.render as r
+    from gee_animation.render import _output_spec, _margins
+    widths = []
+
+    def spy(name):
+        real = getattr(r, name)
+        return lambda rgb, *a, **k: (widths.append(rgb.shape[1]) or real(rgb, *a, **k))
+
+    monkeypatch.setattr(r, "draw_info_bar", spy("draw_info_bar"))
+    monkeypatch.setattr(r, "annotate", spy("annotate"))
+    cfg = _audience_cfg(tmp_path, "720p", "16:9", interpolate=0)
+    cfg.frames = True
+    paths = render([Frame("2022-05", "A")], cfg, fetch=_wide_fetch, geometry=None)
+    cw, ch, pw, ph, _m = _output_spec(cfg, (200, 100))
+    assert pw < cw, "this AOI/aspect must actually letterbox, or the test proves nothing"
+    assert widths == [cw, cw], "the bars must be laid out on the canvas, not the imagery"
+    # ...and the consequence, on pixels: with the bars now spanning the canvas, the
+    # header's own text inset (w // 200) puts ink in the columns the side bars occupy.
+    # On the old layout those columns were black by construction.
+    arr = np.asarray(Image.open(next(p for p in paths if p.suffix == ".png")))
+    assert arr.shape[:2] == (ch, cw)
+    top_h, bottom_h = _margins(ph, True)
+    y_pad = (ch - (ph + top_h + bottom_h)) // 2
+    side = (cw - pw) // 2
+    assert arr[y_pad:y_pad + top_h, :side].sum() > 0, "no header ink in the side bar"
+    bottom = arr[y_pad + top_h + ph:y_pad + top_h + ph + bottom_h]
+    assert bottom[:, :side].sum() > 0, "no bottom-bar ink in the side bar"
+
+
+def test_line_two_gives_up_a_bounded_few_percent_before_it_trims_the_subtitle():
+    """The one non-structural half of the fix. Line 2's nominal size comes from frame
+    HEIGHT (h // 40) while its room is a WIDTH -- unrelated quantities, so the nominal
+    size can overshoot by a few percent for no reason a viewer would recognise. Giving
+    those up is invisible; dropping configured text is not. The shrink is bounded by
+    _LINE2_MIN_SCALE so a caveat can never end up as fine print."""
+    from gee_animation.render import _fit_header_line2, _font, _text_w, _LINE2_MIN_SCALE
+    scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    sub, cav = _SUBTITLE_30, _CAVEAT_POOLED
+    joined = f"{sub} · {cav}"
+    px = 27
+    nominal_w = _text_w(scratch, joined, _font(px))
+    avail = nominal_w - 8                      # overshoots by ~1%: shrink, don't trim
+    font, text = _fit_header_line2(scratch, sub, cav, px, avail)
+    assert text == joined, "a few percent too wide must cost font size, not characters"
+    assert font.size < px
+    assert font.size >= round(px * _LINE2_MIN_SCALE), "caveats never become fine print"
+    # ...and past the band, the subtitle pays as before -- the shrink does not become a
+    # licence to trade characters for size indefinitely. Room for the caveats and
+    # almost nothing else: the caveats stay whole at the nominal size and the subtitle
+    # is the one that goes (trimmed to "…", or dropped when even that will not fit --
+    # test_header_line_two_truncates_the_subtitle_never_the_caveat covers the trim).
+    avail2 = _text_w(scratch, cav, _font(px)) + 40
+    font2, text2 = _fit_header_line2(scratch, sub, cav, px, avail2)
+    assert font2.size == px, "with the caveats alone fitting, no shrink is warranted"
+    assert cav in text2 and sub not in text2
+
+
+def test_render_warns_when_a_configured_subtitle_cannot_be_drawn_in_full(tmp_path, caplog):
+    """Silently dropping user-configured text is the actual defect behind finding 1.
+    Wherever the width genuinely will not hold both (a narrow portrait render, or a
+    subtitle several lines long), the caveats still win -- but the run says so, naming
+    the subtitle, instead of producing a frame that quietly lacks it."""
+    import logging
+    cfg = _audience_cfg(tmp_path, "480p", "9:16", subtitle="Schorfheide-Chorin " * 12)
+    with caplog.at_level(logging.WARNING, logger="gee_animation.render"):
+        render([Frame("2022-05", "A")], cfg, fetch=_wide_fetch, geometry=None)
+    warnings = [r for r in caplog.records if "subtitle" in r.getMessage()]
+    assert len(warnings) == 1, "run-level geometry: warn once, not once per frame"
+    assert "Schorfheide-Chorin" in warnings[0].getMessage()
+
+
+def test_render_does_not_warn_when_the_subtitle_does_fit(tmp_path, caplog):
+    import logging
+    cfg = _audience_cfg(tmp_path, "1080p", "16:9")
+    with caplog.at_level(logging.WARNING, logger="gee_animation.render"):
+        render([Frame("2022-05", "A")], cfg, fetch=_wide_fetch, geometry=None)
+    assert not [r for r in caplog.records if "subtitle" in r.getMessage()]
+
+
+def test_colorbar_stays_on_the_imagery_when_the_canvas_is_letterboxed(tmp_path):
+    """The counterpart to the bars spanning the canvas: the legend is an OVERLAY on the
+    picture (it explains the picture's colours), so unlike the header it must stay
+    anchored to the imagery and not drift out into the side bars."""
+    from gee_animation.render import _output_spec
+    cfg = _audience_cfg(tmp_path, "720p", "16:9", interpolate=0)
+    cfg.frames = True
+    paths = render([Frame("2022-05", "A")], cfg, fetch=_wide_fetch, geometry=None)
+    cw, ch, pw, ph, _m = _output_spec(cfg, (200, 100))
+    arr = np.asarray(Image.open(next(p for p in paths if p.suffix == ".png")))
+    side = (cw - pw) // 2
+    y_pad = (ch - (ph + sum(_margins_of(ph)))) // 2
+    top_h = _margins_of(ph)[0]
+    band = arr[y_pad + top_h:y_pad + top_h + ph]          # the imagery rows only
+    assert band[:, :side // 2].sum() == 0, "legend must not spill into the side bar"
+    assert band[:, side:side + pw // 3].sum() > 0, "legend must be on the imagery"
+
+
+def _margins_of(ph):
+    from gee_animation.render import _margins
+    return _margins(ph, True)
 
 
 @pytest.mark.parametrize("two_line", [True, False])

@@ -718,6 +718,36 @@ def test_quality_rejects_out_of_range_values(tmp_path, q):
         RunConfig.from_yaml(p)
 
 
+@pytest.mark.parametrize("q", ["abc", "[1, 2]", "high", "{}"])
+def test_quality_rejects_non_numeric_values_as_a_config_error(tmp_path, q):
+    # Review finding: the int() coercion sat outside from_yaml's guarded block, so a
+    # non-numeric quality raised a bare ValueError and `cli.main` -- which catches
+    # ConfigError/RuntimeError -- let it out as a traceback. Every other malformed key
+    # in this file produces a one-line message; this one must too, and it must name
+    # both the key and the value so you can find it in the YAML.
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        f"render: {{fps: 4, scale: 30, dimensions: 768, quality: {q}}}"))
+    with pytest.raises(ConfigError, match="render.quality must be a whole number"):
+        RunConfig.from_yaml(p)
+
+
+def test_quality_error_names_the_offending_value(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, quality: abc}"))
+    with pytest.raises(ConfigError, match="'abc'"):
+        RunConfig.from_yaml(p)
+
+
+def test_quality_null_is_the_unset_default(tmp_path):
+    # `quality:` with no value is YAML null, i.e. "not configured" -- not an error.
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, quality: null}"))
+    assert RunConfig.from_yaml(p).quality is None
+
+
 def test_wne_summer_pooled_example_loads_as_16_9(tmp_path):
     # Task 8 / review H6: every shipped example used to render aspect: match, which
     # for this AOI is a ~0.91 portrait frame — never letterboxed, never the widescreen

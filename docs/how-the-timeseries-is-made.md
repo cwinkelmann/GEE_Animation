@@ -108,9 +108,12 @@ undetected cloud edge in one scene does not drag the value.
 
 Pixels that are cloudy in *every* scene of the period have no value at all. They are
 not guessed — they are painted neutral grey, so a viewer can see where there is no
-observation. The `n=` figure drawn on each frame is how many scenes went into that
-frame's median; `n=1` means no averaging happened and any residual cloud in that one
-scene is in the picture.
+observation, and the colour bar carries a matching grey **"no data"** swatch so that
+grey reads as "nothing was measured here" rather than as a broken render.
+
+The pass count drawn on each frame — "3 passes", or "1 pass" — is how many scenes went
+into that frame's median. **1 pass** means no averaging happened and any residual cloud
+in that one scene is in the picture.
 
 ---
 
@@ -128,10 +131,12 @@ strategies, and the difference between them matters:
 Measured on the WNE summer loop: `least_cloudy` produced only 2 of 15 frames from the
 requested year, `gap_fill` produced 10 of 15.
 
-**Provenance is always drawn on the frame.** A borrowed frame is labelled
-`2022-09 ← 2018`; a genuine frame carries just `2022-09`. The top information bar names
-the pooled range and states which mode was used. If a frame has no arrow, it is real
-data for the period shown.
+**Provenance is always drawn on the frame.** A borrowed frame's bottom bar says
+`September 2022 · image from 2018`; a frame that really is the requested period says
+just `September 2022` (plus its pass count). The header's second line names the pooled
+range and which mode was used — `every frame re-picked from 2018–2024 — not a time
+series` for `least_cloudy`/`median`, `gap-filled from 2018–2024` for `gap_fill`. If a
+frame carries no "image from" segment, it is real data for the period shown.
 
 Pooling is a cosmetic device for `least_cloudy` and `median`. Do not use those two for
 trend detection, change detection, or anything reported as a measurement.
@@ -158,9 +163,23 @@ trend detection, change detection, or anything reported as a measurement.
   direction. The softness is the data. `lst_sharp` will make this look sharper by
   fitting the thermal signal against 30 m optical, at the price of inventing structure —
   see §9.*
-- **Overlays** — region outline, colour bar with units, scale bar, period label, and an
-  information bar naming the bands and formula — are drawn *outside* the imagery, in
-  added margins, so nothing in the picture is covered up.
+- **Overlays.** Region outline, colour bar (units, plain-word ends such as
+  *bare* → *dense vegetation*, and the grey "no data" swatch), scale bar and north
+  arrow sit on the picture. The two text bars are drawn *outside* it, in added
+  margins, so nothing in the imagery is covered up:
+  - a **header** — line 1 the title (`title:`, else the index's plain name, e.g.
+    "Vegetation greenness (NDVI)"); line 2 the optional `subtitle:` followed by this
+    run's provenance caveats (§6, §7a). Line 2 exists only when there is something to
+    put on it. The bands and formula that used to fill this bar are gone from the frame
+    — they are method-section material, not something a viewer reads mid-playback.
+  - a **bottom bar** — the period label and its provenance on the left, the
+    attribution/licence line (`credit:`, e.g. *Contains modified Copernicus Sentinel
+    data 2018–2024*) on the right.
+
+  Both bars span the **full output width**, letterbox bars included, rather than only
+  the imagery: on a 16:9 render of a squarish AOI the picture is little over half the
+  frame, and laying the text out on it truncated the subtitle and the licence line
+  while the rest of the frame sat empty.
 
 ---
 
@@ -173,11 +192,17 @@ so playback speed tracks elapsed time rather than frame count — this matters
 because periods get skipped (§3, §4), so a real run's gaps are not all one period
 wide.
 
-**Generated frames show dates that were never observed.** They are labelled
-`2022-05 -> 2022-06  30%` and the info bar states the interpolation, so an
-observed frame is never mistaken for a generated one. Observed frames are
-byte-identical to a run with interpolation off — interpolation only adds frames,
-it never touches a real one.
+**Generated frames show dates that were never observed.** Their bottom bar reads
+`between May and June 2022 · 30%`, and the header's second line states the
+interpolation (`5 generated frames between observations`), so an observed frame is
+never mistaken for a generated one. Observed frames are byte-identical to a run with
+interpolation off — interpolation only adds frames, it never touches a real one.
+
+At playback speed nobody reads a caption that changes twice a second, so provenance is
+also carried **pre-attentively**, by a dot at the left end of the bottom bar: a
+**filled** dot means this frame was observed, a **hollow ring** of the same size means
+it was generated. The wording stays either way — the dot is an addition to it, and the
+one thing you can still read at 4 fps.
 
 Two modes: `data` interpolates index values before colouring, so the colour bar
 stays exactly valid; `crossfade` blends already-finished colour and is the only
@@ -254,8 +279,8 @@ cloud averages a smaller, non-random part of the AOI. Read the series alongside
 - **Periods can be missing entirely.** Both Decembers are absent from the two-year
   Landsat run: no usable December scene exists in *any* year 2018–2024 at these
   thresholds.
-- **`n=1` frames are single observations**, not composites, and carry whatever cloud the
-  detector missed.
+- **"1 pass" frames are single observations**, not composites, and carry whatever cloud
+  the detector missed.
 - **`lst_sharp` is an approximation.** It sharpens 100 m thermal against 30 m optical
   and can produce blocky artefacts at the thermal block edges. The examples use plain
   `lst` for this reason.
