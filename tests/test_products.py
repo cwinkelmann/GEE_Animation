@@ -368,3 +368,15 @@ def test_s2_mask_and_cloud_band_use_scl_classes():
     cb = P.SENSORS["sentinel2"].cloud_band(FakeImg())
     assert rec["remap"][0] == [3, 8, 9, 10, 11] and rec["remap"][2] == 0
     assert rec["rename"] == "cloud" and cb == "cloudband"
+
+
+def test_every_index_has_a_plain_language_display_name():
+    # The frame header names the product in words a non-specialist reads; an index
+    # added later without one would silently fall back to a bare acronym.
+    import gee_animation.products as P
+    for name, idx in P.INDICES.items():
+        assert idx.display_name, f"{name} has no display_name"
+        assert idx.display_name[0].isupper(), f"{name}: {idx.display_name!r}"
+    assert P.INDICES["ndvi"].display_name == "Vegetation greenness (NDVI)"
+    assert P.INDICES["rgb"].display_name == "True colour"
+    assert P.INDICES["lst_modis"].display_name == "Land surface temperature (MODIS)"

@@ -54,6 +54,9 @@ CLIENT_SIDE_FIELDS = frozenset({
     "name", "out_dir", "fps", "preset", "aspect", "upscale",
     "region_line_width", "draw_region", "metadata", "workers",
     "palette", "debug_month", "allow_upsample",
+    # header text: drawn locally into the label margins (render._header_text), never
+    # sent to EE — retitling a run must not recompute every frame.
+    "title", "subtitle",
     # the cache controls themselves: where entries live and whether they are used
     # cannot change what EE computes.
     "cache", "cache_dir",

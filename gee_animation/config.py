@@ -91,6 +91,15 @@ class RunConfig:
     # frames). Only an explicit True/False here can override that.
     gif: bool | None = None
     frames: bool = True
+    # Frame header text (from top-level `title` / `subtitle`). `title` is the header's
+    # large first line — what and where this animation is; it defaults to the index's
+    # plain-language `products.Index.display_name` when unset, so a frame always says
+    # what it shows. `subtitle` is the smaller second line, which it shares with the
+    # provenance caveats (pooling / interpolation) — those always win the space (see
+    # render._fit_header_line2). Purely client-side: neither reaches Earth Engine, so
+    # both are in cache.CLIENT_SIDE_FIELDS and retitling a run is a cache hit.
+    title: str = None
+    subtitle: str = None
     # Anomaly rendering (from top-level `anomaly` / `baseline_years`). "climatology"
     # => per-pixel z-score vs baseline monthly climatology; "reference" => LST minus
     # ERA5 air temp (thermal only). None => raw values.
@@ -182,6 +191,8 @@ class RunConfig:
                 gif=_flag(render, "gif", default=None),
                 frames=_flag(render, "frames"),
                 out_dir=str(raw.get("out_dir", "out")),
+                title=(str(raw["title"]) if raw.get("title") else None),
+                subtitle=(str(raw["subtitle"]) if raw.get("subtitle") else None),
                 draw_region=bool(raw.get("draw_region", True)),
                 region_line_width=(int(render["region_line_width"])
                                    if render.get("region_line_width") is not None else None),

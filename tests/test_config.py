@@ -617,3 +617,22 @@ def test_validate_rejects_data_mode_for_a_composite_index(tmp_path):
         "interpolate_mode: data}"))
     with pytest.raises(ConfigError, match="crossfade"):
         RunConfig.from_yaml(p)
+
+
+def test_title_and_subtitle_round_trip_from_top_level_yaml(tmp_path):
+    # The header's first two lines are the only place a frame says WHAT and WHERE it
+    # is, so both have to survive the YAML -> RunConfig trip verbatim (including
+    # non-ASCII, which the bundled DejaVu font can draw).
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+        "index: ndvi\n"
+        'title: "Grumsiner Forst — UNESCO World Heritage beech forest"\n'
+        'subtitle: "Brandenburg, Germany"\n')))
+    assert cfg.title == "Grumsiner Forst — UNESCO World Heritage beech forest"
+    assert cfg.subtitle == "Brandenburg, Germany"
+
+
+def test_title_and_subtitle_default_to_none(tmp_path):
+    # Absent keys must stay None (not ""), so render() can fall back to the index's
+    # display_name for the title and omit the second line entirely.
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.title is None and cfg.subtitle is None

@@ -250,9 +250,18 @@ class Index:
     # uses it instead of the sensor's default collection — for indices that need a
     # bespoke, satellite-aware source (e.g. lst_smw joins the TOA thermal band).
     build_collection: Callable = None
-    # Overlay metadata (drawn on every frame): the bands used and the formula.
+    # Method-doc metadata: the bands used and the formula. Deliberately NOT drawn on
+    # the frame any more — an analyst-persona review found the scaling coefficients
+    # ("ST_B * 0.00341802 + 149.0 - 273.15") read as debug output and cost the frame
+    # credibility while saying nothing about what the viewer is looking at. Nothing is
+    # lost: both live in the method doc, where a reader who wants the definition can
+    # find it. `display_name` is what the frame shows instead.
     bands: str = ""
     formula: str = None
+    # Plain-language product name for the frame header (line 1, when no `cfg.title`
+    # is set). "NDVI" names a variable; "Vegetation greenness (NDVI)" names a subject
+    # and still carries the acronym for anyone who wants it.
+    display_name: str = ""
     # composite=True => a 3-band (R,G,B) visualization, not a 1-band palette index.
     composite: bool = False
     # Physical unit of the index values (e.g. "°C" for thermal indices); "" if
@@ -302,30 +311,38 @@ INDICES = {
     # Normalized-difference indices span their definitional -1..1 range.
     "ndvi": Index("ndvi", _REFL,
                   (-1.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _ndvi,
-                  bands="NIR, Red", formula="(NIR - Red) / (NIR + Red)"),
+                  bands="NIR, Red", formula="(NIR - Red) / (NIR + Red)",
+                  display_name="Vegetation greenness (NDVI)"),
     "lst": Index("lst", frozenset({"landsat"}),
                  (-10.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
                  _lst, bands="Thermal (ST_B6/ST_B10)",
-                 formula="ST_B * 0.00341802 + 149.0 - 273.15 [C]", units="°C"),
+                 formula="ST_B * 0.00341802 + 149.0 - 273.15 [C]", units="°C",
+                 display_name="Land surface temperature"),
     "evi": Index("evi", _REFL,
                  (-1.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _evi,
                  bands="NIR, Red, Blue",
-                 formula="2.5*(NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1)"),
+                 formula="2.5*(NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1)",
+                 display_name="Vegetation greenness (EVI)"),
     "ndwi": Index("ndwi", _REFL,
                   (-1.0, 1.0, ["#a1622f", "#f6e8c3", "#2166ac"]), _ndwi,
-                  bands="Green, NIR", formula="(Green - NIR) / (Green + NIR)"),
+                  bands="Green, NIR", formula="(Green - NIR) / (Green + NIR)",
+                  display_name="Surface water index (NDWI)"),
     "ndmi": Index("ndmi", _REFL,
                   (-1.0, 1.0, ["#8c510a", "#f6e8c3", "#01665e"]), _ndmi,
-                  bands="NIR, SWIR1", formula="(NIR - SWIR1) / (NIR + SWIR1)"),
+                  bands="NIR, SWIR1", formula="(NIR - SWIR1) / (NIR + SWIR1)",
+                  display_name="Vegetation moisture (NDMI)"),
     "rgb": Index("rgb", _REFL, (0.0, 0.3, None), _rgb,
-                 bands="Red, Green, Blue", composite=True),
+                 bands="Red, Green, Blue", composite=True,
+                 display_name="True colour"),
     "cir": Index("cir", _REFL, (0.0, 0.3, None), _cir,
-                 bands="R<-NIR, G<-Red, B<-Green", composite=True),
+                 bands="R<-NIR, G<-Red, B<-Green", composite=True,
+                 display_name="Colour infrared"),
     "lst_sharp": Index("lst_sharp", frozenset({"landsat"}),
                        (-10.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
                        _lst_sharp, bands="Thermal(100m) + NIRv(30m)",
                        formula="TsHARP: fit LST~NIRv @100m, apply @30m, +coarse residual",
-                       units="°C"),
+                       units="°C",
+                       display_name="Land surface temperature (sharpened)"),
 }
 
 
@@ -339,14 +356,16 @@ INDICES["lst_smw"] = Index("lst_smw", frozenset({"landsat"}),
                            (-10.0, 40.0, _LST_PALETTE), smw_lst.compute,
                            build_collection=smw_lst.landsat_collection,
                            bands="TOA Tb, NIR, Red, Green, QA",
-                           formula="A*Tb/e + B/e + C  (Ermida 2020 SMW)", units="°C")
+                           formula="A*Tb/e + B/e + C  (Ermida 2020 SMW)", units="°C",
+                           display_name="Land surface temperature (split-window)")
 
 # MODIS LST (MOD11A1 Terra daily, 1 km) — coarse but ~daily, so it fills the
 # cloud-locked months Landsat's 16-day revisit misses.
 INDICES["lst_modis"] = Index("lst_modis", frozenset({"modis_lst"}),
                              (-10.0, 40.0, _LST_PALETTE), _lst_modis,
                              bands="MOD11A1 LST_Day_1km (1 km, daily)",
-                             formula="LST_Day_1km * 0.02 - 273.15 [C]", units="°C")
+                             formula="LST_Day_1km * 0.02 - 273.15 [C]", units="°C",
+                             display_name="Land surface temperature (MODIS)")
 
 
 def get_product(sensor: str, index: str):

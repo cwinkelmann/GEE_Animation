@@ -73,6 +73,7 @@ def _cfg(tmp_path, **over):
         region_line_width=None, missions=None, min_scenes=1,
         allow_upsample=False, debug_month=None,
         workers=4, cache=True, cache_dir=str(tmp_path / "cache"),
+        title=None, subtitle=None,
     )
     base.update(over)
     return types.SimpleNamespace(**base)
@@ -141,6 +142,10 @@ def test_frame_label_is_part_of_the_key(tmp_path, urlopen_counter):
 
 @pytest.mark.parametrize("field,value", [
     ("palette", ["#ff0000", "#00ff00"]),
+    # the header text is drawn locally into the margins; retitling a run must not
+    # cost a full Earth Engine recompute of every frame.
+    ("title", "Grumsiner Forst"),
+    ("subtitle", "Brandenburg, Germany"),
     ("fps", 12.0),
     ("region_line_width", 9),
     ("preset", "1080p"),
