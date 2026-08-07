@@ -264,6 +264,11 @@ cloud averages a smaller, non-random part of the AOI. Read the series alongside
   `render.interpolate` addresses this directly — proportional generated frames make
   playback speed track elapsed time — at the cost of the generated frames being
   synthetic, not observed.
+- **The NDVI water stop is not a water mask.** Negative NDVI renders blue and positive
+  NDVI renders on the brown-to-green land ramp, with the transition sitting close to
+  zero (brown by NDVI~0.03) — but turbid or vegetated water with slightly positive NDVI
+  still renders brownish, same as dry land. Distinguishing water from land reliably
+  needs a second band (e.g. NDWI) through the fetch path, which is out of scope.
 
 ---
 

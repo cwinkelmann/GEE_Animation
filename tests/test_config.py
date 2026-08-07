@@ -109,7 +109,7 @@ def test_from_yaml_loads_valid_config(tmp_path):
     assert cfg.frame_aoi == {"bbox": [13.7, 52.8, 13.9, 52.95]}
     assert cfg.region_aoi == {"bbox": [13.7, 52.8, 13.9, 52.95]}
     assert cfg.viz_min == -0.2 and cfg.viz_max == 1.0
-    assert cfg.palette == ["#4575b4", "#e0f3f8", "#8c510a", "#d8b365", "#f6e8c3", "#5ab4ac", "#01665e"]
+    assert cfg.palette == ["#4575b4", "#aeaec7", "#8c510a", "#d8b365", "#f6e8c3", "#5ab4ac", "#01665e"]
     assert cfg.fps == 4 and cfg.dimensions == 768
     assert cfg.out_dir == "out"
 
@@ -130,7 +130,7 @@ def test_index_viz_defaults_from_index(tmp_path):
     cfg = RunConfig.from_yaml(p)
     assert cfg.index == "ndvi"
     assert cfg.viz_min == -0.2 and cfg.viz_max == 1.0
-    assert cfg.palette == ["#4575b4", "#e0f3f8", "#8c510a", "#d8b365", "#f6e8c3", "#5ab4ac", "#01665e"]
+    assert cfg.palette == ["#4575b4", "#aeaec7", "#8c510a", "#d8b365", "#f6e8c3", "#5ab4ac", "#01665e"]
 
 
 def test_viz_block_overrides_defaults(tmp_path):

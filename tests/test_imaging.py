@@ -97,11 +97,17 @@ def test_colorize_rejects_vmax_not_greater_than_vmin():
 # Two water stops (not one) matter: a single stop spanning the whole negative range
 # was verified to fail -- water as shallow as NDVI=-0.1 already blended into brown
 # (see products.py comment). The paler second stop keeps the entire negative range
-# blue while the ramp still turns brown by NDVI~0.02-0.05.
+# blue while the ramp still turns brown by NDVI~0.032 (measured crossover, below).
+#
+# The paler stop's own hex was picked by a small sweep (also below) after a first
+# candidate ("#e0f3f8") was found to sit only 18.1/255 from render.NODATA_RGB at
+# NDVI=0 -- the same magnitude of collision H2 condemned, this time confusing
+# "observed shallow water" with "no observation" instead of confusing bare soil
+# with dense canopy.
 
 def test_ndvi_default_viz_water_stays_in_blue_family():
     vmin, vmax, palette = INDICES["ndvi"].default_viz
-    values = np.linspace(vmin, -0.001, 8).reshape(1, -1)   # vmin .. just below zero
+    values = np.linspace(vmin, 0.0, 9).reshape(1, -1)   # vmin .. 0 inclusive
     rgb = colorize(values, vmin, vmax, palette).astype(int)
     reds, blues = rgb[..., 0], rgb[..., 2]
     assert np.all(reds < blues), f"expected blue-family (R<B) for every water pixel, got {rgb}"
@@ -112,6 +118,38 @@ def test_ndvi_default_viz_bare_soil_is_brown_family():
     rgb = colorize(np.array([[0.05]]), vmin, vmax, palette).astype(int)
     r, _, b = rgb[0, 0]
     assert r > b, f"expected brown-family (R>B) at NDVI=0.05, got {rgb[0, 0]}"
+
+
+def test_ndvi_default_viz_bare_soil_is_decisively_brown_at_0_10():
+    # Real bare soil sits >= ~0.1; that's the value that must read unmistakably
+    # brown, not just barely tip past the R==B crossover.
+    vmin, vmax, palette = INDICES["ndvi"].default_viz
+    rgb = colorize(np.array([[0.10]]), vmin, vmax, palette).astype(int)
+    r, _, b = rgb[0, 0]
+    assert r - b >= 40, f"expected R-B >= 40 (decisive brown) at NDVI=0.10, got {rgb[0, 0]}"
+
+
+def test_ndvi_default_viz_brown_crossover_within_bound():
+    # The water->land transition must complete close to zero, not drift into the
+    # part of the range real bare soil occupies.
+    vmin, vmax, palette = INDICES["ndvi"].default_viz
+    values = np.linspace(0.0, 0.3, 3001).reshape(1, -1)
+    rgb = colorize(values, vmin, vmax, palette).astype(int)
+    brown = rgb[0, :, 0] > rgb[0, :, 2]
+    assert brown.any(), "palette never turns brown across 0..0.3"
+    crossover = values[0, brown.argmax()]
+    assert crossover <= 0.08, f"brown crossover at NDVI={crossover:.4f}, expected <= 0.08"
+
+
+def test_ndvi_default_viz_water_stop_separates_from_nodata_grey():
+    # H2-shaped collision, second instance: the pale water stop at NDVI=0 must not
+    # sit close to render.NODATA_RGB, or a viewer cannot tell observed shallow
+    # water from an unobserved (cloud/no-data) pixel.
+    from gee_animation.render import NODATA_RGB
+    vmin, vmax, palette = INDICES["ndvi"].default_viz
+    rgb0 = colorize(np.array([[0.0]]), vmin, vmax, palette).astype(float)[0, 0]
+    dist = float(np.linalg.norm(rgb0 - np.array(NODATA_RGB, dtype=float)))
+    assert dist >= 60.0, f"water stop at NDVI=0 is only {dist:.1f}/255 from NODATA_RGB"
 
 
 def test_ndvi_default_viz_low_label_is_water():

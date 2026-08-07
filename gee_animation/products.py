@@ -327,14 +327,26 @@ INDICES = {
     # water range, water as shallow as NDVI=-0.1 already interpolated to brown
     # (colorize blends linearly between adjacent stops, and -0.1 sits close to the
     # brown endpoint of that wide segment) -- the exact "lake reads as scorched
-    # earth" bug (H3) this palette exists to fix. Adding a second, paler water stop
-    # ("#e0f3f8", RdYlBu's light-blue neighbour of the "#4575b4" dark blue) keeps
-    # the entire negative range in the blue family (R<B at every pixel down to
-    # NDVI=-0.001) while the land ramp still turns visibly brown by NDVI~0.02-0.05.
-    # This is not a water mask: turbid/vegetated water with slightly positive NDVI
-    # still renders brownish.
+    # earth" bug (H3) this palette exists to fix. A second, paler water stop keeps
+    # the entire negative range in the blue family (R<B at every pixel <= NDVI 0)
+    # while the land ramp still turns visibly brown by NDVI~0.032 (measured
+    # crossover; see tests/test_imaging.py for the sweep that picked this value).
+    #
+    # "#e0f3f8" (RdYlBu's pale-blue neighbour of "#4575b4") was the first candidate
+    # tried and rejected: at NDVI=0 it is only 18.1/255 from render.NODATA_RGB
+    # (240,240,240) -- the SAME magnitude gap H2 condemned in the old land ramp,
+    # meaning a viewer could not tell "observed shallow water" from "no observation"
+    # over exactly the -0.03..+0.03 band this project paints no-data honestly for.
+    # "#aeaec7" (a muted slate-blue, still officially in the blue family, not a
+    # ColorBrewer stock colour) was picked by a small numeric sweep over candidate
+    # hexes requiring: (1) R<B for every pixel at NDVI<=0; (2) >=60/255 from
+    # NODATA_RGB at NDVI=0 (measured 101.9); (3) decisively brown by NDVI=0.10,
+    # R-B>=40 (measured 53); (4) brown crossover <=0.08 (measured 0.0323). Endpoint
+    # (first/last stop) deuteranopia separation is unaffected: still 89.5/255. This
+    # is not a water mask: turbid/vegetated water with slightly positive NDVI still
+    # renders brownish.
     "ndvi": Index("ndvi", _REFL,
-                  (-0.2, 1.0, ["#4575b4", "#e0f3f8", "#8c510a", "#d8b365",
+                  (-0.2, 1.0, ["#4575b4", "#aeaec7", "#8c510a", "#d8b365",
                                "#f6e8c3", "#5ab4ac", "#01665e"]), _ndvi,
                   bands="NIR, Red", formula="(NIR - Red) / (NIR + Red)",
                   display_name="Vegetation greenness (NDVI)",
