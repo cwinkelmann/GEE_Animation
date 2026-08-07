@@ -1,6 +1,10 @@
 import textwrap
+from pathlib import Path
+
 import pytest
 from gee_animation.config import RunConfig, ConfigError
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _write(tmp_path, body: str):
@@ -681,3 +685,42 @@ def test_empty_credit_on_sentinel2_warns_about_the_copernicus_licence(tmp_path, 
             'index: ndvi\ncredit: "Custom credit"\n').replace(
             "sensor: landsat", "sensor: sentinel2")))
     assert "Copernicus" not in caplog.text
+
+
+# --- render.quality (MP4 encode quality knob, Task 8) ------------------------------
+
+def test_quality_defaults_to_none(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.quality is None
+
+
+def test_quality_read_from_render_block(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, quality: 7}"))
+    assert RunConfig.from_yaml(p).quality == 7
+
+
+@pytest.mark.parametrize("q", [1, 5, 10])
+def test_quality_accepts_the_full_1_to_10_range(tmp_path, q):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        f"render: {{fps: 4, scale: 30, dimensions: 768, quality: {q}}}"))
+    assert RunConfig.from_yaml(p).quality == q
+
+
+@pytest.mark.parametrize("q", [0, 11])
+def test_quality_rejects_out_of_range_values(tmp_path, q):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        f"render: {{fps: 4, scale: 30, dimensions: 768, quality: {q}}}"))
+    with pytest.raises(ConfigError, match="quality"):
+        RunConfig.from_yaml(p)
+
+
+def test_wne_summer_pooled_example_loads_as_16_9(tmp_path):
+    # Task 8 / review H6: every shipped example used to render aspect: match, which
+    # for this AOI is a ~0.91 portrait frame — never letterboxed, never the widescreen
+    # 16:9 an audience actually expects on a slide or in a video player.
+    cfg = RunConfig.from_yaml(_REPO_ROOT / "config" / "wne_summer_pooled.example.yaml")
+    assert cfg.aspect == "16:9"

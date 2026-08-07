@@ -154,6 +154,14 @@ class RunConfig:
     # composites, which arrive from EE already coloured.
     interpolate: int = 0
     interpolate_mode: str = "auto"
+    # MP4 encode quality (from render.quality), 1 (smallest/worst) .. 10
+    # (largest/best), passed straight through to imageio's ffmpeg writer. None
+    # (default) => imageio's own default (currently 5) — the writer call is
+    # unchanged from before this knob existed, so an existing config's output is
+    # bit-for-bit the same. Untuned MP4s measured ~1 MB/frame in the audience
+    # review; this is the deliberate trade-off knob for publishing (see
+    # docs/publishing-animations.md's format-picker table).
+    quality: int = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RunConfig":
@@ -225,6 +233,7 @@ class RunConfig:
                 cache_dir=(str(render["cache_dir"]) if render.get("cache_dir") else None),
                 interpolate=int(render.get("interpolate", 0) or 0),
                 interpolate_mode=str(render.get("interpolate_mode") or "auto"),
+                quality=(int(render["quality"]) if render.get("quality") is not None else None),
             )
         except KeyError as exc:
             raise ConfigError(f"missing required config key: {exc}") from exc
@@ -284,6 +293,9 @@ class RunConfig:
             raise ConfigError(
                 f"render.interpolate_mode: data needs a single-band index; "
                 f"{self.index!r} is a composite — use crossfade (or auto)")
+        if self.quality is not None and not 1 <= self.quality <= 10:
+            raise ConfigError(
+                f"render.quality must be between 1 and 10 (got {self.quality!r})")
         # Also checked here (not only in from_yaml) because the GUI and api.animate
         # build RunConfig directly and validate() is their only gate.
         for flag in _RENDER_FLAGS:

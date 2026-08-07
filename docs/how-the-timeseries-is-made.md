@@ -281,6 +281,13 @@ gee-animation --config config/wne_interpolated.example.yaml    # smooth playback
 gee-animation --config <cfg> --inventory                       # the scene evidence table
 ```
 
+Once you have an MP4/GIF, see
+[`publishing-animations.md`](publishing-animations.md) for what to do with it: caption
+templates, the required credit lines, a format picker by destination (slides / YouTube
+/ social / report), the three plain-language answers to "is this real?", how to
+produce the inside-vs-outside comparison chart, and why the GIF format is a poor fit
+for anything you actually need to send someone.
+
 ---
 
 ## TODO

@@ -1247,15 +1247,22 @@ def _pad_to_even(frame: np.ndarray) -> np.ndarray:
     return frame
 
 
-def _write_mp4(path: Path, frames: Iterable[np.ndarray], fps: int) -> None:
+def _write_mp4(path: Path, frames: Iterable[np.ndarray], fps: int,
+               quality: int = None) -> None:
     """Encode `frames` to MP4, appending each one as it arrives.
 
     `frames` may be any iterable, including a generator: an interpolated run reaches
     several hundred frames and at 4K that is tens of gigabytes if they are collected
     first. The writer is closed on every path — a leaked ffmpeg writer leaves the
     subprocess running and the file truncated.
+
+    `quality` (1-10, from `render.quality`) is forwarded to imageio's ffmpeg writer
+    verbatim when set; `None` omits the kwarg entirely rather than passing it as
+    `None`, so an unconfigured run gets exactly imageio's own default and this knob
+    cannot change behaviour it wasn't asked to.
     """
-    writer = imageio.get_writer(path, fps=fps, macro_block_size=1)
+    kwargs = {"quality": quality} if quality is not None else {}
+    writer = imageio.get_writer(path, fps=fps, macro_block_size=1, **kwargs)
     try:
         for frame in frames:
             writer.append_data(_pad_to_even(frame))
@@ -1367,7 +1374,11 @@ def assemble_stream(frames_iter: Iterable[np.ndarray], cfg) -> list[Path]:
             yield frame
 
     try:
-        _write_mp4(mp4_path, _tee(frames_iter), cfg.fps)
+        quality = getattr(cfg, "quality", None)
+        if quality is not None:
+            _write_mp4(mp4_path, _tee(frames_iter), cfg.fps, quality=quality)
+        else:
+            _write_mp4(mp4_path, _tee(frames_iter), cfg.fps)
         paths.append(mp4_path)
     except _ProducerError:
         # Not an encode failure: the frames themselves could not be produced. There is

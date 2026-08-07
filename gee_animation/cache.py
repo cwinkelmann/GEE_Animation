@@ -54,6 +54,9 @@ CLIENT_SIDE_FIELDS = frozenset({
     "name", "out_dir", "fps", "preset", "aspect", "upscale",
     "region_line_width", "draw_region", "metadata", "workers",
     "palette", "debug_month", "allow_upsample",
+    # MP4 encode quality: a ffmpeg writer setting, applied after the pixels are
+    # already decided — never sent to EE and never changes what is fetched.
+    "quality",
     # header text: drawn locally into the label margins (render._header_text), never
     # sent to EE — retitling a run must not recompute every frame.
     "title", "subtitle",

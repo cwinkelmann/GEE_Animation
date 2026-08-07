@@ -48,7 +48,16 @@ render:
   dimensions: 1024
   crs: auto
   preset: 1080p
-  aspect: match
+  # 16:9, not match: this AOI's frame is ~13.7 x 12.5 km, close enough to square that
+  # `aspect: match` renders a ~0.91 portrait canvas — technically correct but not what
+  # a slide or a video player expects, and not what "16:9" means to the audience this
+  # doc is for (see docs/publishing-animations.md's format-picker table). The
+  # trade-off: 16:9 letterboxes the AOI (black bars top/bottom on a portrait-ish
+  # frame) to hit the standard ratio; `match` instead keeps every pixel of the AOI
+  # on screen, at whatever ratio the AOI itself happens to be. Pick `match` when the
+  # shape of the area *is* the point (e.g. a long river corridor); pick a named ratio
+  # (`16:9` here) when the animation has to sit inside someone else's fixed frame.
+  aspect: "16:9"
   upscale: lanczos
   region_line_width: 5
 

@@ -1067,6 +1067,45 @@ def test_write_mp4_closes_its_writer_when_a_frame_fails(tmp_path, monkeypatch):
     assert closed == [True]
 
 
+def test_write_mp4_quality_kwarg_reaches_ffmpeg_and_changes_file_size(tmp_path):
+    # Behavioural, not mocked: proves render.quality is actually forwarded to
+    # imageio's ffmpeg writer and changes the encoded bitrate, rather than just
+    # asserting the kwarg is accepted. Needs real (noisy) content -- flat colour
+    # frames compress to near-nothing at any quality setting and would hide the
+    # effect entirely.
+    import gee_animation.render as r
+    rng = np.random.default_rng(0)
+    frames = [rng.integers(0, 255, (120, 160, 3), dtype=np.uint8) for _ in range(40)]
+
+    low_path, high_path = tmp_path / "low.mp4", tmp_path / "high.mp4"
+    r._write_mp4(low_path, frames, 2, quality=3)
+    r._write_mp4(high_path, frames, 2, quality=9)
+
+    low_size, high_size = low_path.stat().st_size, high_path.stat().st_size
+    assert high_size > low_size * 1.5, (
+        f"quality=9 ({high_size}B) should be well over 1.5x quality=3 ({low_size}B) "
+        "if the kwarg is really reaching ffmpeg")
+
+
+def test_write_mp4_quality_none_omits_the_kwarg_entirely(tmp_path, monkeypatch):
+    # cfg.quality defaults to None, and the existing writer call (no quality kwarg
+    # at all) must be unchanged in that case -- not "quality=None" reaching
+    # imageio, which is a different call with potentially different behaviour.
+    import gee_animation.render as r
+    seen_kwargs = {}
+
+    def fake_get_writer(path, **kwargs):
+        seen_kwargs.update(kwargs)
+        class W:
+            def append_data(self, frame): pass
+            def close(self): pass
+        return W()
+
+    monkeypatch.setattr(r.imageio, "get_writer", fake_get_writer)
+    r._write_mp4(tmp_path / "x.mp4", [np.zeros((16, 16, 3), np.uint8)], 2)
+    assert "quality" not in seen_kwargs
+
+
 def _thermal_cfg(tmp_path):
     cfg = _cfg(tmp_path)
     cfg.sensor, cfg.index = "landsat", "lst"
@@ -1930,6 +1969,33 @@ def test_render_interpolated_frames_reach_the_encoder(tmp_path, monkeypatch):
     render([Frame("2022-05", object()), Frame("2022-06", object())], cfg,
            fetch=_flat_fetch, geometry=None)
     assert len(seen) == 5                        # 2 observed + 3 generated
+
+
+def test_assemble_stream_forwards_cfg_quality_to_the_writer(tmp_path, monkeypatch):
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.quality = 8
+    seen = {}
+    monkeypatch.setattr(r, "_write_mp4",
+                        lambda path, frames, fps, quality=None: seen.update(
+                            quality=quality, frames=list(frames)))
+    r.assemble_stream(iter([np.zeros((16, 16, 3), np.uint8)]), cfg)
+    assert seen["quality"] == 8
+
+
+def test_assemble_stream_omits_quality_kwarg_when_cfg_has_none(tmp_path, monkeypatch):
+    # cfg.quality defaults to None (via getattr, since the SimpleNamespace test cfg
+    # doesn't set it at all) -- the call must stay the historical 3-positional-arg
+    # form, not "quality=None", so a mock/writer that predates this knob still works.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    assert not hasattr(cfg, "quality")
+
+    def three_arg_only(path, frames, fps):
+        list(frames)  # drain, as the real writer would
+
+    monkeypatch.setattr(r, "_write_mp4", three_arg_only)
+    r.assemble_stream(iter([np.zeros((16, 16, 3), np.uint8)]), cfg)  # must not raise
 
 
 # --- observed/generated marker (review H5) -----------------------------------------
