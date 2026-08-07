@@ -27,12 +27,10 @@ draw_region: true
 pool_years: [2018, 2024]
 pool_strategy: gap_fill     # keep 2021/2022 where they have data; borrow only for gaps
 
-viz:
-  # The index default is -1..1, but almost nothing on land sits below 0, so half that
-  # ramp is wasted. 0..0.95 spends the colours where the land actually varies; water
-  # clips to the bottom of the scale.
-  min: 0.0
-  max: 0.95
+# No viz: block -- inherit the ndvi index default (-0.2..1.0, CVD-safe BrBG land
+# ramp with a two-stop blue water range; see products.py). The 0 tick is close to
+# the water/land visual boundary. This is not a water mask: turbid/vegetated water
+# with slightly positive NDVI still renders brownish, same as dry land.
 
 render:
   fps: 1

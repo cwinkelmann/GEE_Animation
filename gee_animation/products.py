@@ -314,11 +314,31 @@ def native_scale_m(sensor: str, index: str) -> int:
 
 INDICES = {
     # Normalized-difference indices span their definitional -1..1 range.
+    # Palette: 7 evenly-spaced stops over -0.2..1.0 (imaging.colorize interpolates
+    # linearly between stops placed at equal fractions of vmin..vmax), boundaries at
+    # -0.2, 0, 0.2, 0.4, 0.6, 0.8, 1.0. The five stops from 0..1 are the unmodified,
+    # official 5-class ColorBrewer BrBG (colour-vision-deficiency safe); the old
+    # brown/green ramp had near-identical endpoints under deuteranopia (measured
+    # separation 18/255 -- ~8% of men could not tell bare soil from dense canopy).
+    # These endpoints separate at 90/255 under the same simulation.
+    #
+    # A naive version of this fix (blue stop at -0.25, BrBG's brown landing exactly
+    # at 0) was verified numerically to fail: with only ONE stop spanning the whole
+    # water range, water as shallow as NDVI=-0.1 already interpolated to brown
+    # (colorize blends linearly between adjacent stops, and -0.1 sits close to the
+    # brown endpoint of that wide segment) -- the exact "lake reads as scorched
+    # earth" bug (H3) this palette exists to fix. Adding a second, paler water stop
+    # ("#e0f3f8", RdYlBu's light-blue neighbour of the "#4575b4" dark blue) keeps
+    # the entire negative range in the blue family (R<B at every pixel down to
+    # NDVI=-0.001) while the land ramp still turns visibly brown by NDVI~0.02-0.05.
+    # This is not a water mask: turbid/vegetated water with slightly positive NDVI
+    # still renders brownish.
     "ndvi": Index("ndvi", _REFL,
-                  (-1.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _ndvi,
+                  (-0.2, 1.0, ["#4575b4", "#e0f3f8", "#8c510a", "#d8b365",
+                               "#f6e8c3", "#5ab4ac", "#01665e"]), _ndvi,
                   bands="NIR, Red", formula="(NIR - Red) / (NIR + Red)",
                   display_name="Vegetation greenness (NDVI)",
-                  low_label="bare", high_label="dense vegetation"),
+                  low_label="water", high_label="dense vegetation"),
     "lst": Index("lst", frozenset({"landsat"}),
                  (-10.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
                  _lst, bands="Thermal (ST_B6/ST_B10)",
