@@ -434,9 +434,13 @@ def _fit_bar_text(draw: ImageDraw.ImageDraw, text: str, px: int, avail_w: int) -
 def _fit_line_height(draw: ImageDraw.ImageDraw, px: int, max_h: int, floor_px: int) -> int:
     """Largest size <= `px` (never below `floor_px`) whose glyphs are <= `max_h` tall.
 
-    The header's first line is drawn larger than the body text, and its bar is only
-    `_bar_h` tall — on a small frame an enlarged line would spill out of the margin
-    and back over the imagery, which is the one thing the margins exist to prevent.
+    Each header line gets one `_bar_h` of vertical room, and `_bar_h` has a 12 px
+    floor while `_font` has a 10 px one — so on a small frame the nominal size does
+    not fit its row and the glyphs would spill out of the margin and back over the
+    imagery, which is the one thing the margins exist to prevent. "Ag" is the probe
+    because it spans ascender to descender; `draw_info_bar` additionally *clips* the
+    header to its zone, so this is the "keep the text whole" half of the guarantee,
+    not the guarantee itself.
     """
     while px > floor_px and draw.textbbox((0, 0), "Ag", font=_font(px))[3] > max_h:
         px -= 1
@@ -450,7 +454,7 @@ _TITLE_SCALE = 1.5
 
 def _fit_header_line2(draw: ImageDraw.ImageDraw, subtitle: str, caveats: str,
                       px: int, avail_w: int) -> tuple:
-    """(font, text) for header line 2, at `px` — the `_annot_scale` legibility floor.
+    """(font, text) for header line 2, at `px` — never shrunk below it to gain width.
 
     Line 2 carries the provenance caveats, which is why it does *not* shrink the way
     `_fit_bar_text` does for the title: a caveat set at 10 px on a 4K frame is a
@@ -458,9 +462,16 @@ def _fit_header_line2(draw: ImageDraw.ImageDraw, subtitle: str, caveats: str,
     with "…", and dropped entirely if even that will not fit. The caveat outranks the
     decoration; that ordering is an integrity requirement, not a styling preference.
 
-    Only when the caveats alone overflow with no subtitle left to give — a frame far
-    narrower than any real output — does the shrink-then-truncate fallback apply to
-    them, because at that point there is nothing left to trade.
+    Only when the caveats alone overflow with no subtitle left to give — a narrow
+    frame; measurably below ~524 px wide for the pooled caveat, and portrait aspects
+    reach that sooner — does the shrink-then-truncate fallback apply to them, because
+    at that point there is nothing left to trade.
+
+    `px` is a *width* floor, which is a separate question from whether the line fits
+    its row vertically: the caller passes a size already capped by `_fit_line_height`
+    so the glyphs cannot spill out of the header zone. On any frame whose bar is tall
+    enough for it — every output at or above roughly 480 px — that cap is inert and
+    `px` is exactly `_annot_scale`'s size.
     """
     font = _font(px)
     joined = " · ".join(p for p in (subtitle, caveats) if p)
@@ -493,24 +504,46 @@ def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
     `_fit_bar_text` so it stays inside the frame; line 2 is fitted by
     `_fit_header_line2`, which protects the caveat instead. The bar rectangle and the
     vertical placement never depend on the text.
+
+    **The header is drawn into its own zone and clipped to it**, rather than onto the
+    full frame. Font metrics are not the same quantity as the layout arithmetic: a
+    line's row is `_bar_h` tall (12 px floor) while `_font` only shrinks to 10 px, and
+    at 11 px DejaVu's ascender-to-descender box is 13 px — so on a small frame the
+    text physically does not fit its row and used to spill straight onto imagery row 0
+    (measured: every imagery height from 1 to 115 px, up to 45 lit pixels on the
+    picture). `_fit_line_height` keeps the text whole wherever the row can hold it;
+    the clip is what makes "no header ink on the imagery" true unconditionally, at
+    every height, for any string and any future font. Cropping first also keeps the
+    blend byte-identical to drawing on the whole frame — same RGBA compositing, same
+    pixels, just a smaller canvas.
     """
-    img = Image.fromarray(rgb.astype(np.uint8), "RGB")
-    draw = ImageDraw.Draw(img, "RGBA")
-    w, h = img.size
-    bar_h = _bar_h(h)
+    out = rgb.astype(np.uint8, copy=True)   # our own buffer — safe to write the zone into
+    h, w = out.shape[:2]
+    bar_h = _bar_h(h)                 # sized from the FULL frame, not the crop
     two_line = bool(subtitle or caveats)
+    # The zone this header owns: exactly the top margin `_margins` reserved for it
+    # (`bar_h` per line, +1 because PIL's `rectangle` includes its bottom edge).
+    zone_h = min(h, bar_h * (2 if two_line else 1) + 1)
+    img = Image.fromarray(out[:zone_h], "RGB")
+    draw = ImageDraw.Draw(img, "RGBA")
     pad = max(1, h // 200)
     x = max(4, w // 200)
-    base_px = max(11, h // 40)   # same size _annot_scale would pick — line 2's floor
     avail_w = max(1, w - 2 * x)
-    title_px = _fit_line_height(draw, round(base_px * _TITLE_SCALE), bar_h - pad, base_px)
+    avail_line_h = bar_h - pad
+    # `_annot_scale`'s size is what line 2 wants; `_fit_line_height` only lowers it on
+    # frames whose bar is too short to hold it (see `_fit_header_line2`). The title is
+    # larger, and never smaller than line 2.
+    base_px = max(11, h // 40)
+    line2_px = _fit_line_height(draw, base_px, avail_line_h, 10)
+    title_px = _fit_line_height(draw, round(base_px * _TITLE_SCALE), avail_line_h, line2_px)
     title_font, title = _fit_bar_text(draw, title, title_px, avail_w)
     draw.rectangle([0, 0, w, bar_h * (2 if two_line else 1)], fill=(0, 0, 0, 140))
     draw.text((x, pad), title, fill=(255, 255, 255, 255), font=title_font)
     if two_line:
-        font, line2 = _fit_header_line2(draw, subtitle, caveats, base_px, avail_w)
+        font, line2 = _fit_header_line2(draw, subtitle, caveats, line2_px, avail_w)
         draw.text((x, bar_h + pad), line2, fill=(255, 255, 255, 255), font=font)
-    return np.asarray(img)
+    out[:zone_h] = np.asarray(img)
+    return out
 
 
 def annotate(rgb: np.ndarray, label: str) -> np.ndarray:

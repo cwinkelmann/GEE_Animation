@@ -523,12 +523,48 @@ def test_header_line_two_truncates_the_subtitle_never_the_caveat(monkeypatch):
     assert font.size == annot_font.size, "line 2 must never render below the floor size"
 
 
-def test_render_draws_a_two_line_header_in_the_margin_not_over_the_imagery(tmp_path):
+@pytest.mark.parametrize("two_line", [True, False])
+def test_header_ink_never_reaches_the_imagery_at_any_frame_height(two_line):
+    """The invariant the margin arithmetic exists to protect, checked densely.
+
+    Font metrics are not the same quantity as the layout arithmetic: a header line's
+    row is `_bar_h` tall (12 px floor) while `_font` bottoms out at 10 px, and 11 px
+    DejaVu measures 13 px ascender-to-descender. So on a small frame the text does not
+    fit its row — for every imagery height from 1 to 115 px the second line used to
+    put ink straight onto imagery row 0. Descenders ("jgpqy") are in every string here
+    on purpose: they are what overflows, and a probe without them reports success.
+
+    `_margins(imagery_h, two_line)` is the contract: `draw_info_bar` may write into
+    the first `top_h` rows and not one row further, at any height.
+    """
+    from gee_animation.render import _margins, draw_info_bar
+    title = "Grumsiner Forst — UNESCO World Heritage beech forest, jgpqy"
+    subtitle = "Brandenburg, Germany, Schorfheide-Chorin, jgpqy"
+    caveat = "every frame re-picked from 2018–2024 — not a time series"
+    for imagery_h in list(range(1, 140)) + [200, 300, 427, 480, 720, 1080, 2160]:
+        top_h, bottom_h = _margins(imagery_h, two_line)
+        padded = np.zeros((imagery_h + top_h + bottom_h, 420, 3), np.uint8)
+        out = draw_info_bar(padded, title, subtitle if two_line else "",
+                            caveat if two_line else "")
+        assert out[top_h:].sum() == 0, f"header ink on imagery at height {imagery_h}"
+        assert out[:top_h].sum() > 0, f"nothing drawn at all at height {imagery_h}"
+
+
+@pytest.mark.parametrize("h", [1, 12, 62, 63, 90, 100, 106, 107, 115, 116, 117, 130,
+                               240, 400, 1080])
+def test_render_draws_a_two_line_header_in_the_margin_not_over_the_imagery(tmp_path, h):
     # (a) The header grows the top margin; it must never grow into the picture. Same
     # property as test_render_draws_label_bars_in_the_margins_not_over_the_imagery,
     # now with the doubled (title + subtitle/caveat) header.
+    #
+    # Parametrised over the height band where this DID fail, not just a comfortable
+    # frame: `_bar_h` floors at 12 px while `_font` floors at 10 px and 11 px DejaVu
+    # is 13 px tall ascender-to-descender, so for every imagery height from 1 to 115
+    # line 2's glyphs used to land on imagery row 0 (up to 45 lit pixels). A single
+    # h=240 case missed the entire band. 106/107 and 115/116/117 are the heights where
+    # `_margins`' 12 px floor hands over to its (h+1)//9 branch.
     from gee_animation.render import _margins
-    h, w = 240, 320
+    w = 320
     cfg = _cfg(tmp_path, name="hdr")
     cfg.index, cfg.palette = "rgb", []              # composite: no colorbar overlay
     cfg.frame_aoi = None                            # and no scale bar
