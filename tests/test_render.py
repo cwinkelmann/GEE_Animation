@@ -371,67 +371,181 @@ def test_render_skips_region_overlay_when_disabled(tmp_path, monkeypatch):
     render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)  # must not raise
 
 
-def test_draw_info_bar_shrinks_long_text_to_fit_the_frame():
-    # Reviewer-verified live overflow: lst_smw's info text measured 2239px wide in a
-    # 1920px frame and got cut mid-word. draw_info_bar must shrink the font until the
-    # text fits inside the frame instead of letting Pillow draw past the right edge.
-    from gee_animation.render import _info_text, draw_info_bar
-    cfg = types.SimpleNamespace(index="lst_smw")
-    text = _info_text(cfg)
-    w, h = 500, 1200          # narrow frame relative to this long formula string
+def _text_spy(monkeypatch):
+    """Every string PIL is actually asked to draw, in order."""
+    seen = []
+    real = ImageDraw.ImageDraw.text
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text",
+                        lambda self, xy, text, *a, **k: (seen.append(text)
+                                                        or real(self, xy, text, *a, **k)))
+    return seen
+
+
+def test_draw_info_bar_shrinks_a_long_title_to_fit_the_frame():
+    # Reviewer-verified live overflow: a header line measured 2239px wide in a 1920px
+    # frame and got cut mid-word. draw_info_bar must shrink the font until the line
+    # fits inside the frame instead of letting Pillow draw past the right edge.
+    from gee_animation.render import draw_info_bar
+    title = "Grumsiner Forst — UNESCO World Heritage beech forest, Brandenburg, Germany"
+    w, h = 500, 1200          # narrow frame relative to this long title
     rgb = np.zeros((h, w, 3), np.uint8)
-    out = draw_info_bar(rgb, text)
+    out = draw_info_bar(rgb, title)
     bar_h = h // 12
     # no ink in the rightmost columns of the bar row band -> text stayed inside frame
     assert out[:bar_h, -3:].sum() == 0
 
 
-def test_draw_info_bar_leaves_short_text_at_the_original_font_size():
-    # NDVI-style short text must render identically to before the fitting change: same
-    # font size (and therefore identical glyph rendering) as _annot_scale would pick.
-    from gee_animation.render import _info_text, draw_info_bar, _annot_scale
-    cfg = types.SimpleNamespace(index="ndvi")
-    text = _info_text(cfg)
+def test_draw_info_bar_draws_the_title_larger_than_the_annotation_font():
+    # Line 1 is the frame's headline — it must read bigger than the small print, not
+    # at the same size as the bottom-bar label.
+    from gee_animation.render import draw_info_bar, _annot_scale
+    title = "Vegetation greenness (NDVI)"
     w, h = 800, 300
-    rgb = np.zeros((h, w, 3), np.uint8)
-    out = draw_info_bar(rgb, text)
+    out = draw_info_bar(np.zeros((h, w, 3), np.uint8), title)
 
-    expected_font, _ = _annot_scale(h)
+    annot_font, _ = _annot_scale(h)
     scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-    tb = scratch.textbbox((0, 0), text, font=expected_font)
+    tb = scratch.textbbox((0, 0), title, font=annot_font)
     ink_cols = np.nonzero(out[:h // 12].sum(axis=(0, 2)))[0]
     assert ink_cols.size
-    # drawn text width matches what the unshrunk (_annot_scale) font would measure
-    assert ink_cols.max() - ink_cols.min() <= (tb[2] - tb[0]) + 2
+    # the title fits (so it was not shrunk) and is wider than _annot_scale would draw it
+    assert ink_cols.max() - ink_cols.min() > (tb[2] - tb[0])
+    assert ink_cols.max() < w
 
 
-def test_draw_info_bar_keeps_bar_height_fixed_for_long_and_short_text():
-    # Font-fitting must never touch the bar rectangle itself — _bar_h feeds the
-    # _margins fixed point (see test_margins_match_the_bar_height_of_the_padded_frame).
-    from gee_animation.render import _info_text, draw_info_bar, _bar_h
+def test_draw_info_bar_bar_height_is_one_line_or_two(monkeypatch):
+    # The bar rectangle feeds the _margins fixed point (see
+    # test_margins_match_the_bar_height_of_the_padded_frame): exactly one bar height
+    # for a title alone, exactly two when a second line exists, and never more.
+    from gee_animation.render import draw_info_bar, _bar_h
     w, h = 500, 300
-    long_text = _info_text(types.SimpleNamespace(index="lst_smw"))
-    short_text = _info_text(types.SimpleNamespace(index="ndvi"))
-    for text in (long_text, short_text):
-        rgb = np.zeros((h, w, 3), np.uint8)
-        out = draw_info_bar(rgb, text)
-        bar_h = _bar_h(h)
-        # bar tint fills exactly [0, bar_h) and nothing below it
-        assert out[:bar_h].sum() > 0
-        assert out[bar_h:].sum() == 0
+    bar_h = _bar_h(h)
+    one = draw_info_bar(np.zeros((h, w, 3), np.uint8), "Vegetation greenness (NDVI)")
+    assert one[:bar_h].sum() > 0 and one[bar_h:].sum() == 0
+
+    two = draw_info_bar(np.zeros((h, w, 3), np.uint8), "Title",
+                        "Brandenburg, Germany", "gap-filled from 2018–2024")
+    assert two[bar_h:2 * bar_h].sum() > 0        # the second line is drawn...
+    assert two[2 * bar_h:].sum() == 0            # ...and nothing below the doubled bar
 
 
-def test_info_text_shows_formula_and_bands():
-    from gee_animation.render import _info_text, draw_info_bar
-    cfg = types.SimpleNamespace(index="ndvi")
-    txt = _info_text(cfg)
-    assert txt.startswith("NDVI = (NIR - Red)") and "bands: NIR, Red" in txt
-    # composite: bands but no formula
-    assert _info_text(types.SimpleNamespace(index="cir")) == "CIR   bands: R<-NIR, G<-Red, B<-Green"
-    # and the bar draws onto the top strip
-    rgb = np.zeros((60, 200, 3), np.uint8)
-    out = draw_info_bar(rgb, txt)
-    assert out[:12, :].sum() > 0 and out[30:, :].sum() == 0
+def test_header_text_uses_the_index_display_name_when_no_title_is_set():
+    # (b) No title configured: the frame still has to say WHAT it shows, in words a
+    # non-specialist reads — not "NDVI = (NIR - Red) / (NIR + Red)".
+    from gee_animation.render import _header_text
+    title, subtitle, caveats = _header_text(types.SimpleNamespace(index="ndvi"))
+    assert title == "Vegetation greenness (NDVI)"
+    assert (subtitle, caveats) == ("", "")
+    assert _header_text(types.SimpleNamespace(index="lst_smw"))[0] == \
+        "Land surface temperature (split-window)"
+
+
+def test_header_text_prefers_an_explicit_title():
+    # (a) cfg.title wins over the registry name — the run knows what it is about.
+    from gee_animation.render import _header_text
+    cfg = types.SimpleNamespace(index="ndvi", title="Grumsiner Forst",
+                                subtitle="Brandenburg, Germany")
+    assert _header_text(cfg)[:2] == ("Grumsiner Forst", "Brandenburg, Germany")
+
+
+def test_header_never_carries_the_formula_or_the_band_list():
+    # (d) Review M2: the scaling coefficient read as debug output and cost credibility.
+    # The formula and band list live in the method doc now, on no frame.
+    from gee_animation.render import _header_text
+    from gee_animation.products import INDICES
+    for index in INDICES:
+        cfg = types.SimpleNamespace(index=index, pool_years=[2018, 2024],
+                                    pool_strategy="gap_fill", interpolate=4)
+        drawn = " ".join(_header_text(cfg))
+        assert "bands" not in drawn.lower()
+        for fragment in ("0.00341802", "273.15", "(NIR - Red)", "Ermida", "TsHARP"):
+            assert fragment not in drawn, f"{index}: {fragment!r} still on the frame"
+
+
+def test_header_never_draws_the_formula_on_an_lst_frame(monkeypatch, tmp_path):
+    # (d) end to end: the strings must not survive anywhere in a real lst render.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path, name="lstframe")
+    cfg.index, cfg.viz_min, cfg.viz_max = "lst", -10.0, 40.0
+    seen = _text_spy(monkeypatch)
+
+    def fake_fetch(image, cfg_, geometry=None):
+        return np.zeros((300, 600)), np.ones((300, 600), dtype=bool)
+
+    r.render([Frame("2022-06", object(), 2)], cfg, fetch=fake_fetch, geometry=None)
+    joined = " ".join(seen)
+    assert "Land surface temperature" in joined          # it still says what it is
+    for fragment in ("0.00341802", "149.0", "273.15", "bands", "ST_B"):
+        assert fragment not in joined
+
+
+def test_header_caveats_are_plain_language(monkeypatch):
+    # (c) The pooled/interpolated notes must survive the rewrite — reworded, not
+    # dropped. Each one still names the year range / frame count it warns about.
+    from gee_animation.render import _header_text
+    base = dict(index="ndvi", pool_years=[2018, 2024])
+    gap = _header_text(types.SimpleNamespace(**base, pool_strategy="gap_fill"))[2]
+    pooled = _header_text(types.SimpleNamespace(**base, pool_strategy="least_cloudy"))[2]
+    interp = _header_text(types.SimpleNamespace(index="ndvi", interpolate=10))[2]
+    assert gap == "gap-filled from 2018–2024"
+    assert pooled == "every frame re-picked from 2018–2024 — not a time series"
+    assert interp == "10 generated frames between observations"
+    # a plain run carries no caveat line at all
+    assert _header_text(types.SimpleNamespace(index="ndvi"))[2] == ""
+    # ...and both caveats at once are joined, neither dropped
+    both = _header_text(types.SimpleNamespace(index="ndvi", pool_years=[2018, 2024],
+                                              pool_strategy="gap_fill", interpolate=10))[2]
+    assert both == "gap-filled from 2018–2024 · 10 generated frames between observations"
+
+
+def test_header_line_two_truncates_the_subtitle_never_the_caveat(monkeypatch):
+    # (c) Legibility floor / review M1: line 2 is drawn at the _annot_scale size and
+    # is not allowed to shrink below it, so when it overflows something must give.
+    # The caveat outranks the decoration: the SUBTITLE is what gets the "…".
+    from gee_animation.render import draw_info_bar, _annot_scale
+    w, h = 640, 300
+    caveat = "every frame re-picked from 2018–2024 — not a time series"
+    subtitle = ("Brandenburg, Germany, in the Schorfheide-Chorin Biosphere Reserve "
+                "north-east of Berlin, mapped every month from Sentinel-2")
+    seen = _text_spy(monkeypatch)
+    draw_info_bar(np.zeros((h, w, 3), np.uint8), "Grumsiner Forst", subtitle, caveat)
+
+    line2 = seen[1]
+    assert caveat in line2, "the caveat must survive whole"
+    assert subtitle not in line2 and "…" in line2, "the subtitle must be the one trimmed"
+    # ...and it is still drawn at the legibility floor, not shrunk to fit
+    annot_font, _ = _annot_scale(h)
+    scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    assert scratch.textbbox((0, 0), line2, font=annot_font)[2] <= w
+
+    from gee_animation.render import _fit_header_line2
+    font, _text = _fit_header_line2(scratch, subtitle, caveat, annot_font.size, w - 8)
+    assert font.size == annot_font.size, "line 2 must never render below the floor size"
+
+
+def test_render_draws_a_two_line_header_in_the_margin_not_over_the_imagery(tmp_path):
+    # (a) The header grows the top margin; it must never grow into the picture. Same
+    # property as test_render_draws_label_bars_in_the_margins_not_over_the_imagery,
+    # now with the doubled (title + subtitle/caveat) header.
+    from gee_animation.render import _margins
+    h, w = 240, 320
+    cfg = _cfg(tmp_path, name="hdr")
+    cfg.index, cfg.palette = "rgb", []              # composite: no colorbar overlay
+    cfg.frame_aoi = None                            # and no scale bar
+    cfg.title = "Grumsiner Forst"
+    cfg.subtitle = "Brandenburg, Germany"
+    cfg.pool_years, cfg.pool_strategy = [2018, 2024], "gap_fill"
+
+    def fake_fetch(image, cfg_, geometry=None):
+        return np.full((h, w, 3), 123, dtype=float), np.ones((h, w), dtype=bool)
+
+    paths = render([Frame("2022-05", object(), 1, 2018)], cfg, fetch=fake_fetch,
+                   geometry=None)
+    arr = np.asarray(Image.open(next(p for p in paths if p.suffix == ".png")))
+    top_h, bottom_h = _margins(h, True)
+    assert arr.shape[:2] == (h + top_h + bottom_h, w)
+    assert np.all(arr[top_h:top_h + h] == 123)      # every imagery pixel untouched
+    assert arr[:top_h].sum() > 0 and arr[-bottom_h:].sum() > 0
 
 
 def test_render_projects_overlay_and_resolves_crs_when_auto(tmp_path, monkeypatch):
@@ -483,6 +597,43 @@ def test_output_spec_accounts_for_margins():
         assert abs(pw / ph - aoi_wh[0] / aoi_wh[1]) < 0.02
 
 
+def test_output_spec_accounts_for_a_two_line_header():
+    # (e) Same trap, doubled top margin: a subtitle/caveat makes the header two lines
+    # tall, and an explicit aspect: "16:9" must STILL come out exactly 16:9 — the
+    # extra line comes out of the place box, never off the canvas ratio.
+    from gee_animation.render import _output_spec, _margins, _two_line_header
+    for aoi_wh in ((200, 100), (100, 200), (160, 90)):
+        cfg = types.SimpleNamespace(preset="1080p", aspect="16:9", upscale="lanczos",
+                                    title="Grumsiner Forst",
+                                    subtitle="Brandenburg, Germany")
+        assert _two_line_header(cfg) is True
+        cw, ch, pw, ph, _ = _output_spec(cfg, aoi_wh)
+        assert (cw, ch) == (1920, 1080) and ch / cw == 9 / 16
+        assert ph + sum(_margins(ph, True)) <= ch
+        assert pw <= cw
+        assert abs(pw / ph - aoi_wh[0] / aoi_wh[1]) < 0.02
+    # a caveat alone (no title/subtitle configured) also makes it two lines
+    pooled = types.SimpleNamespace(preset="1080p", aspect="16:9", upscale="lanczos",
+                                   index="ndvi", pool_years=[2018, 2024])
+    assert _two_line_header(pooled) is True
+    plain = types.SimpleNamespace(preset="1080p", aspect="16:9", upscale="lanczos",
+                                  index="ndvi")
+    assert _two_line_header(plain) is False
+    # and the two-line canvas really does give the imagery less room than one line
+    assert _output_spec(pooled, (200, 100))[3] < _output_spec(plain, (200, 100))[3]
+
+
+def test_output_spec_match_grows_the_canvas_for_a_two_line_header():
+    # "match" promises no ratio, so the second header line grows the canvas instead of
+    # shrinking the imagery — exactly as the one-line case does.
+    from gee_animation.render import _output_spec, _margins
+    cfg = types.SimpleNamespace(preset="720p", aspect="match", upscale="lanczos",
+                                index="ndvi", subtitle="Brandenburg, Germany")
+    cw, ch, pw, ph, _ = _output_spec(cfg, (200, 100))
+    assert (pw, ph) == (1280, 640) and pw == cw
+    assert ch == ph + sum(_margins(ph, True))
+
+
 def test_output_spec_match_grows_canvas_instead_of_shrinking_imagery(tmp_path):
     # "match" (and the unset default, config.aspect is None) promises no ratio, so
     # Trap 2 does not apply to it: the margins must grow the canvas rather than eat
@@ -521,6 +672,19 @@ def test_margins_match_the_bar_height_of_the_padded_frame():
         top_h, bottom_h = _margins(imagery_h)
         bar_h = max(12, (imagery_h + top_h + bottom_h) // 12)
         assert (top_h, bottom_h) == (bar_h + 1, bar_h), imagery_h
+
+
+def test_two_line_margins_match_the_doubled_bar_height_of_the_padded_frame():
+    # Same fixed point with a two-line header: the TOP margin now has to hold two bar
+    # heights (title + subtitle/caveat) of the PADDED frame, the bottom still one.
+    # Solving b == (H + 3b + 1)//12 is what keeps the header off the imagery.
+    from gee_animation.render import _margins
+    for imagery_h in (1, 8, 90, 107, 116, 119, 120, 132, 200, 577, 799, 1080, 1799, 2160):
+        top_h, bottom_h = _margins(imagery_h, True)
+        bar_h = max(12, (imagery_h + top_h + bottom_h) // 12)
+        assert (top_h, bottom_h) == (2 * bar_h + 1, bar_h), imagery_h
+        # ...and it really is taller than the one-line header for any real frame
+        assert top_h >= _margins(imagery_h)[0]
 
 
 def test_add_margins_keeps_imagery_unoccluded():
@@ -884,14 +1048,18 @@ def test_render_annotates_scene_count_when_present(tmp_path, monkeypatch):
         return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
 
     render([Frame("2022-06", object(), 7)], cfg, fetch=fake_fetch, geometry=None)
-    assert labels == ["2022-06  n=7"]                  # scene count shown on the frame
+    # (f) the count is still on the frame — as "how much data backs this image", not
+    # as a variable dump (see labels.observed_text)
+    assert labels == ["June 2022 · 7 passes"]
 
 
 def test_render_composes_pooled_provenance_into_the_drawn_text(tmp_path, monkeypatch):
-    # Frame.label is the clean period key; Frame.source (added for pooled frames)
+    # (g) Frame.label is the clean period key; Frame.source (added for pooled frames)
     # carries where the imagery actually came from. render() must recombine them into
-    # the drawn text ("2022-05 ← 2021  n=1"), routed through `_drawable` (now a no-op
-    # identity fold, kept as the seam) right where the string is composed.
+    # the drawn text ("May 2022 · image from 2021 · 1 pass"), routed through
+    # `_drawable` (now a no-op identity fold, kept as the seam) where it is composed.
+    # The property with teeth: the source year must reach the frame. Dropping it would
+    # present borrowed imagery as this year's.
     import gee_animation.render as r
     cfg = _cfg(tmp_path)
     composed = []
@@ -905,11 +1073,10 @@ def test_render_composes_pooled_provenance_into_the_drawn_text(tmp_path, monkeyp
         return np.zeros((10, 10)), np.ones((10, 10), dtype=bool)
 
     render([Frame("2022-05", object(), 1, 2021)], cfg, fetch=fake_fetch, geometry=None)
-    # what render composed, before the (now no-op) fold: the real arrow, the source
-    # year, n=1
-    assert composed == ["2022-05 ← 2021  n=1"]
-    # the bundled DejaVu font draws the real arrow directly -- nothing is folded away
-    assert drawn == ["2022-05 ← 2021  n=1"]
+    # what render composed, before the (now no-op) fold: period, source year, count
+    assert composed == ["May 2022 · image from 2021 · 1 pass"]
+    assert drawn == ["May 2022 · image from 2021 · 1 pass"]
+    assert "2021" in drawn[0], "the borrowed year must never be dropped"
 
 
 def test_render_leaves_gap_fill_nominal_frames_unmarked(tmp_path, monkeypatch):
@@ -926,7 +1093,8 @@ def test_render_leaves_gap_fill_nominal_frames_unmarked(tmp_path, monkeypatch):
 
     render([Frame("2022-05", object(), 3, None), Frame("2022-06", object(), 1, 2019)],
            cfg, fetch=fake_fetch, geometry=None)
-    assert drawn == ["2022-05  n=3", "2022-06 ← 2019  n=1"]
+    assert drawn == ["May 2022 · 3 passes", "June 2022 · image from 2019 · 1 pass"]
+    assert "image from" not in drawn[0], "a nominal-year frame must claim no borrowing"
 
 
 def test_render_composite_passes_rgb_through_without_colorbar(tmp_path):
@@ -1138,17 +1306,16 @@ def test_fetch_thumbnail_selects_index_band(tmp_path):
     assert INDEX_BAND == "INDEX"
 
 
-def test_info_text_states_the_pooled_year_range():
-    # Pooled frames come from whichever year was clearest, so the provenance has to
-    # be drawn on the frame, not just live in the config. An ASCII hyphen, not an en
-    # dash: _info_text feeds draw_info_bar directly with no fold step (Pillow's
-    # default font has no en-dash glyph), so the fix has to be at the source.
-    from gee_animation.render import _info_text
-    plain = _info_text(types.SimpleNamespace(index="ndvi"))
-    pooled = _info_text(types.SimpleNamespace(index="ndvi", pool_years=[2019, 2024]))
-    assert "pooled years" not in plain
-    assert "pooled years 2019-2024" in pooled and "cosmetic" in pooled
-    assert "–" not in pooled
+def test_header_caveat_states_the_pooled_year_range():
+    # Pooled frames come from whichever year was clearest, so the provenance has to be
+    # drawn on the frame, not just live in the config. The wording is plain now and the
+    # en dash is a real glyph (the bundled DejaVu draws it), but the year range and the
+    # "not a time series" warning must both still be there.
+    from gee_animation.render import _header_text
+    plain = _header_text(types.SimpleNamespace(index="ndvi"))[2]
+    pooled = _header_text(types.SimpleNamespace(index="ndvi", pool_years=[2019, 2024]))[2]
+    assert plain == ""
+    assert "2019–2024" in pooled and "not a time series" in pooled
 
 
 def test_pooled_label_source_year_is_drawn_not_a_notdef_box():
@@ -1185,19 +1352,19 @@ def test_colorbar_drops_zero_label_when_it_collides_with_min():
     assert band.max() > 0, "the min label should still be drawn"
 
 
-def test_info_text_pooled_note_matches_the_strategy():
-    """gap_fill keeps the requested year where it has data, so labelling the whole run
-    "cosmetic" overstates it; least_cloudy/median do re-pick every frame, so for those
-    the blanket warning is right."""
-    from gee_animation.render import _info_text
+def test_header_pooled_caveat_matches_the_strategy():
+    """gap_fill keeps the requested year where it has data, so warning that the whole
+    run is not a time series overstates it; least_cloudy/median do re-pick every frame,
+    so for those the blanket warning is right."""
+    from gee_animation.render import _header_text
     base = dict(index="ndvi", pool_years=[2018, 2024])
-    gap = _info_text(types.SimpleNamespace(**base, pool_strategy="gap_fill"))
-    cosmetic = _info_text(types.SimpleNamespace(**base, pool_strategy="least_cloudy"))
-    assert "pooled years 2018-2024" in gap and "gap-filled" in gap
-    assert "cosmetic" not in gap
-    assert "cosmetic" in cosmetic and "gap-filled" not in cosmetic
-    # unpooled runs carry no pooling note at all
-    assert "pooled years" not in _info_text(types.SimpleNamespace(index="ndvi"))
+    gap = _header_text(types.SimpleNamespace(**base, pool_strategy="gap_fill"))[2]
+    repicked = _header_text(types.SimpleNamespace(**base, pool_strategy="least_cloudy"))[2]
+    assert "gap-filled" in gap and "not a time series" not in gap
+    assert "re-picked" in repicked and "not a time series" in repicked
+    assert "gap-filled" not in repicked
+    # both still name the range they borrow from
+    assert "2018–2024" in gap and "2018–2024" in repicked
 
 
 def test_colorbar_draws_a_backing_panel_for_contrast():
@@ -1226,8 +1393,8 @@ def _flat_fetch(image, cfg, geometry=None):
 
 
 def test_render_interpolates_between_frames(tmp_path, monkeypatch):
-    # Generated frames carry their own "a -> b  NN%" label; the observed ones keep
-    # exactly the text they had before.
+    # (g) A generated frame says so, in words, and keeps the percentage that marks it
+    # as computed rather than photographed (labels.generated_text).
     import gee_animation.render as r
     cfg = _cfg(tmp_path)
     cfg.interpolate = 2
@@ -1235,8 +1402,8 @@ def test_render_interpolates_between_frames(tmp_path, monkeypatch):
     monkeypatch.setattr(r, "annotate", lambda rgb, label: (drawn.append(label) or rgb))
     render([Frame("2022-05", object()), Frame("2022-06", object())], cfg,
            fetch=_flat_fetch, geometry=None)
-    assert drawn == ["2022-05", "2022-05 -> 2022-06  33%",
-                     "2022-05 -> 2022-06  67%", "2022-06"]
+    assert drawn == ["May 2022", "between May and June 2022 · 33%",
+                     "between May and June 2022 · 67%", "June 2022"]
 
 
 def test_render_scales_generated_frames_with_the_gap(tmp_path, monkeypatch):
@@ -1250,7 +1417,7 @@ def test_render_scales_generated_frames_with_the_gap(tmp_path, monkeypatch):
     render([Frame("2022-05", object()), Frame("2022-08", object())], cfg,
            fetch=_flat_fetch, geometry=None)
     assert len(drawn) == 5                       # 2 observed + 3 * 1 generated
-    assert drawn[0] == "2022-05" and drawn[-1] == "2022-08"
+    assert drawn[0] == "May 2022" and drawn[-1] == "August 2022"
 
 
 def test_render_interpolate_zero_is_untouched(tmp_path, monkeypatch):
@@ -1261,7 +1428,7 @@ def test_render_interpolate_zero_is_untouched(tmp_path, monkeypatch):
     monkeypatch.setattr(r, "annotate", lambda rgb, label: (drawn.append(label) or rgb))
     render([Frame("2022-05", object(), 3), Frame("2022-06", object())], cfg,
            fetch=_flat_fetch, geometry=None)
-    assert drawn == ["2022-05  n=3", "2022-06"]
+    assert drawn == ["May 2022 · 3 passes", "June 2022"]
 
 
 @pytest.mark.parametrize("mode", ["auto", "crossfade", "data"])
@@ -1270,9 +1437,14 @@ def test_render_observed_frames_are_byte_identical_with_and_without_interpolatio
         tmp_path, mode, index):
     """The central guarantee: interpolation adds frames, it never alters a real one.
 
-    Compared as rendered PNG bytes, over every mode/index combination that resolves —
-    `data` on a composite is rejected by config.validate, so it is skipped here rather
-    than pinning behaviour no valid run can reach.
+    Compared as the rendered *imagery* — the whole frame minus the label margins —
+    over every mode/index combination that resolves; `data` on a composite is rejected
+    by config.validate, so it is skipped here rather than pinning behaviour no valid
+    run can reach. The header *text* legitimately differs between the two runs: turning
+    interpolation on adds the "N generated frames between observations" caveat, which
+    is the honesty signal Task 3 exists to make legible. Both runs carry a subtitle, so
+    the header is two lines tall either way and the geometry is identical; what must
+    not change is a single pixel of the picture.
 
     The two observations carry **distinct** imagery and complementary cloud holes, so
     the property has teeth: with one shared shot every generated frame equals the
@@ -1300,15 +1472,24 @@ def test_render_observed_frames_are_byte_identical_with_and_without_interpolatio
         cfg.palette = [] if composite else cfg.palette
         cfg.interpolate = steps
         cfg.interpolate_mode = mode
+        cfg.subtitle = "Brandenburg, Germany"     # two-line header in BOTH runs
         render([Frame("2022-05", "A", 4), Frame("2022-06", "B", 1, 2021)],
                cfg, fetch=lambda image, c, geometry=None: shots[image], geometry=None)
+
+    from gee_animation.render import _margins
+
+    def _imagery(path):
+        arr = np.asarray(Image.open(path))
+        top_h, bottom_h = _margins(18, True)      # 18 == the fetched imagery height
+        assert arr.shape[0] == 18 + top_h + bottom_h
+        return arr[top_h:top_h + 18]
 
     _run("a", 0)
     _run("b", 3)
     for label in ("2022-05", "2022-06"):
-        a = (tmp_path / "a" / f"anim_{label}.png").read_bytes()
-        b = (tmp_path / "b" / f"anim_{label}.png").read_bytes()
-        assert a == b, f"{label} changed when interpolation was enabled"
+        a = _imagery(tmp_path / "a" / f"anim_{label}.png")
+        b = _imagery(tmp_path / "b" / f"anim_{label}.png")
+        assert np.array_equal(a, b), f"{label} changed when interpolation was enabled"
 
 
 def test_render_writes_pngs_for_observed_frames_only(tmp_path):
@@ -1346,12 +1527,13 @@ def test_render_interpolated_frames_reach_the_encoder(tmp_path, monkeypatch):
     assert len(seen) == 5                        # 2 observed + 3 generated
 
 
-def test_info_text_names_the_interpolation():
-    from gee_animation.render import _info_text
+def test_header_names_the_interpolation():
+    # Most frames of an interpolated run were never observed; the header has to say so,
+    # naming the count. Losing this note would present generated frames as acquisitions.
+    from gee_animation.render import _header_text
     cfg = types.SimpleNamespace(index="ndvi", interpolate=10)
-    assert "interpolated: 10 frames between observations" in _info_text(cfg)
-    assert "interpolated" not in _info_text(types.SimpleNamespace(index="ndvi",
-                                                                 interpolate=0))
+    assert "10 generated frames between observations" in _header_text(cfg)[2]
+    assert _header_text(types.SimpleNamespace(index="ndvi", interpolate=0))[2] == ""
 
 
 def _seq(cfg, frames, fetch, composite=False):
@@ -1417,7 +1599,7 @@ def test_imagery_sequence_auto_crossfades_a_composite(tmp_path):
     out = _seq(cfg, [Frame("2022-05", object()), Frame("2022-06", object())], fetch,
                composite=True)
     mid, mid_valid, text, label = out[1]
-    assert label is None and text == "2022-05 -> 2022-06  50%"
+    assert label is None and text == "between May and June 2022 · 50%"
     assert np.allclose(mid[:, :3], 100.0)        # only A observed it -> A's colour held
     assert np.allclose(mid[:, 3:], 150.0)        # both observed -> blended
     assert mid_valid.all()                       # a pixel A saw is not no-data

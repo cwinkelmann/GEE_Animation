@@ -16,7 +16,7 @@ import imageio.v2 as imageio
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from . import cache, interpolate
+from . import cache, interpolate, labels
 from .aoi import _load_geojson_geometry, _read_shapefile_geometry
 from .imaging import colorize
 from .products import INDICES, native_scale_m
@@ -279,49 +279,90 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4) -> np.ndarray:
     return np.asarray(img)
 
 
-def _info_text(cfg) -> str:
-    """One-line 'INDEX = formula   bands: …' describing how the frame was made.
+def _index_display_name(cfg) -> str:
+    """Plain-language name of the product being shown ("Vegetation greenness (NDVI)").
 
-    Under cross-year pooling (`cfg.pool_years`) it also states the pooled year range:
-    frames then come from whichever year had the clearest scene, so the provenance
-    has to be on the frame itself, not only in the config.
+    Falls back to the bare index key upper-cased if the registry has no
+    `display_name` — a frame with a terse title still beats a frame with none.
     """
     meta = _index_meta(cfg)
-    name = getattr(cfg, "index", "").upper()
-    head = f"{name} = {meta.formula}" if (meta and meta.formula) else name
-    bands = meta.bands if meta else ""
-    text = f"{head}   bands: {bands}" if bands else head
+    name = getattr(meta, "display_name", "") if meta else ""
+    return name or str(getattr(cfg, "index", "") or "").upper()
+
+
+def _caveats(cfg) -> str:
+    """Provenance caveats for header line 2, joined with " · " — "" when there are none.
+
+    These are the honesty devices, reworded plain (they used to be parenthetical asides
+    inside a formula string, which is not where a viewer looks):
+
+    - **pooling** (`cfg.pool_years`): frames come from whichever year had the clearest
+      scene, so the year range has to be on the frame, not only in the config.
+      `gap_fill` keeps the requested year wherever it has data and only borrows for
+      otherwise-empty periods, so its unmarked frames really are that year — warning
+      that the whole run is "not a time series" would overstate it. `least_cloudy` and
+      `median` re-pick *every* frame, so for those the blanket warning is correct.
+    - **interpolation** (`cfg.interpolate`): most frames of an interpolated run were
+      never observed; naming the count keeps the animation from reading as that many
+      real acquisitions.
+    """
+    parts = []
     pool = getattr(cfg, "pool_years", None)
     if pool:
-        # Plain ASCII hyphen, not an en dash: this string is drawn straight into
-        # `draw_info_bar` with no fold step, so it stays legible even if `_font`
-        # (see `_DRAWABLE`) ever falls back to a font without one.
-        # gap_fill keeps the requested year wherever it has data and only borrows for
-        # otherwise-empty periods, so its unmarked frames really are that year —
-        # calling the whole run "cosmetic" would overstate it. The other strategies
-        # re-pick every frame, so for those the blanket warning is correct.
-        note = ("gap-filled: frames marked <- YYYY borrow another year"
-                if getattr(cfg, "pool_strategy", None) == "gap_fill"
-                else "cosmetic: frames may be from different years")
-        text += f"   pooled years {int(pool[0])}-{int(pool[-1])} ({note})"
+        span = f"{int(pool[0])}–{int(pool[-1])}"
+        parts.append(f"gap-filled from {span}"
+                     if getattr(cfg, "pool_strategy", None) == "gap_fill"
+                     else f"every frame re-picked from {span} — not a time series")
     steps = int(getattr(cfg, "interpolate", 0) or 0)
     if steps:
-        # Most frames of an interpolated run were never observed; saying so on every
-        # frame keeps the animation from reading as that many real acquisitions.
-        text += f"   interpolated: {steps} frames between observations"
-    return text
+        parts.append(f"{steps} generated frames between observations")
+    return " · ".join(parts)
 
 
-def _margins(imagery_h: int) -> tuple:
+def _header_text(cfg) -> tuple:
+    """``(title, subtitle, caveats)`` for the top margin — the whole header.
+
+    Line 1 is the title (`cfg.title`, else the product's `display_name`); line 2 is
+    the subtitle and the caveats, and exists only when at least one of them is
+    non-empty. The formula and band list that used to fill this space are gone from
+    the frame entirely — they live in the method doc (see `products.Index.bands`).
+    """
+    return (getattr(cfg, "title", None) or _index_display_name(cfg),
+            getattr(cfg, "subtitle", None) or "",
+            _caveats(cfg))
+
+
+def _two_line_header(cfg) -> bool:
+    """Whether the header needs a second line — decidable from `cfg` alone.
+
+    This matters more than it looks: the second line **doubles the top margin**, and
+    every consumer of `_margins` (`add_margins`, `_fit_margins`, `_output_spec`) has
+    to agree on the same answer or the bars and the imagery disagree about where the
+    picture starts. Because subtitle, pooling and interpolation are all run-level
+    settings, the answer is the same for every frame of a run and is computed once,
+    before the frame loop.
+    """
+    _title, subtitle, caveats = _header_text(cfg)
+    return bool(subtitle or caveats)
+
+
+def _margins(imagery_h: int, two_line_header: bool = False) -> tuple:
     """(top_h, bottom_h) label margins to pad imagery `imagery_h` px tall with.
 
     `draw_info_bar`/`annotate` pick their bar height as `max(12, h // 12)` of the
-    array they are handed — which is the *padded* array — so the margin has to equal
-    that height: ``m == max(12, (imagery_h + top_h + bottom_h) // 12)``.
-    ``imagery_h // 10`` is the exact solution, under the same 12 px floor. The top
-    margin carries one extra pixel because PIL's `rectangle` includes its bottom
-    edge: without it the info bar's last row would tint the imagery's first row.
+    array they are handed — which is the *padded* array — so the margins have to be
+    whole multiples of that height. With a one-line header the top holds one bar and
+    the bottom one: ``m == max(12, (imagery_h + top_h + bottom_h) // 12)``, whose
+    exact solution is ``imagery_h // 10`` under a 12 px floor. With a two-line header
+    the top holds two, so the fixed point becomes
+    ``b == (imagery_h + 3b + 1) // 12`` — i.e. ``b == (imagery_h + 1) // 9``, again
+    under the 12 px floor (below which `_bar_h`'s own floor keeps both sides at 12).
+    The top margin carries one extra pixel because PIL's `rectangle` includes its
+    bottom edge: without it the header's last row would tint the imagery's first row.
     """
+    if two_line_header:
+        b = max(12, (imagery_h + 1) // 9)
+        return 2 * b + 1, b
     m = max(12, imagery_h // 10)
     return m + 1, m
 
@@ -351,6 +392,31 @@ def _bar_h(h: int) -> int:
     return max(12, h // 12)
 
 
+def _text_w(draw: ImageDraw.ImageDraw, text: str, font) -> int:
+    tb = draw.textbbox((0, 0), text, font=font)
+    return tb[2] - tb[0]
+
+
+def _truncate(draw: ImageDraw.ImageDraw, text: str, font, avail_w: int) -> str:
+    """Longest prefix of `text` (+ "…") that fits `avail_w` at `font`; "" if none does.
+
+    "…" (U+2026) is a real glyph in the bundled font (see `_font`), so it draws as an
+    ellipsis rather than a notdef box.
+    """
+    if _text_w(draw, text, font) <= avail_w:
+        return text
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _text_w(draw, text[:mid] + "…", font) <= avail_w:
+            lo = mid
+        else:
+            hi = mid - 1
+    if lo:
+        return text[:lo] + "…"
+    return "…" if _text_w(draw, "…", font) <= avail_w else ""
+
+
 def _fit_bar_text(draw: ImageDraw.ImageDraw, text: str, px: int, avail_w: int) -> tuple:
     """(font, text) that fits `avail_w` — shrink font size down to the `_font` floor
     (10px) before truncating with a trailing ellipsis.
@@ -359,50 +425,91 @@ def _fit_bar_text(draw: ImageDraw.ImageDraw, text: str, px: int, avail_w: int) -
     that already fits is returned completely unchanged — same font, same string.
     """
     font = _font(px)
-    tb = draw.textbbox((0, 0), text, font=font)
-    while tb[2] - tb[0] > avail_w and px > 10:
+    while _text_w(draw, text, font) > avail_w and px > 10:
         px -= 1
         font = _font(px)
-        tb = draw.textbbox((0, 0), text, font=font)
-    if tb[2] - tb[0] <= avail_w:
-        return font, text
-    # Still too wide at the size floor: binary-search the longest prefix (+ "…") that
-    # fits. "…" (U+2026) is a real glyph in the bundled font (see `_font`), so it
-    # draws as an ellipsis, not a notdef box.
-    lo, hi = 0, len(text)
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        tb = draw.textbbox((0, 0), text[:mid] + "…", font=font)
-        if tb[2] - tb[0] <= avail_w:
-            lo = mid
-        else:
-            hi = mid - 1
-    return font, (text[:lo] + "…" if lo > 0 else "…")
+    return font, (_truncate(draw, text, font, avail_w) or "…")
 
 
-def draw_info_bar(rgb: np.ndarray, text: str) -> np.ndarray:
-    """Draw a translucent top bar naming the bands used and the formula (if any).
+def _fit_line_height(draw: ImageDraw.ImageDraw, px: int, max_h: int, floor_px: int) -> int:
+    """Largest size <= `px` (never below `floor_px`) whose glyphs are <= `max_h` tall.
 
-    `text` is drawn as given — the bundled font (see `_font`) renders it directly, no
-    fold step required (`_drawable`, still called by callers that carry pooled-frame
-    provenance text, is now an identity function). Unlike `annotate`'s bottom label
-    (always short), this text can overflow a narrow frame for the long-formula
-    indices (lst_smw, lst_sharp); `_fit_bar_text` shrinks the
-    font (and, as a last resort, truncates) so it always stays inside the frame. The
-    bar height/rectangle and vertical placement are untouched either way — only the
-    font size and, in the worst case, the string itself change.
+    The header's first line is drawn larger than the body text, and its bar is only
+    `_bar_h` tall — on a small frame an enlarged line would spill out of the margin
+    and back over the imagery, which is the one thing the margins exist to prevent.
+    """
+    while px > floor_px and draw.textbbox((0, 0), "Ag", font=_font(px))[3] > max_h:
+        px -= 1
+    return px
+
+
+#: How much larger the header's title line is than the body text (`_annot_scale`).
+#: Enough to read as a headline; the bar height caps it on small frames.
+_TITLE_SCALE = 1.5
+
+
+def _fit_header_line2(draw: ImageDraw.ImageDraw, subtitle: str, caveats: str,
+                      px: int, avail_w: int) -> tuple:
+    """(font, text) for header line 2, at `px` — the `_annot_scale` legibility floor.
+
+    Line 2 carries the provenance caveats, which is why it does *not* shrink the way
+    `_fit_bar_text` does for the title: a caveat set at 10 px on a 4K frame is a
+    caveat nobody reads. When the line is too wide, the **subtitle** pays — trimmed
+    with "…", and dropped entirely if even that will not fit. The caveat outranks the
+    decoration; that ordering is an integrity requirement, not a styling preference.
+
+    Only when the caveats alone overflow with no subtitle left to give — a frame far
+    narrower than any real output — does the shrink-then-truncate fallback apply to
+    them, because at that point there is nothing left to trade.
+    """
+    font = _font(px)
+    joined = " · ".join(p for p in (subtitle, caveats) if p)
+    if _text_w(draw, joined, font) <= avail_w:
+        return font, joined
+    if not caveats:                       # decoration only: trim it at the floor size
+        return font, _truncate(draw, subtitle, font, avail_w)
+    if subtitle:
+        budget = avail_w - _text_w(draw, f" · {caveats}", font)
+        trimmed = _truncate(draw, subtitle, font, budget) if budget > 0 else ""
+        if trimmed:
+            return font, f"{trimmed} · {caveats}"
+        if _text_w(draw, caveats, font) <= avail_w:
+            return font, caveats          # subtitle dropped; the caveat stays whole
+    return _fit_bar_text(draw, caveats, px, avail_w)      # last resort (see docstring)
+
+
+def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
+                  caveats: str = "") -> np.ndarray:
+    """Draw the translucent header into the top margin: title, then subtitle+caveats.
+
+    Line 1 is the title, set larger than the body text — it is what tells a viewer
+    what and where this is, which no frame used to say at all. Line 2 exists only when
+    `subtitle` or `caveats` is non-empty, and when it does the bar is **two**
+    `_bar_h`s tall; `_margins`/`_two_line_header` size the margin to match, so the
+    header never touches the imagery either way.
+
+    Text is drawn as given — the bundled font (see `_font`) renders it directly, no
+    fold step required. A long title is shrunk (and, in the worst case, truncated) by
+    `_fit_bar_text` so it stays inside the frame; line 2 is fitted by
+    `_fit_header_line2`, which protects the caveat instead. The bar rectangle and the
+    vertical placement never depend on the text.
     """
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
     w, h = img.size
     bar_h = _bar_h(h)
+    two_line = bool(subtitle or caveats)
     pad = max(1, h // 200)
     x = max(4, w // 200)
-    px = max(11, h // 40)   # same starting size _annot_scale would pick
+    base_px = max(11, h // 40)   # same size _annot_scale would pick — line 2's floor
     avail_w = max(1, w - 2 * x)
-    font, text = _fit_bar_text(draw, text, px, avail_w)
-    draw.rectangle([0, 0, w, bar_h], fill=(0, 0, 0, 140))
-    draw.text((x, pad), text, fill=(255, 255, 255, 255), font=font)
+    title_px = _fit_line_height(draw, round(base_px * _TITLE_SCALE), bar_h - pad, base_px)
+    title_font, title = _fit_bar_text(draw, title, title_px, avail_w)
+    draw.rectangle([0, 0, w, bar_h * (2 if two_line else 1)], fill=(0, 0, 0, 140))
+    draw.text((x, pad), title, fill=(255, 255, 255, 255), font=title_font)
+    if two_line:
+        font, line2 = _fit_header_line2(draw, subtitle, caveats, base_px, avail_w)
+        draw.text((x, bar_h + pad), line2, fill=(255, 255, 255, 255), font=font)
     return np.asarray(img)
 
 
@@ -679,17 +786,19 @@ def draw_scale_bar(rgb: np.ndarray, frame_width_m: float, target_frac: float = 0
     return np.asarray(img)
 
 
-def _fit_margins(pw: int, ph: int, ch: int, aoi_aspect: float) -> tuple:
+def _fit_margins(pw: int, ph: int, ch: int, aoi_aspect: float,
+                 two_line_header: bool = False) -> tuple:
     """Shrink the imagery place box so imagery + both label margins still fits `ch`.
 
     The margins are part of the output, so they have to come *out of* the canvas the
     preset asked for; adding them afterwards would make an `aspect: "16:9"` render
-    taller than 16:9. `_margins` together are ~1/5 of the imagery height, so 10/12 of
-    the canvas height is the analytic starting guess and the loop only trims the odd
-    pixel — or a little more on the small canvases where the 12 px floor dominates.
+    taller than 16:9. With a one-line header the margins together are ~1/5 of the
+    imagery height, so 10/12 of the canvas height is the analytic starting guess; a
+    two-line header's are ~1/3, so it starts at 9/12. Either way the loop only trims
+    the odd pixel — or a little more on small canvases where the 12 px floor dominates.
     """
-    ph = min(ph, max(1, ch * 10 // 12))
-    while ph > 1 and ph + sum(_margins(ph)) > ch:
+    ph = min(ph, max(1, ch * (9 if two_line_header else 10) // 12))
+    while ph > 1 and ph + sum(_margins(ph, two_line_header)) > ch:
         ph -= 1
     return max(1, min(pw, round(ph * aoi_aspect))), ph
 
@@ -707,6 +816,10 @@ def _output_spec(cfg, imagery_wh):
     make a "16:9" render taller than 16:9. For "match" (and the unset default) no
     ratio was promised, so the canvas grows by the margins instead and the imagery
     keeps its full preset size: a "match" that letterboxed would not be matching.
+
+    How tall those margins are depends on whether the run's header has a second line,
+    which `_two_line_header` decides from `cfg` — the same decision `render()` makes
+    for `add_margins`, so the layout computed here is the layout that gets drawn.
     """
     preset = getattr(cfg, "preset", None)
     if not preset:
@@ -716,12 +829,14 @@ def _output_spec(cfg, imagery_wh):
     iw, ih = imagery_wh
     aoi_aspect = iw / ih
     aspect = getattr(cfg, "aspect", None)
+    two_line = _two_line_header(cfg)
     if not aspect or aspect == "match":     # canvas == frame aspect; imagery fills it
         if aoi_aspect >= 1:
             pw, ph = long_edge, max(1, round(long_edge / aoi_aspect))
         else:
             ph, pw = long_edge, max(1, round(long_edge * aoi_aspect))
-        return pw, ph + sum(_margins(ph)), pw, ph, method   # canvas grows, imagery doesn't
+        # canvas grows, imagery doesn't
+        return pw, ph + sum(_margins(ph, two_line)), pw, ph, method
     target = ASPECTS[aspect]
     if target >= 1:
         cw, ch = long_edge, max(1, round(long_edge / target))
@@ -731,7 +846,7 @@ def _output_spec(cfg, imagery_wh):
         pw, ph = cw, max(1, round(cw / aoi_aspect))
     else:
         ph, pw = ch, max(1, round(ch * aoi_aspect))
-    pw, ph = _fit_margins(pw, ph, ch, aoi_aspect)
+    pw, ph = _fit_margins(pw, ph, ch, aoi_aspect, two_line)
     return cw, ch, pw, ph, method
 
 
@@ -999,6 +1114,25 @@ def _resolve(frame, call):
         raise RuntimeError(f"fetching frame {where} failed: {exc}") from exc
 
 
+def _generated_display(marker: str) -> str:
+    """Plain-language caption for `interpolate.expand`'s "A -> B  NN%" frame marker.
+
+    `interpolate` stays pure and keyed on period labels — it has no business knowing
+    how a frame is captioned — so the marker it emits is parsed back into its three
+    facts here and reworded by `labels.generated_text`. The percentage is carried
+    through unchanged: it is the signal that this frame was computed, not observed.
+    Anything unparseable is drawn as-is rather than dropped; a caption nobody planned
+    for is still better than a generated frame that looks observed.
+    """
+    try:
+        span, pct = marker.rsplit("  ", 1)
+        label_a, label_b = span.split(" -> ")
+        return labels.generated_text(label_a, label_b, int(pct.rstrip("%")))
+    except (ValueError, IndexError, KeyError):
+        log.debug("un-reworded generated-frame marker %r", marker)
+        return marker
+
+
 def _imagery_sequence(frames, cfg, fetch, geometry, workers, composite):
     """Yield ``(rgb, valid, display_text, label)`` — the imagery for every frame of the
     animation, generated ones included, before any overlay is drawn.
@@ -1020,11 +1154,11 @@ def _imagery_sequence(frames, cfg, fetch, geometry, workers, composite):
     def display_for(frame):
         # `frame.label` stays a clean period key (it is also the PNG filename and the
         # metadata `month` column — see compositing.pooled_composite), so a pooled
-        # frame's provenance is appended only for drawing.
-        n = getattr(frame, "n_scenes", None)
-        source = getattr(frame, "source", None)
-        shown = f"{frame.label} ← {source}" if source is not None else frame.label
-        return f"{shown}  n={n}" if n is not None else shown
+        # frame's provenance is composed in only for drawing. `labels` owns the
+        # wording — the same facts (period, borrowed year, scene count) in plain
+        # language instead of "2022-05 ← 2021  n=1".
+        return labels.observed_text(frame.label, getattr(frame, "n_scenes", None),
+                                    getattr(frame, "source", None))
 
     def as_rgb(arr):
         # composite fetch already returns colour (H×W×3); an index returns 2-D.
@@ -1070,9 +1204,9 @@ def _imagery_sequence(frames, cfg, fetch, geometry, workers, composite):
     gap = interpolate.gap_for(getattr(cfg, "cadence", None) or "monthly")
     for values, valid, label, is_real in interpolate.expand(observations(), steps, gap):
         # An observed frame keeps its full display text; a generated one is labelled
-        # with the transition it sits in ("2022-05 -> 2022-06  30%").
-        yield post(values), valid, (texts.popleft() if is_real else label), (
-            label if is_real else None)
+        # with the transition it sits in ("between May and June 2022 · 30%").
+        text = texts.popleft() if is_real else _generated_display(label)
+        yield post(values), valid, text, (label if is_real else None)
 
 
 def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
@@ -1090,7 +1224,12 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                                    else (bounds, rings))
         frame_width_m = _frame_width_m(bounds, proj_bounds, cfg.crs)
     composite = _is_composite(cfg)
-    info_text = _info_text(cfg)
+    # The header is run-level: same three strings on every frame, and — crucially —
+    # the same number of lines, so the margins are constant for the whole run (see
+    # `_two_line_header`). Computed once, before the loop, and used both for drawing
+    # and for the `_margins`/`_output_spec` geometry.
+    header_title, header_subtitle, header_caveats = _header_text(cfg)
+    two_line_header = bool(header_subtitle or header_caveats)
     output = None      # (cw, ch, pw, ph, method) screen layout, computed on frame 1
     region_width = getattr(cfg, "region_line_width", None) or 2
     region_masks = None   # (casing_mask, core_mask); built once below, then reused
@@ -1157,9 +1296,9 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                 rgb = draw_scale_bar(rgb, frame_width_m)
             # Now grow the canvas and let the (shape-preserving) bar drawers fill the new
             # top/bottom strips, so the labels sit beside the imagery instead of over it.
-            top_h, bottom_h = _margins(rgb.shape[0])
+            top_h, bottom_h = _margins(rgb.shape[0], two_line_header)
             rgb = add_margins(rgb, top_h, bottom_h)
-            rgb = draw_info_bar(rgb, info_text)
+            rgb = draw_info_bar(rgb, header_title, header_subtitle, header_caveats)
             # `text` is already composed (see `_imagery_sequence`). `_drawable` is a
             # no-op now (the bundled font draws "←" directly) but stays as the single
             # seam this composed text passes through on its way to `annotate`.
