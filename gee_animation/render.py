@@ -4,6 +4,8 @@ from __future__ import annotations
 import io
 import logging
 import math
+import time
+import urllib.error
 from collections import deque
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -143,6 +145,55 @@ def _decode_thumbnail(data: bytes, cfg, composite: bool):
     return index_arr, valid
 
 
+#: Backoff (seconds) between retry attempts of a thumbnail fetch — sleep after
+#: attempt 1 and after attempt 2, then give up after attempt 3. Referenced as
+#: `time.sleep` (not `from time import sleep`) and as a module-level tuple so both
+#: are patchable from tests without touching the retry logic itself.
+_RETRY_SLEEPS = (2.0, 6.0)
+
+#: HTTP codes worth a retry — rate-limiting/transient server trouble. Anything
+#: else (403/404, ...) is a real error and must fail on the first attempt.
+_RETRYABLE_HTTP_CODES = {429, 500, 502, 503, 504}
+
+
+def _fetch_url(url: str, timeout: int) -> bytes:
+    """GET `url` and return the body, retrying a bounded number of transient failures.
+
+    A single blip used to kill an otherwise-healthy multi-hour render outright: a
+    60-frame run died on ONE HTTP 503 six minutes in, a 254-frame run the same way.
+    Up to ``len(_RETRY_SLEEPS) + 1`` attempts total, sleeping `_RETRY_SLEEPS[i]`
+    between attempt i+1 and i+2.
+
+    Retried: `HTTPError` whose code is in `_RETRYABLE_HTTP_CODES` (429/500/502/503/504
+    — rate limiting and transient server trouble), and `URLError`/`TimeoutError`
+    (network blips). NOT retried: any other HTTP code (403/404 are real errors, not
+    blips) or any other exception — in particular this never wraps `getThumbURL`
+    itself, so an `ee.EEException` (e.g. "memory limit exceeded", which retrying can
+    only make worse) is never blanket-retried.
+
+    Raises exactly what the final attempt raised, so the caller's error-propagation
+    path (a frame-named producer error, never a truncated animation reported as
+    success) is unaffected — this only delays that failure long enough for a blip to
+    pass.
+    """
+    attempts = len(_RETRY_SLEEPS) + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            with urlopen(url, timeout=timeout) as resp:  # noqa: S310 (trusted EE URL; timeout avoids hangs)
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code not in _RETRYABLE_HTTP_CODES or attempt == attempts:
+                raise
+            log.warning("thumbnail fetch attempt %d/%d failed (HTTP %d); retrying",
+                        attempt, attempts, exc.code)
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if attempt == attempts:
+                raise
+            log.warning("thumbnail fetch attempt %d/%d failed (%s); retrying",
+                        attempt, attempts, exc)
+        time.sleep(_RETRY_SLEEPS[attempt - 1])
+
+
 def _fetch_thumbnail(image, cfg, geometry):
     """Download the frame via EE getThumbURL (memoised on disk by `cache`).
 
@@ -170,8 +221,7 @@ def _fetch_thumbnail(image, cfg, geometry):
 
     bands = ["R", "G", "B"] if composite else "INDEX"
     url = image.select(bands).getThumbURL(params)
-    with urlopen(url, timeout=180) as resp:  # noqa: S310 (trusted EE URL; timeout avoids hangs)
-        data = resp.read()
+    data = _fetch_url(url, timeout=180)
     cache.store(cfg, key, data)
     return _decode_thumbnail(data, cfg, composite)
 

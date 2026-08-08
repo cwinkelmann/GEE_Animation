@@ -4,7 +4,9 @@ Network-free: `urlopen` is faked at the render seam and every cfg points
 `cache_dir` at a pytest `tmp_path`, so the real user cache is never touched.
 """
 import io
+import logging
 import types
+import urllib.error
 
 import numpy as np
 import pytest
@@ -239,3 +241,106 @@ def test_clear_removes_entries(tmp_path, urlopen_counter):
     assert not list(cache.cache_dir(cfg).rglob("*.bin"))
     _fetch_thumbnail(_FakeImage(), cfg, "GEOM")
     assert len(urlopen_counter) == 2
+
+
+# --------------------------------------------------------------------------
+# transient-failure retry: a single 503/429/network blip must not kill an
+# otherwise-healthy render (see gee_animation.render._fetch_url)
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    """Replace render.time.sleep with a recording no-op — retry tests never wait."""
+    sleeps = []
+    monkeypatch.setattr("gee_animation.render.time.sleep", lambda s: sleeps.append(s))
+    return sleeps
+
+
+def _http_error(code, url="https://earthengine.invalid/thumb.png"):
+    return urllib.error.HTTPError(url, code, f"HTTP {code}", None, None)
+
+
+def test_transient_503_retries_then_succeeds(tmp_path, monkeypatch, no_sleep, caplog):
+    calls = []
+
+    def flaky_urlopen(url, timeout=None):
+        calls.append(url)
+        if len(calls) <= 2:
+            raise _http_error(503)
+        return _FakeResponse(_png_bytes())
+
+    monkeypatch.setattr("gee_animation.render.urlopen", flaky_urlopen)
+    with caplog.at_level(logging.WARNING):
+        arr, valid = _fetch_thumbnail(_FakeImage(), _cfg(tmp_path), "GEOM")
+
+    assert len(calls) == 3, "two failures + one success == 3 urlopen calls"
+    assert no_sleep == [2.0, 6.0], "backoff must be the two configured sleeps, in order"
+    warnings = [rec.message for rec in caplog.records if rec.levelno == logging.WARNING]
+    assert sum("retrying" in w for w in warnings) == 2, "one warning per retry"
+    assert arr.shape == (8, 8)
+
+
+def test_transient_503_exhausts_retries_and_raises(tmp_path, monkeypatch, no_sleep):
+    calls = []
+
+    def always_503(url, timeout=None):
+        calls.append(url)
+        raise _http_error(503)
+
+    monkeypatch.setattr("gee_animation.render.urlopen", always_503)
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _fetch_thumbnail(_FakeImage(), _cfg(tmp_path), "GEOM")
+
+    assert exc.value.code == 503
+    assert len(calls) == 3, "exactly 3 attempts total, then give up"
+    assert no_sleep == [2.0, 6.0]
+
+
+def test_404_is_not_retried(tmp_path, monkeypatch, no_sleep):
+    calls = []
+
+    def not_found(url, timeout=None):
+        calls.append(url)
+        raise _http_error(404)
+
+    monkeypatch.setattr("gee_animation.render.urlopen", not_found)
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _fetch_thumbnail(_FakeImage(), _cfg(tmp_path), "GEOM")
+
+    assert exc.value.code == 404
+    assert len(calls) == 1, "a real error must not be retried"
+    assert no_sleep == []
+
+
+@pytest.mark.parametrize("code", sorted({429, 500, 502, 503, 504}))
+def test_retryable_http_codes_recover_on_second_attempt(tmp_path, monkeypatch, no_sleep, code):
+    calls = []
+
+    def flaky_urlopen(url, timeout=None):
+        calls.append(url)
+        if len(calls) == 1:
+            raise _http_error(code)
+        return _FakeResponse(_png_bytes())
+
+    monkeypatch.setattr("gee_animation.render.urlopen", flaky_urlopen)
+    _fetch_thumbnail(_FakeImage(), _cfg(tmp_path), "GEOM")
+
+    assert len(calls) == 2
+    assert no_sleep == [2.0]
+
+
+def test_url_error_is_retried(tmp_path, monkeypatch, no_sleep):
+    calls = []
+
+    def flaky_urlopen(url, timeout=None):
+        calls.append(url)
+        if len(calls) == 1:
+            raise urllib.error.URLError("connection reset")
+        return _FakeResponse(_png_bytes())
+
+    monkeypatch.setattr("gee_animation.render.urlopen", flaky_urlopen)
+    arr, valid = _fetch_thumbnail(_FakeImage(), _cfg(tmp_path), "GEOM")
+
+    assert len(calls) == 2
+    assert no_sleep == [2.0]
+    assert arr.shape == (8, 8)
