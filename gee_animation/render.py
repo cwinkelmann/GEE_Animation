@@ -303,7 +303,19 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
     font, lw = _annot_scale(h)
     bar_w = max(20, int(w * 0.4))
     bar_h = max(6, h // 20)
-    x0, y0 = x_offset + max(4, w // 200), y_offset
+    x0 = x_offset + max(4, w // 200)
+    # Legend heading: cartographic convention names the variable the ramp shows
+    # ("Vegetation greenness (NDVI)"), drawn on its own line above the ramp, same
+    # font as the tick labels below. Drawn unconditionally -- the legend naming its
+    # own variable is correct whether or not cfg.title is also set (see render()'s
+    # header, which falls back to this same name when no title is set; a harmless
+    # doubled statement on untitled frames is fine).
+    heading = _index_display_name(cfg)
+    line_h = draw.textbbox((0, 0), "Ag", font=font)[3]   # incl. descenders; reused
+                                                           # below for the anchor line
+    head_gap = max(2, lw)
+    panel_top = y_offset
+    y0 = panel_top + line_h + head_gap   # ramp starts below the heading line
     vmin, vmax = cfg.viz_min, cfg.viz_max
     ramp = colorize(
         np.linspace(vmin, vmax, bar_w)[None, :],
@@ -354,7 +366,6 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
     # or an index the registry has no words for) draws no anchor at all.
     low_label = getattr(meta, "low_label", "") if meta else ""
     high_label = getattr(meta, "high_label", "") if meta else ""
-    line_h = draw.textbbox((0, 0), "Ag", font=font)[3]   # incl. descenders
     anchor_y = text_y + text_h + max(2, lw)
     low_bounds = _label_bounds(low_label, x0, "l") if low_label else None
     high_bounds = _label_bounds(high_label, x0 + bar_w, "r") if high_label else None
@@ -384,6 +395,7 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
     # unreadable. draw_scale_bar already backs its label the same way; without this
     # the legend's legibility depends on whatever the scene happens to look like.
     pad = max(3, lw * 2)
+    heading_bounds = _label_bounds(heading, x0, "l")
     shown = [(_label_bounds(lb, _x(v), a)) for i, (v, lb, a, _d) in enumerate(ticks)
              if show_label[i]]
     if show_low:
@@ -391,11 +403,14 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
     if show_high:
         shown.append(high_bounds)
     shown.append(swatch_label_bounds)
+    shown.append(heading_bounds)
     right = max([x0 + bar_w, swatch_x0 + swatch_size] + [hi for _lo, hi in shown])
     left = min([x0] + [lo for lo, _hi in shown])
     panel_bottom = anchor_y + line_h if (show_low or show_high) else text_y + text_h
-    draw.rectangle([left - pad, y0 - pad, right + pad, panel_bottom + pad],
+    draw.rectangle([left - pad, panel_top - pad, right + pad, panel_bottom + pad],
                    fill=(0, 0, 0, 130))
+
+    draw.text((x0, panel_top), heading, fill=(255, 255, 255, 255), font=font)
 
     for i in range(bar_w):
         c = tuple(int(v) for v in ramp[i])

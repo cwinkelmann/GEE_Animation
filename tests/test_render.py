@@ -1451,6 +1451,18 @@ def _cfg_ns():
     )
 
 
+def _colorbar_bar_y0(h, y_offset=4):
+    """Re-derive add_colorbar's own bar-top y: the ramp now starts one heading
+    line (plus its gap) below y_offset, to make room for the legend heading drawn
+    above it. Mirrors add_colorbar's own `y0 = panel_top + line_h + head_gap`
+    exactly, so geometry-probing tests don't have to hardcode the heading's height."""
+    from gee_animation.render import _annot_scale
+    font, lw = _annot_scale(h)
+    scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    line_h = scratch.textbbox((0, 0), "Ag", font=font)[3]
+    return y_offset + line_h + max(2, lw)
+
+
 def test_apply_nodata_paints_invalid_pixels():
     rgb = np.zeros((1, 2, 3), np.uint8)
     valid = np.array([[True, False]])
@@ -1466,6 +1478,76 @@ def test_add_colorbar_preserves_shape_and_draws():
     assert out.sum() > 0
 
 
+# --- legend heading: the colorbar names the variable it shows --------------------
+
+def test_colorbar_draws_the_index_display_name_as_a_heading():
+    """Cartographic convention: the legend names the variable. A heading line -- the
+    index's display_name, same font as the tick labels -- must be drawn above the
+    ramp on the panel's own top edge. And it must be there *whether or not* cfg.title
+    is set: the header shows title OR display_name (never both), but a titled frame
+    ("Grumsin Beech Forest") still needs the product name (NDVI, LST, ...) somewhere
+    on the frame -- the legend is that somewhere, unconditionally. add_colorbar never
+    reads cfg.title at all, so the two renders must come out byte-identical."""
+    from gee_animation.render import _annot_scale
+    w, h = 400, 120
+    rgb = np.zeros((h, w, 3), np.uint8)
+    x0 = max(4, w // 200)
+    font, _lw = _annot_scale(h)
+    scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    heading_h = scratch.textbbox((0, 0), "Ag", font=font)[3]
+
+    outs = []
+    for title in (None, "Grumsin Beech Forest"):
+        cfg = types.SimpleNamespace(index="lst", viz_min=-3.0, viz_max=46.0,
+                                    palette=["#0000ff", "#ff0000"], title=title)
+        out = add_colorbar(rgb.copy(), cfg)
+        heading_band = out[4: 4 + heading_h, x0: w]
+        assert heading_band.sum() > 0, f"heading not drawn when cfg.title={title!r}"
+        outs.append(out)
+    assert np.array_equal(outs[0], outs[1]), \
+        "the legend heading must not vary with cfg.title -- add_colorbar ignores it"
+
+
+def test_colorbar_heading_falls_back_to_the_index_key_when_no_display_name():
+    """Defensive fallback, exercised through add_colorbar directly (not just the
+    _index_display_name unit): an index the registry has no entry for still gets a
+    heading -- the bare index key, upper-cased -- rather than a blank line."""
+    from gee_animation.render import _annot_scale, _index_display_name
+    w, h = 400, 120
+    rgb = np.zeros((h, w, 3), np.uint8)
+    cfg = types.SimpleNamespace(index="not_a_real_index", viz_min=-3.0, viz_max=46.0,
+                                palette=["#0000ff", "#ff0000"])
+    assert _index_display_name(cfg) == "NOT_A_REAL_INDEX"
+
+    out = add_colorbar(rgb, cfg)
+    x0 = max(4, w // 200)
+    font, _lw = _annot_scale(h)
+    scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    heading_h = scratch.textbbox((0, 0), "Ag", font=font)[3]
+    heading_band = out[4: 4 + heading_h, x0: w]
+    assert heading_band.sum() > 0, "fallback heading text was not drawn"
+
+
+def test_colorbar_heading_panel_stays_within_the_top_left_quadrant_at_768_and_1920():
+    """Scale bar / north arrow are drawn in the bottom-right quadrant (see
+    test_draw_scale_bar_labels_and_marks_frame and test_draw_north_arrow_panel_sits_
+    above_scale_bar_panel, which assert the same top-left-untouched quadrant on their
+    own outputs). The colorbar's legend panel -- now one text line taller for the
+    heading -- lives in the opposite (top-left) corner and must stay clear of that
+    quadrant at both ends of the supported resolution range. lst_smw is used because
+    it has both the longest display_name in the registry and word anchors (cooler/
+    warmer), i.e. the panel's tallest/widest real-world case."""
+    for w in (768, 1920):
+        h = round(w * 9 / 16)
+        rgb = np.zeros((h, w, 3), np.uint8)
+        cfg = types.SimpleNamespace(index="lst_smw", viz_min=-10.0, viz_max=40.0,
+                                    palette=["#000080", "#0000ff", "#00ffff",
+                                             "#ffff00", "#ff0000", "#800000"])
+        out = add_colorbar(rgb, cfg)
+        assert out[h // 2:, w // 2:].sum() == 0, \
+            f"colorbar panel bled into the bottom-right quadrant at {w}x{h}"
+
+
 def test_colorbar_draws_min_mid_max_ticks():
     # Wide enough frame that min/mid/max labels don't collide, so all three tick
     # marks (short vertical lines just below the ramp) are drawn distinctly.
@@ -1477,7 +1559,7 @@ def test_colorbar_draws_min_mid_max_ticks():
 
     bar_w = max(20, int(w * 0.4))
     bar_h = max(6, h // 20)
-    x0, y0 = max(4, w // 200), 4
+    x0, y0 = max(4, w // 200), _colorbar_bar_y0(h)
     x_min, x_mid, x_max = x0, x0 + bar_w // 2, x0 + bar_w
     tick_row = y0 + bar_h + 1        # inside the tick zone, below the ramp's own border
 
@@ -1516,7 +1598,7 @@ def test_colorbar_adds_zero_tick_only_when_range_spans_zero():
     out = add_colorbar(rgb, cfg)
     bar_w = max(20, int(w * 0.4))
     bar_h = max(6, h // 20)
-    x0, y0 = max(4, w // 200), 4
+    x0, y0 = max(4, w // 200), _colorbar_bar_y0(h)
     x_zero = x0 + round((0.0 - (-3.0)) / (3.0 - (-3.0)) * bar_w)   # -3..3 -> 0 at centre
     tick_row = y0 + bar_h + 1
     assert out[tick_row, x_zero].tolist() == [255, 255, 255]
@@ -1551,7 +1633,7 @@ def test_colorbar_drops_mid_label_on_narrow_ramp():
 
     bar_w = max(20, int(w * 0.4))
     bar_h = max(6, h // 20)
-    x0, y0 = max(4, w // 200), 4
+    x0, y0 = max(4, w // 200), _colorbar_bar_y0(h)
     font, lw = _annot_scale(h)
     text_y = y0 + bar_h + lw + 2 + 1   # matches add_colorbar's tick_bot + 1
 
@@ -1879,7 +1961,7 @@ def test_colorbar_mid_tick_drawn_at_the_nice_values_true_position_not_centre():
 
     bar_w = max(20, int(w * 0.4))
     bar_h = max(6, h // 20)
-    x0, y0 = max(4, w // 200), 4
+    x0, y0 = max(4, w // 200), _colorbar_bar_y0(h)
     tick_row = y0 + bar_h + 1
 
     nice = _nice_mid(18.0, 43.0)
@@ -1912,7 +1994,7 @@ def test_colorbar_draws_word_anchors_for_the_index():
 
     bar_w = max(20, int(w * 0.4))
     bar_h = max(6, h // 20)
-    x0, y0 = max(4, w // 200), 4
+    x0, y0 = max(4, w // 200), _colorbar_bar_y0(h)
     font, lw = _annot_scale(h)
     scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     text_h = scratch.textbbox((0, 0), "0", font=font)[3]
@@ -1939,7 +2021,7 @@ def test_colorbar_omits_word_anchors_when_the_index_has_none():
 
     bar_w = max(20, int(w * 0.4))
     bar_h = max(6, h // 20)
-    x0, y0 = max(4, w // 200), 4
+    x0, y0 = max(4, w // 200), _colorbar_bar_y0(h)
     font, lw = _annot_scale(h)
     scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     text_h = scratch.textbbox((0, 0), "0", font=font)[3]
@@ -1964,7 +2046,7 @@ def test_colorbar_no_data_swatch_matches_nodata_rgb():
 
     bar_w = max(20, int(w * 0.4))
     bar_h = max(6, h // 20)
-    x0, y0 = max(4, w // 200), 4
+    x0, y0 = max(4, w // 200), _colorbar_bar_y0(h)
     _font_, lw = _annot_scale(h)
     swatch_gap = max(6, lw * 4)
     swatch_size = bar_h
@@ -1983,7 +2065,7 @@ def test_colorbar_no_data_swatch_has_a_label():
 
     bar_w = max(20, int(w * 0.4))
     bar_h = max(6, h // 20)
-    x0, y0 = max(4, w // 200), 4
+    x0, y0 = max(4, w // 200), _colorbar_bar_y0(h)
     font, lw = _annot_scale(h)
     swatch_gap = max(6, lw * 4)
     swatch_size = bar_h
