@@ -316,6 +316,170 @@ def test_status_is_cadence_neutral(tmp_path):
     assert "month" not in status                        # no monthly-specific wording
 
 
+# --- audience-communication parity: title/subtitle/credit/quality --------------
+
+def test_title_blank_is_none_nonblank_is_verbatim(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, title="  ")
+    assert captured["cfg"].title is None
+    captured2 = {}
+    _run(tmp_path, captured2, title="Białowieża Forest NDVI 2022")
+    assert captured2["cfg"].title == "Białowieża Forest NDVI 2022"
+
+
+def test_subtitle_blank_is_none_nonblank_is_verbatim(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, subtitle="")
+    assert captured["cfg"].subtitle is None
+    captured2 = {}
+    _run(tmp_path, captured2,
+         subtitle="UNESCO World Heritage site, Brandenburg, Germany")
+    assert captured2["cfg"].subtitle == "UNESCO World Heritage site, Brandenburg, Germany"
+
+
+def test_credit_default_is_none_automatic_attribution(tmp_path):
+    captured = {}
+    _run(tmp_path, captured)
+    assert captured["cfg"].credit is None
+
+
+def test_credit_custom_text_reaches_the_config(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, credit="Data: HNEE Forest Research")
+    assert captured["cfg"].credit == "Data: HNEE Forest Research"
+
+
+def test_omit_credit_checkbox_sets_empty_string(tmp_path):
+    # The conscious opt-out — distinct from an untouched, merely-empty textbox.
+    captured = {}
+    _run(tmp_path, captured, omit_credit=True)
+    assert captured["cfg"].credit == ""
+
+
+def test_omit_credit_with_text_is_a_friendly_error_not_a_crash(tmp_path):
+    with pytest.raises(ValueError, match="contradictory"):
+        _run(tmp_path, {}, omit_credit=True, credit="Custom credit")
+
+
+def test_quality_default_is_none(tmp_path):
+    captured = {}
+    _run(tmp_path, captured)
+    assert captured["cfg"].quality is None
+
+
+def test_quality_default_string_maps_to_none(tmp_path):
+    # what the dropdown's untouched "default" choice actually submits.
+    captured = {}
+    _run(tmp_path, captured, quality="default")
+    assert captured["cfg"].quality is None
+
+
+def test_quality_value_reaches_the_config(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, quality="7")
+    assert captured["cfg"].quality == 7
+
+
+def test_sentinel2_omit_credit_warning_reaches_the_status(tmp_path):
+    # config.validate() only log.warning()s this; the GUI must surface it, same as
+    # the existing landsat-submonthly-cadence warning.
+    *_, status, _ = _run(tmp_path, {}, sensor="sentinel2", omit_credit=True)
+    assert "Copernicus licence" in status
+
+
+def test_non_sentinel2_omit_credit_has_no_licence_warning(tmp_path):
+    *_, status, _ = _run(tmp_path, {}, sensor="landsat", index="lst",
+                         omit_credit=True)
+    assert "Copernicus" not in status
+
+
+def test_inventory_threads_presentation_fields_through_shared_prepare(tmp_path):
+    # run_inventory shares _prepare with run_animation rather than forking it, so
+    # the new fields reach the inventory's RunConfig too — harmlessly, since the CSV
+    # writer never reads them.
+    captured = {}
+    aoi = _write_geojson(tmp_path)
+    csv_path, _status = gui.run_inventory(
+        aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        title="My Title", subtitle="My Subtitle", credit="Custom credit",
+        quality="8", deps=_fake_deps(tmp_path, captured))
+    assert Path(csv_path).exists()
+    cfg = captured["inventory_cfg"]
+    assert cfg.title == "My Title" and cfg.subtitle == "My Subtitle"
+    assert cfg.credit == "Custom credit" and cfg.quality == 8
+
+
+def test_build_app_input_counts_match_handler_arity():
+    """Minimum arity pin: for both `_go` and `_inventory`, the number of positional
+    handler parameters without a default (i.e. bound by Gradio's `.click(fn, inputs,
+    outputs)`) must equal the number of components in the wired `inputs` list —
+    catching an inserted/removed control that was not mirrored in the handler
+    signature."""
+    pytest.importorskip("gradio")
+    import inspect
+    app = gui.build_app()
+    checked = []
+    for block_fn in app.fns.values():
+        name = getattr(block_fn.fn, "__name__", None)
+        if name not in ("_go", "_inventory"):
+            continue
+        sig = inspect.signature(block_fn.fn)
+        bound = [p for p in sig.parameters.values()
+                if p.default is inspect.Parameter.empty]
+        assert len(bound) == len(block_fn.inputs), (
+            f"{name}: {len(bound)} params without a default vs "
+            f"{len(block_fn.inputs)} wired inputs")
+        checked.append(name)
+    assert sorted(checked) == ["_go", "_inventory"]
+
+
+def test_build_app_input_order_matches_handler_param_order():
+    """Stronger than the count check above: pins that wired input N binds to the
+    Nth positional parameter, for BOTH callbacks, by matching each bound
+    component's Gradio label to the parameter name it should land in. A control
+    inserted in the wrong slot silently binds the wrong value to the wrong
+    parameter, and no other test catches it — the functional tests above call the
+    handlers with keyword args, bypassing Gradio's positional binding entirely."""
+    pytest.importorskip("gradio")
+    import inspect
+    expected = [
+        ("aoi_file", "AOI"), ("buffer_m", "buffer"), ("sensor", "Sensor"),
+        ("index", "Index"), ("start", "Start"), ("end", "End"),
+        ("cadence", "Cadence"), ("region_cloud", "cloud % over the region"),
+        ("fps", "Frames per second"), ("dims", "Fetch size"),
+        ("preset", "Output size"), ("aspect", "Aspect ratio"),
+        ("quality", "MP4 quality"), ("write_gif", "write a GIF"),
+        ("title", "Title"), ("subtitle", "Subtitle"),
+        ("credit", "Credit"), ("omit_credit", "Omit the data credit line"),
+        ("pool_start", "Pool from year"), ("pool_end", "Pool to year"),
+        ("pool_strategy", "Pooling strategy"), ("project", "Earth Engine project"),
+    ]
+    app = gui.build_app()
+    checked = []
+    for block_fn in app.fns.values():
+        name = getattr(block_fn.fn, "__name__", None)
+        if name not in ("_go", "_inventory"):
+            continue
+        sig = inspect.signature(block_fn.fn)
+        params = [p.name for p in sig.parameters.values()
+                 if p.default is inspect.Parameter.empty]
+        labels = [getattr(c, "label", "") or "" for c in block_fn.inputs]
+        assert len(params) == len(expected), (
+            f"{name}: control count drifted from the pinned list ({len(params)} "
+            f"vs {len(expected)}) — update `expected` alongside `inputs`")
+        for (param_name, label_fragment), actual_param, actual_label in zip(
+                expected, params, labels):
+            assert actual_param == param_name, (
+                f"{name}: expected param {param_name!r} at this slot, got "
+                f"{actual_param!r}")
+            assert label_fragment in actual_label, (
+                f"{name}: param {actual_param!r} is bound to a component labelled "
+                f"{actual_label!r}, expected one labelled like {label_fragment!r}")
+        checked.append(name)
+    assert sorted(checked) == ["_go", "_inventory"]
+
+
 def test_build_app_constructs():
     pytest.importorskip("gradio")
     app = gui.build_app()

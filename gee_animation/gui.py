@@ -44,6 +44,11 @@ DEFAULT_PRESET = "1080p"
 ASPECT_CHOICES = ["match", "16:9", "4:3", "1:1", "21:9"]
 DEFAULT_ASPECT = "match"
 
+# MP4 encode quality (render.quality): 1 (smallest/worst) .. 10 (largest/best), or
+# "default" => cfg.quality=None (imageio's own default, currently ~5).
+QUALITY_CHOICES = ["default"] + [str(n) for n in range(1, 11)]
+DEFAULT_QUALITY = "default"
+
 # Shown next to the pooling controls *and* appended to the status of any pooled run —
 # the trade-off has to be visible before the user renders. Wording from
 # config/pooled.example.yaml.
@@ -268,6 +273,58 @@ def _preset_value(preset):
     return str(preset)
 
 
+def _text_value(text):
+    """Blank/whitespace-only textbox => ``None`` (falls back to the on-frame default);
+    anything else is passed through verbatim. Used for title/subtitle, which — unlike
+    credit — have no meaningful "explicit empty" state to preserve."""
+    if text is None:
+        return None
+    text = str(text)
+    return text if text.strip() else None
+
+
+def _credit_value(credit, omit_credit):
+    """Resolve the credit textbox + "omit" checkbox into ``cfg.credit``'s three states.
+
+    - textbox blank, box unchecked => ``None`` (automatic sensor attribution — the
+      default, compliance-safe state; an empty textbox must NOT be read as "omit").
+    - textbox non-blank => that text verbatim (the box must be unchecked; see below).
+    - box checked, textbox blank   => ``""`` (the conscious opt-out; ``validate()``
+      warns for sentinel2).
+    - box checked *and* textbox non-blank is contradictory — a friendly error, not a
+      silent pick of one over the other.
+    """
+    text = "" if credit is None else str(credit)
+    has_text = bool(text.strip())
+    if omit_credit and has_text:
+        raise ValueError(
+            "credit text and \"Omit the data credit line\" are contradictory — "
+            "clear the credit text or uncheck the box, not both")
+    if omit_credit:
+        return ""
+    return text if has_text else None
+
+
+def _quality_value(quality):
+    """Dropdown value ("default"/blank/None => ``None``) to ``cfg.quality``.
+
+    The dropdown can only offer "default" or "1".."10", but this still coerces
+    defensively (e.g. programmatic callers) rather than trusting the caller; out-of-
+    range integers are left for ``cfg.validate()`` to reject.
+    """
+    if quality is None:
+        return None
+    q = str(quality).strip()
+    if not q or q == DEFAULT_QUALITY:
+        return None
+    try:
+        return int(q)
+    except ValueError as exc:
+        raise ValueError(
+            f"quality must be a whole number 1-10 or {DEFAULT_QUALITY!r}, got {q!r}"
+        ) from exc
+
+
 def _validate(cfg) -> list[str]:
     """Run ``cfg.validate()``, returning the warnings it logged.
 
@@ -294,12 +351,16 @@ def _validate(cfg) -> list[str]:
 def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
              region_max_cloud_percent, max_cloud_percent, fps, dimensions,
              project, out_dir, cadence, preset, aspect, write_gif,
-             pool_start_year, pool_end_year, pool_strategy, deps):
+             pool_start_year, pool_end_year, pool_strategy,
+             title=None, subtitle=None, credit=None, omit_credit=False,
+             quality=None, deps):
     """Authenticate, resolve the AOIs and build a validated RunConfig.
 
     Returns ``(cfg, frame_geom, region_geom, warnings)``. Shared by
     :func:`run_animation` and :func:`run_inventory` so both entry points get exactly
-    the same configuration and the same validation.
+    the same configuration and the same validation. ``title``/``subtitle``/``credit``/
+    ``quality`` are purely client-side (see ``RunConfig``) so they flow into the
+    inventory's config too, harmlessly — the CSV writer never reads them.
     """
     if not aoi_path:
         raise ValueError("please upload an AOI (a GeoJSON file or a zipped shapefile)")
@@ -336,6 +397,9 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
         pool_years=_pool_years(pool_start_year, pool_end_year),
         pool_strategy=str(pool_strategy or "least_cloudy"),
         out_dir=str(out_dir), draw_region=True,
+        title=_text_value(title), subtitle=_text_value(subtitle),
+        credit=_credit_value(credit, omit_credit),
+        quality=_quality_value(quality),
     )
     return cfg, frame_geom, region_geom, _validate(cfg)
 
@@ -345,11 +409,15 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
                   fps=4, dimensions=768, project="hnee-331218", out_dir=None,
                   cadence="monthly", preset=DEFAULT_PRESET, aspect=DEFAULT_ASPECT,
                   write_gif=True, pool_start_year=None, pool_end_year=None,
-                  pool_strategy="least_cloudy", deps=DEFAULT_DEPS):
+                  pool_strategy="least_cloudy",
+                  title=None, subtitle=None, credit=None, omit_credit=False,
+                  quality=None, deps=DEFAULT_DEPS):
     """Write the per-scene usable/rejected inventory CSV. Returns ``(csv_path, status)``.
 
     Mirrors ``cli.run(..., inventory=True)``, including its refusal to combine the
-    inventory with cross-year pooling.
+    inventory with cross-year pooling. ``title``/``subtitle``/``credit``/``quality``
+    are accepted for parity with :func:`run_animation` (both share ``_prepare``) but
+    are no-ops here — they only affect rendered frames, and the CSV has none.
     """
     if not _blank(pool_start_year) or not _blank(pool_end_year):
         # Same reason as cli.run: the inventory buckets scenes by the nominal date
@@ -366,7 +434,9 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
         max_cloud_percent=max_cloud_percent, fps=fps, dimensions=dimensions,
         project=project, out_dir=out_dir, cadence=cadence, preset=preset,
         aspect=aspect, write_gif=write_gif, pool_start_year=None, pool_end_year=None,
-        pool_strategy=pool_strategy, deps=deps)
+        pool_strategy=pool_strategy,
+        title=title, subtitle=subtitle, credit=credit, omit_credit=omit_credit,
+        quality=quality, deps=deps)
     path = deps.inventory(cfg, frame_geom, region_geom)
     status = (f"Wrote the scene inventory for {sensor} {index.upper()} "
               f"({cfg.start} → {cfg.end}, {cfg.cadence}) — one row per candidate scene "
@@ -384,13 +454,18 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
                   fps=4, dimensions=768, project="hnee-331218", out_dir=None,
                   cadence="monthly", preset=DEFAULT_PRESET, aspect=DEFAULT_ASPECT,
                   write_gif=True, pool_start_year=None, pool_end_year=None,
-                  pool_strategy="least_cloudy", deps=DEFAULT_DEPS):
+                  pool_strategy="least_cloudy",
+                  title=None, subtitle=None, credit=None, omit_credit=False,
+                  quality=None, deps=DEFAULT_DEPS):
     """Build one animation from GUI inputs.
 
     Returns ``(mp4_path, gif_path, frame_pngs, frames_zip, status, series)`` where
     `frame_pngs` is the list of per-period PNGs and `frames_zip` bundles them for
     download (both ``None``/empty if no frames were rendered). `gif_path` is ``None``
     when `write_gif` is off — the MP4 and the frames are unaffected.
+    `title`/`subtitle`/`credit`/`quality` mirror the config-file keys of the same
+    name (see ``RunConfig``); `omit_credit` is the GUI-only checkbox that resolves to
+    `credit=""` (see :func:`_credit_value`).
     """
     composite = INDICES[index].composite if index in INDICES else False
     cfg, frame_geom, region_geom, warnings = _prepare(
@@ -399,7 +474,9 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
         max_cloud_percent=max_cloud_percent, fps=fps, dimensions=dimensions,
         project=project, out_dir=out_dir, cadence=cadence, preset=preset,
         aspect=aspect, write_gif=write_gif, pool_start_year=pool_start_year,
-        pool_end_year=pool_end_year, pool_strategy=pool_strategy, deps=deps)
+        pool_end_year=pool_end_year, pool_strategy=pool_strategy,
+        title=title, subtitle=subtitle, credit=credit, omit_credit=omit_credit,
+        quality=quality, deps=deps)
     out_dir = cfg.out_dir
 
     coll = deps.build(cfg, frame_geom, region_geom)
@@ -492,11 +569,42 @@ def build_app():
                                          label="Aspect ratio",
                                          info="'match' keeps the AOI's own shape "
                                               "(no letterbox bars).")
+                    quality = gr.Dropdown(QUALITY_CHOICES, value=DEFAULT_QUALITY,
+                                          label="MP4 quality",
+                                          info="1 (smallest/worst) – 10 (largest/"
+                                               "best), passed to the ffmpeg writer. "
+                                               "'default' ≈ 5, imageio's own default.")
                 write_gif = gr.Checkbox(
                     value=True, label="Also write a GIF",
                     info="The GIF is a low-resolution preview and the slowest step of "
                          "a render (~5 s per run). The MP4 and the per-frame PNGs are "
                          "written either way.")
+                with gr.Accordion("🖋️ Presentation (title, subtitle, credit)", open=False):
+                    title = gr.Textbox(
+                        label="Title", value="",
+                        placeholder="e.g. Białowieża Forest NDVI 2022",
+                        info="Frame header's large first line. Empty = the index's "
+                             "own name (e.g. \"Vegetation greenness (NDVI)\").")
+                    subtitle = gr.Textbox(
+                        label="Subtitle", value="",
+                        placeholder="e.g. UNESCO World Heritage site, Brandenburg, "
+                                    "Germany",
+                        info="Frame header's smaller second line. Empty = none "
+                             "(a pooling/interpolation notice still wins that line "
+                             "when one applies).")
+                    with gr.Row():
+                        credit = gr.Textbox(
+                            label="Credit / attribution line", value="", scale=3,
+                            placeholder="leave blank for automatic Copernicus/USGS/"
+                                        "NASA attribution",
+                            info="Overrides the bottom-right attribution line "
+                                 "verbatim. Leave blank for the automatic "
+                                 "sensor-appropriate credit.")
+                        omit_credit = gr.Checkbox(
+                            value=False, label="Omit the data credit line", scale=1,
+                            info="Suppresses the attribution line entirely. For "
+                                 "Sentinel-2 this is a licence-relevant choice — "
+                                 "the Copernicus notice normally appears here.")
                 with gr.Accordion("🔁 Cross-year pooling (cosmetic)", open=False):
                     gr.Markdown(POOL_WARNING)
                     with gr.Row():
@@ -539,7 +647,8 @@ def build_app():
         # Every run-shaped callback returns the same widget tuple:
         # (video, gif, gallery, frames_zip, inventory_csv, status, chart).
         inputs = [aoi_file, buffer_m, sensor, index, start, end, cadence, region_cloud,
-                  fps, dims, preset, aspect, write_gif,
+                  fps, dims, preset, aspect, quality, write_gif,
+                  title, subtitle, credit, omit_credit,
                   pool_start, pool_end, pool_strategy, project]
         outputs = [video, gif, gallery, frames_zip, inventory_csv, status, chart]
 
@@ -547,8 +656,9 @@ def build_app():
             return None, None, None, None, None, f"**Error:** {exc}", None
 
         def _go(aoi_file, buffer_m, sensor, index, start, end, cadence, region_cloud,
-                fps, dims, preset, aspect, write_gif, pool_start, pool_end,
-                pool_strategy, project, progress=gr.Progress()):
+                fps, dims, preset, aspect, quality, write_gif,
+                title, subtitle, credit, omit_credit,
+                pool_start, pool_end, pool_strategy, project, progress=gr.Progress()):
             import pandas as pd
             try:
                 progress(0.05, desc="Filtering imagery and building frames…")
@@ -556,7 +666,9 @@ def build_app():
                     aoi_path=aoi_file, buffer_m=buffer_m, sensor=sensor, index=index,
                     start=start, end=end, cadence=cadence,
                     region_max_cloud_percent=region_cloud, fps=fps, dimensions=dims,
-                    preset=preset, aspect=aspect, write_gif=write_gif,
+                    preset=preset, aspect=aspect, quality=quality, write_gif=write_gif,
+                    title=title, subtitle=subtitle, credit=credit,
+                    omit_credit=omit_credit,
                     pool_start_year=pool_start, pool_end_year=pool_end,
                     pool_strategy=pool_strategy, project=project)
                 rows = []
@@ -574,15 +686,19 @@ def build_app():
         go.click(_go, inputs, outputs)
 
         def _inventory(aoi_file, buffer_m, sensor, index, start, end, cadence,
-                       region_cloud, fps, dims, preset, aspect, write_gif, pool_start,
-                       pool_end, pool_strategy, project, progress=gr.Progress()):
+                       region_cloud, fps, dims, preset, aspect, quality, write_gif,
+                       title, subtitle, credit, omit_credit,
+                       pool_start, pool_end, pool_strategy, project,
+                       progress=gr.Progress()):
             try:
                 progress(0.05, desc="Listing candidate scenes…")
                 csv_path, msg = run_inventory(
                     aoi_path=aoi_file, buffer_m=buffer_m, sensor=sensor, index=index,
                     start=start, end=end, cadence=cadence,
                     region_max_cloud_percent=region_cloud, fps=fps, dimensions=dims,
-                    preset=preset, aspect=aspect, write_gif=write_gif,
+                    preset=preset, aspect=aspect, quality=quality, write_gif=write_gif,
+                    title=title, subtitle=subtitle, credit=credit,
+                    omit_credit=omit_credit,
                     pool_start_year=pool_start, pool_end_year=pool_end,
                     pool_strategy=pool_strategy, project=project)
                 progress(1.0, desc="Done")
