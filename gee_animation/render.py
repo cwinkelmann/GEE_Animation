@@ -448,6 +448,29 @@ def _index_display_name(cfg) -> str:
     return name or str(getattr(cfg, "index", "") or "").upper()
 
 
+def _line2_prefix(cfg) -> str:
+    """The product name that opens header line 2 — but only when it would otherwise
+    appear nowhere on the frame: a titled composite (`rgb`/`cir`).
+
+    Single-band indices already get the product name for free: line 1 falls back to
+    `_index_display_name` when `cfg.title` is unset (`_header_text`), and when a title
+    IS set, `add_colorbar` draws the same name as a heading above the ramp regardless
+    of `title` (see the legend-heading fix). Composites have no colorbar at all
+    (`render()` gates `add_colorbar` on `not composite`), so a titled composite frame
+    has no heading to carry "True colour" / "Colour infrared" — the title replaces line
+    1 and nothing takes its place. This is that replacement, for line 2 instead.
+
+    "" whenever the gap does not exist: no title configured (line 1 already IS the
+    display name), or a single-band index (the colorbar heading already covers it —
+    doubling the name into line 2 would be redundant, not helpful).
+    """
+    if not getattr(cfg, "title", None):
+        return ""
+    if not _is_composite(cfg):
+        return ""
+    return _index_display_name(cfg)
+
+
 def _caveats(cfg) -> str:
     """Provenance caveats for header line 2, joined with " · " — "" when there are none.
 
@@ -478,12 +501,18 @@ def _caveats(cfg) -> str:
 
 
 def _header_text(cfg) -> tuple:
-    """``(title, subtitle, caveats)`` for the top margin — the whole header.
+    """``(title, subtitle, caveats)`` for the top margin — most of the header.
 
     Line 1 is the title (`cfg.title`, else the product's `display_name`); line 2 is
-    the subtitle and the caveats, and exists only when at least one of them is
-    non-empty. The formula and band list that used to fill this space are gone from
-    the frame entirely — they live in the method doc (see `products.Index.bands`).
+    the subtitle and the caveats. The formula and band list that used to fill this
+    space are gone from the frame entirely — they live in the method doc (see
+    `products.Index.bands`).
+
+    Kept a 3-tuple deliberately (existing callers unpack it as such): the composite
+    product-name prefix that can also open line 2 is `_line2_prefix(cfg)`, a separate
+    call — see there for why it is not folded in here. Line 2 exists whenever
+    `subtitle`, `caveats` OR that prefix is non-empty (`_two_line_header` is the
+    single source of truth for that OR).
     """
     return (getattr(cfg, "title", None) or _index_display_name(cfg),
             getattr(cfg, "subtitle", None) or "",
@@ -557,12 +586,12 @@ def _two_line_header(cfg) -> bool:
     This matters more than it looks: the second line **doubles the top margin**, and
     every consumer of `_margins` (`add_margins`, `_fit_margins`, `_output_spec`) has
     to agree on the same answer or the bars and the imagery disagree about where the
-    picture starts. Because subtitle, pooling and interpolation are all run-level
-    settings, the answer is the same for every frame of a run and is computed once,
-    before the frame loop.
+    picture starts. Because subtitle, pooling, interpolation and the composite-name
+    prefix (`_line2_prefix`) are all run-level settings, the answer is the same for
+    every frame of a run and is computed once, before the frame loop.
     """
     _title, subtitle, caveats = _header_text(cfg)
-    return bool(subtitle or caveats)
+    return bool(subtitle or caveats or _line2_prefix(cfg))
 
 
 def _margins(imagery_h: int, two_line_header: bool = False) -> tuple:
@@ -679,7 +708,7 @@ _LINE2_MIN_SCALE = 0.8
 
 
 def _fit_header_line2(draw: ImageDraw.ImageDraw, subtitle: str, caveats: str,
-                      px: int, avail_w: int) -> tuple:
+                      px: int, avail_w: int, prefix: str = "") -> tuple:
     """(font, text) for header line 2, starting at `px`.
 
     Line 2 carries the provenance caveats, so it never shrinks the way `_fit_bar_text`
@@ -692,43 +721,58 @@ def _fit_header_line2(draw: ImageDraw.ImageDraw, subtitle: str, caveats: str,
     overshoot the width by a few percent for no reason a viewer would recognise.
     Giving up those few percent is invisible; dropping a configured subtitle is not.
 
-    When even the smallest permitted size will not hold both, the **subtitle** pays —
-    trimmed with "…", and dropped entirely if even that will not fit. The caveat
-    outranks the decoration; that ordering is an integrity requirement, not a styling
-    preference. `render()` warns when a configured subtitle reaches that point (see
-    `header_subtitle_fits`), because silently dropping user-configured text is worse
-    than an ugly frame.
+    `prefix` (`_line2_prefix`) is the composite product name that opens the line on a
+    titled `rgb`/`cir` run, ahead of the subtitle — it joins `caveats` in the
+    protected class: an on-frame product name is data-identity, not decoration, the
+    same reasoning that protects the caveats. The line reads
+    ``"prefix · subtitle · caveats"`` (any absent part simply drops out, along with its
+    " · ").
 
-    Only when the caveats alone overflow with no subtitle left to give — a narrow
-    frame; measurably below ~524 px wide for the pooled caveat, and portrait aspects
-    reach that sooner — does the shrink-then-truncate fallback apply to them, because
-    at that point there is nothing left to trade.
+    When even the smallest permitted size will not hold everything, the **subtitle**
+    pays — trimmed with "…", and dropped entirely if even that will not fit. It is the
+    only sacrificial part of the three; `prefix` and `caveats` outrank the decoration,
+    that ordering is an integrity requirement, not a styling preference. `render()`
+    warns when a configured subtitle reaches that point (see `header_subtitle_fits`),
+    because silently dropping user-configured text is worse than an ugly frame.
+
+    Only when the protected text (`prefix` + `caveats`) alone overflows with no
+    subtitle left to give — a narrow frame; measurably below ~524 px wide for the
+    pooled caveat, and portrait aspects reach that sooner — does the shrink-then-
+    truncate fallback apply to it, because at that point there is nothing left to
+    trade.
 
     Whether the line fits its *row* vertically is a separate question: the caller
     passes a size already capped by `_fit_line_height`, and shrinking only ever makes
     the glyphs shorter, so the glyphs cannot spill out of the header zone either way.
     """
-    joined = " · ".join(p for p in (subtitle, caveats) if p)
+    def _joined(sub: str) -> str:
+        return " · ".join(p for p in (prefix, sub, caveats) if p)
+
+    joined = _joined(subtitle)
     font = _font(px)
     if _text_w(draw, joined, font) <= avail_w:
         return font, joined
-    if subtitle and caveats:
-        # Bounded shrink — the cheapest way to keep BOTH strings whole (see docstring).
+    protected = bool(prefix or caveats)
+    if subtitle and protected:
+        # Bounded shrink — the cheapest way to keep every string whole (see docstring).
         floor = max(10, round(px * _LINE2_MIN_SCALE))
         for size in range(px - 1, floor - 1, -1):
             small = _font(size)
             if _text_w(draw, joined, small) <= avail_w:
                 return small, joined
-    if not caveats:                       # decoration only: trim it at the nominal size
+    if not protected:                     # decoration only: trim it at the nominal size
         return font, _truncate(draw, subtitle, font, avail_w)
+    protected_only = _joined("")
     if subtitle:
-        budget = avail_w - _text_w(draw, f" · {caveats}", font)
+        lead = f"{prefix} · " if prefix else ""
+        tail = f" · {caveats}" if caveats else ""
+        budget = avail_w - _text_w(draw, lead, font) - _text_w(draw, tail, font)
         trimmed = _truncate(draw, subtitle, font, budget) if budget > 0 else ""
         if trimmed:
-            return font, f"{trimmed} · {caveats}"
-        if _text_w(draw, caveats, font) <= avail_w:
-            return font, caveats          # subtitle dropped; the caveat stays whole
-    return _fit_bar_text(draw, caveats, px, avail_w)      # last resort (see docstring)
+            return font, f"{lead}{trimmed}{tail}"
+        if _text_w(draw, protected_only, font) <= avail_w:
+            return font, protected_only   # subtitle dropped; the protected text stays whole
+    return _fit_bar_text(draw, protected_only, px, avail_w)   # last resort (see docstring)
 
 
 def _header_metrics(draw: ImageDraw.ImageDraw, w: int, h: int) -> tuple:
@@ -756,31 +800,33 @@ def _header_metrics(draw: ImageDraw.ImageDraw, w: int, h: int) -> tuple:
     return x, pad, avail_w, bar_h, title_px, line2_px
 
 
-def header_subtitle_fits(w: int, h: int, subtitle: str, caveats: str) -> bool:
+def header_subtitle_fits(w: int, h: int, subtitle: str, caveats: str,
+                         prefix: str = "") -> bool:
     """Whether `draw_info_bar` can draw `subtitle` **in full** on a `w` x `h` frame.
 
     Asked once per run by `render()` so a configured subtitle that line 2 cannot hold
     is reported rather than silently swallowed — the failure mode this exists for is a
     `subtitle:` key that renders nothing at all on exactly the runs (pooled,
-    interpolated) whose caveats make line 2 long. Shares `_header_metrics` and
-    `_fit_header_line2` with the drawing path, so the answer is the drawing path's
-    own, not a second estimate of it.
+    interpolated, or now a titled composite's `prefix`) whose other line-2 content
+    makes the row long. Shares `_header_metrics` and `_fit_header_line2` with the
+    drawing path, so the answer is the drawing path's own, not a second estimate of it.
     """
     if not subtitle:
         return True
     draw = ImageDraw.Draw(Image.new("RGB", (1, 1)), "RGBA")
     _x, _pad, avail_w, _bar_h, _title_px, line2_px = _header_metrics(draw, w, h)
-    _font_, text = _fit_header_line2(draw, subtitle, caveats, line2_px, avail_w)
+    _font_, text = _fit_header_line2(draw, subtitle, caveats, line2_px, avail_w, prefix)
     return subtitle in text
 
 
 def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
-                  caveats: str = "") -> np.ndarray:
+                  caveats: str = "", prefix: str = "") -> np.ndarray:
     """Draw the translucent header into the top margin: title, then subtitle+caveats.
 
     Line 1 is the title, set larger than the body text — it is what tells a viewer
-    what and where this is, which no frame used to say at all. Line 2 exists only when
-    `subtitle` or `caveats` is non-empty, and when it does the bar is **two**
+    what and where this is, which no frame used to say at all. Line 2 exists when
+    `subtitle`, `caveats` or `prefix` (the composite product name, see
+    `_line2_prefix`) is non-empty, and when it does the bar is **two**
     `_bar_h`s tall; `_margins`/`_two_line_header` size the margin to match, so the
     header never touches the imagery either way.
 
@@ -812,7 +858,7 @@ def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
     """
     out = rgb.astype(np.uint8, copy=True)   # our own buffer — safe to write the zone into
     h, w = out.shape[:2]
-    two_line = bool(subtitle or caveats)
+    two_line = bool(subtitle or caveats or prefix)
     probe = ImageDraw.Draw(Image.new("RGB", (1, 1)), "RGBA")
     x, pad, avail_w, bar_h, title_px, line2_px = _header_metrics(probe, w, h)
     # The zone this header owns: exactly the top margin `_margins` reserved for it
@@ -824,7 +870,7 @@ def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
     draw.rectangle([0, 0, w, bar_h * (2 if two_line else 1)], fill=(0, 0, 0, 140))
     draw.text((x, pad), title, fill=(255, 255, 255, 255), font=title_font)
     if two_line:
-        font, line2 = _fit_header_line2(draw, subtitle, caveats, line2_px, avail_w)
+        font, line2 = _fit_header_line2(draw, subtitle, caveats, line2_px, avail_w, prefix)
         draw.text((x, bar_h + pad), line2, fill=(255, 255, 255, 255), font=font)
     out[:zone_h] = np.asarray(img)
     return out
@@ -1741,12 +1787,14 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                                    else (bounds, rings))
         frame_width_m = _frame_width_m(bounds, proj_bounds, cfg.crs)
     composite = _is_composite(cfg)
-    # The header is run-level: same three strings on every frame, and — crucially —
-    # the same number of lines, so the margins are constant for the whole run (see
+    # The header is run-level: same strings on every frame, and — crucially — the
+    # same number of lines, so the margins are constant for the whole run (see
     # `_two_line_header`). Computed once, before the loop, and used both for drawing
-    # and for the `_margins`/`_output_spec` geometry.
+    # and for the `_margins`/`_output_spec` geometry. `header_prefix` is the composite
+    # product name (`_line2_prefix`) — "" for single-band indices and untitled runs.
     header_title, header_subtitle, header_caveats = _header_text(cfg)
-    two_line_header = bool(header_subtitle or header_caveats)
+    header_prefix = _line2_prefix(cfg)
+    two_line_header = bool(header_subtitle or header_caveats or header_prefix)
     # Attribution is also run-level (same line on every frame) and, like the
     # header, resolved once rather than per frame — see `_default_credit`.
     credit_text = _default_credit(cfg)
@@ -1836,14 +1884,18 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                 # Run-level geometry: the same answer for every frame, so ask once.
                 checked_subtitle = True
                 if header_subtitle and not header_subtitle_fits(
-                        rgb.shape[1], rgb.shape[0], header_subtitle, header_caveats):
+                        rgb.shape[1], rgb.shape[0], header_subtitle, header_caveats,
+                        header_prefix):
                     log.warning(
                         "subtitle %r does not fit the header beside this run's "
-                        "provenance caveats (%r) and will be shortened or dropped — "
-                        "shorten the subtitle or render wider; the caveats are kept "
-                        "in full because they are an honesty requirement",
-                        header_subtitle, header_caveats)
-            rgb = draw_info_bar(rgb, header_title, header_subtitle, header_caveats)
+                        "provenance caveats/product name (%r) and will be shortened or "
+                        "dropped — shorten the subtitle or render wider; the caveats "
+                        "and product name are kept in full because they are an "
+                        "honesty requirement",
+                        header_subtitle, " · ".join(p for p in (header_prefix,
+                                                                header_caveats) if p))
+            rgb = draw_info_bar(rgb, header_title, header_subtitle, header_caveats,
+                               header_prefix)
             # `text` is already composed (see `_imagery_sequence`). `_drawable` is a
             # no-op now (the bundled font draws "←" directly) but stays as the single
             # seam this composed text passes through on its way to `annotate`.

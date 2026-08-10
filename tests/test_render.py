@@ -498,6 +498,34 @@ def test_header_caveats_are_plain_language(monkeypatch):
     assert both == "gap-filled from 2018–2024 · 10 generated frames between observations"
 
 
+def test_line2_prefix_names_the_product_only_for_a_titled_composite():
+    # A titled composite (rgb/cir) is the one case with no colorbar heading AND a
+    # title that has displaced line 1's display-name fallback -- the product name
+    # would otherwise appear nowhere on the frame. Every other combination is "",
+    # because the gap it patches does not exist for them.
+    from gee_animation.render import _line2_prefix
+    titled_rgb = types.SimpleNamespace(index="rgb", title="Grumsin forest")
+    assert _line2_prefix(titled_rgb) == "True colour"
+    titled_cir = types.SimpleNamespace(index="cir", title="Grumsin forest")
+    assert _line2_prefix(titled_cir) == "Colour infrared"
+    # untitled composite: line 1 already falls back to the display name
+    assert _line2_prefix(types.SimpleNamespace(index="rgb", title=None)) == ""
+    assert _line2_prefix(types.SimpleNamespace(index="rgb")) == ""
+    # titled single-band index: the colorbar heading already names it -- no doubling
+    assert _line2_prefix(types.SimpleNamespace(index="ndvi", title="Grumsin forest")) == ""
+
+
+def test_two_line_header_is_forced_by_a_titled_composite_alone():
+    # Without a configured subtitle or caveat, a plain single-band+title run stays
+    # one line (unchanged). A titled composite must still get its second line, or
+    # the product name (the whole point of this fix) has nowhere to be drawn.
+    from gee_animation.render import _two_line_header
+    assert _two_line_header(types.SimpleNamespace(index="rgb",
+                                                   title="Grumsin forest")) is True
+    assert _two_line_header(types.SimpleNamespace(index="ndvi",
+                                                   title="Grumsin forest")) is False
+
+
 def test_header_line_two_truncates_the_subtitle_never_the_caveat(monkeypatch):
     # (c) Legibility floor / review M1: line 2 is held at (or near) the _annot_scale
     # size, so when it overflows something must give. The caveat outranks the
@@ -527,6 +555,32 @@ def test_header_line_two_truncates_the_subtitle_never_the_caveat(monkeypatch):
     from gee_animation.render import _fit_header_line2
     font, _text = _fit_header_line2(scratch, subtitle, caveat, annot_font.size, w - 8)
     assert font.size == annot_font.size, "no permitted size fits this subtitle at all"
+
+
+def test_header_line_two_truncates_the_subtitle_never_the_composite_name_or_caveat(
+        monkeypatch):
+    # Extends the priority test above with a titled composite's `prefix`: THREE parts
+    # on line 2 now instead of two, and the subtitle is still the only sacrificial one.
+    # The product name is data-identity, exactly like the caveat -- neither may be
+    # dropped or trimmed while the subtitle still has something left to give.
+    from gee_animation.render import draw_info_bar, _annot_scale
+    w, h = 640, 300
+    prefix = "True colour"
+    caveat = "every frame re-picked from 2018–2024 — not a time series"
+    subtitle = ("Brandenburg, Germany, in the Schorfheide-Chorin Biosphere Reserve "
+                "north-east of Berlin, mapped every month from Sentinel-2")
+    seen = _text_spy(monkeypatch)
+    draw_info_bar(np.zeros((h, w, 3), np.uint8), "Grumsin forest — vegetation",
+                  subtitle, caveat, prefix)
+
+    line2 = seen[1]
+    assert line2.startswith(f"{prefix} · "), "the product name must survive whole, leading"
+    assert caveat in line2, "the caveat must survive whole too"
+    assert subtitle not in line2 and "…" in line2, "the subtitle must be the one trimmed"
+    # ...and it is still drawn at the legibility floor, not shrunk to fit
+    annot_font, _ = _annot_scale(h)
+    scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    assert scratch.textbbox((0, 0), line2, font=annot_font)[2] <= w
 
 
 # --- R: the header/bottom bar own the whole canvas width, not the imagery width ----
@@ -560,6 +614,12 @@ def _audience_cfg(tmp_path, preset, aspect, subtitle=_SUBTITLE_30, interpolate=2
 
 def _wide_fetch(image, cfg_, geometry=None):
     return np.zeros((100, 200)), np.ones((100, 200), dtype=bool)
+
+
+def _wide_rgb_fetch(image, cfg_, geometry=None):
+    """The composite (rgb/cir) counterpart to `_wide_fetch`: an H x W x 3 colour array,
+    already coloured -- composites arrive from EE this way, never as index values."""
+    return np.full((100, 200, 3), 123, dtype=float), np.ones((100, 200), dtype=bool)
 
 
 @pytest.mark.parametrize("preset,aspect", [
@@ -1412,6 +1472,72 @@ def test_render_composite_passes_rgb_through_without_colorbar(tmp_path):
     # keeps the exact composite value — proof it was passed through, not palettized
     assert tuple(arr[45, 70]) == (123, 123, 123)
     assert any(p.suffix == ".gif" and p.exists() for p in paths)
+
+
+def test_render_titled_rgb_names_true_colour_on_line_two(tmp_path, monkeypatch):
+    """The gap this task exists to close: composites (rgb/cir) never draw a colorbar
+    heading (`add_colorbar` is `not composite`-gated, see legend-heading-report.md), so
+    once cfg.title displaces line 1's display-name fallback, a titled composite frame
+    used to state its product name nowhere at all. Line 2 now opens with it, ahead of
+    the subtitle; the run's caveats must still survive whole."""
+    seen = _text_spy(monkeypatch)
+    cfg = _audience_cfg(tmp_path, "1080p", "16:9")
+    cfg.index, cfg.palette = "rgb", []          # composite: no colorbar heading
+    render([Frame("2022-05", "A"), Frame("2022-06", "B")], cfg,
+           fetch=_wide_rgb_fetch, geometry=None)
+    line2 = next(t for t in seen if "True colour" in t)
+    assert line2.startswith("True colour · "), "the product name must lead line 2"
+    assert cfg.subtitle in line2
+    assert "generated frames between observations" in line2, "caveats stay whole too"
+
+
+def test_render_titled_cir_names_colour_infrared_on_line_two(tmp_path, monkeypatch):
+    seen = _text_spy(monkeypatch)
+    cfg = _audience_cfg(tmp_path, "1080p", "16:9")
+    cfg.index, cfg.palette = "cir", []          # composite: no colorbar heading
+    render([Frame("2022-05", "A"), Frame("2022-06", "B")], cfg,
+           fetch=_wide_rgb_fetch, geometry=None)
+    assert any(t.startswith("Colour infrared · ") for t in seen)
+
+
+def test_render_titled_ndvi_does_not_double_the_product_name_on_line_two(
+        tmp_path, monkeypatch):
+    """Single-band indices already get the product name for free, on the colorbar
+    heading (see legend-heading-report.md) -- doubling it into line 2 would be
+    redundant, not helpful. Only composites are missing it."""
+    seen = _text_spy(monkeypatch)
+    cfg = _audience_cfg(tmp_path, "1080p", "16:9")     # cfg.index stays "ndvi"
+    render([Frame("2022-05", "A"), Frame("2022-06", "B")], cfg,
+           fetch=_wide_fetch, geometry=None)
+    line2 = next(t for t in seen if cfg.subtitle in t)
+    assert "Vegetation greenness" not in line2
+
+
+def test_render_untitled_rgb_names_the_product_on_line_one_only(tmp_path, monkeypatch):
+    """Unchanged behaviour for the untitled case: line 1 already falls back to the
+    display name (_header_text), so line 2 must not double it."""
+    seen = _text_spy(monkeypatch)
+    cfg = _audience_cfg(tmp_path, "1080p", "16:9")
+    cfg.index, cfg.palette = "rgb", []
+    cfg.title = None
+    render([Frame("2022-05", "A"), Frame("2022-06", "B")], cfg,
+           fetch=_wide_rgb_fetch, geometry=None)
+    assert "True colour" in seen, "line 1 falls back to the display name"
+    line2 = next(t for t in seen if cfg.subtitle in t)
+    assert "True colour" not in line2, "line 1 already carries it; no doubling"
+
+
+def test_render_titled_composite_without_a_subtitle_still_names_the_product(
+        tmp_path, monkeypatch):
+    """The plainest shape of the motivating scenario: a titled composite with no
+    subtitle/caveats configured at all. Line 2 must still exist to carry the product
+    name, or the fix would be invisible on exactly the runs the user is about to make."""
+    seen = _text_spy(monkeypatch)
+    cfg = _cfg(tmp_path, name="rgbtitle")
+    cfg.index, cfg.palette = "rgb", []
+    cfg.title = "Grumsin forest"
+    render([Frame("2022-05", object())], cfg, fetch=_wide_rgb_fetch, geometry=None)
+    assert "True colour" in seen
 
 
 def test_render_pipeline_with_injected_fetch(tmp_path):
