@@ -107,10 +107,11 @@ def build(cfg, frame_geom, region_geom, *, apply_cloud_filters: bool = True, ee_
     # region_cloud_fraction, the sensor's scene cloud property, mission — so
     # inventory.scene_inventory and compositing.pooled_composite can still read them
     # back via aggregate_array() on the built collection.
-    coll = (
-        coll
-        .map(lambda img: sensor.mask_clouds(img, ee_module))
-        .map(lambda img: ee_module.Image(
-            index.compute(sensor, img, ee_module).copyProperties(img, img.propertyNames())))
-    )
+    # Per-pixel QA cloud mask — separate from the scene-level filters above, so
+    # `mask_clouds: false` (composites only; enforced by config.validate) keeps
+    # real clouds in the imagery while the cloudiest scenes are still filtered out.
+    if getattr(cfg, "mask_clouds", True):
+        coll = coll.map(lambda img: sensor.mask_clouds(img, ee_module))
+    coll = coll.map(lambda img: ee_module.Image(
+        index.compute(sensor, img, ee_module).copyProperties(img, img.propertyNames())))
     return coll

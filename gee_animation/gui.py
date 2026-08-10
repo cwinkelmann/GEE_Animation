@@ -353,7 +353,7 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
              project, out_dir, cadence, preset, aspect, write_gif,
              pool_start_year, pool_end_year, pool_strategy,
              title=None, subtitle=None, credit=None, omit_credit=False,
-             quality=None, deps):
+             quality=None, show_clouds=False, deps):
     """Authenticate, resolve the AOIs and build a validated RunConfig.
 
     Returns ``(cfg, frame_geom, region_geom, warnings)``. Shared by
@@ -397,6 +397,9 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
         pool_years=_pool_years(pool_start_year, pool_end_year),
         pool_strategy=str(pool_strategy or "least_cloudy"),
         out_dir=str(out_dir), draw_region=True,
+        # `show_clouds` inverts to the config's mask_clouds; validate() rejects it
+        # for palette indices, surfacing the same error the YAML path would give.
+        mask_clouds=not bool(show_clouds),
         title=_text_value(title), subtitle=_text_value(subtitle),
         credit=_credit_value(credit, omit_credit),
         quality=_quality_value(quality),
@@ -411,7 +414,7 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
                   write_gif=True, pool_start_year=None, pool_end_year=None,
                   pool_strategy="least_cloudy",
                   title=None, subtitle=None, credit=None, omit_credit=False,
-                  quality=None, deps=DEFAULT_DEPS):
+                  quality=None, show_clouds=False, deps=DEFAULT_DEPS):
     """Write the per-scene usable/rejected inventory CSV. Returns ``(csv_path, status)``.
 
     Mirrors ``cli.run(..., inventory=True)``, including its refusal to combine the
@@ -436,7 +439,7 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
         aspect=aspect, write_gif=write_gif, pool_start_year=None, pool_end_year=None,
         pool_strategy=pool_strategy,
         title=title, subtitle=subtitle, credit=credit, omit_credit=omit_credit,
-        quality=quality, deps=deps)
+        quality=quality, show_clouds=show_clouds, deps=deps)
     path = deps.inventory(cfg, frame_geom, region_geom)
     status = (f"Wrote the scene inventory for {sensor} {index.upper()} "
               f"({cfg.start} → {cfg.end}, {cfg.cadence}) — one row per candidate scene "
@@ -456,7 +459,7 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
                   write_gif=True, pool_start_year=None, pool_end_year=None,
                   pool_strategy="least_cloudy",
                   title=None, subtitle=None, credit=None, omit_credit=False,
-                  quality=None, deps=DEFAULT_DEPS):
+                  quality=None, show_clouds=False, deps=DEFAULT_DEPS):
     """Build one animation from GUI inputs.
 
     Returns ``(mp4_path, gif_path, frame_pngs, frames_zip, status, series)`` where
@@ -476,7 +479,7 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
         aspect=aspect, write_gif=write_gif, pool_start_year=pool_start_year,
         pool_end_year=pool_end_year, pool_strategy=pool_strategy,
         title=title, subtitle=subtitle, credit=credit, omit_credit=omit_credit,
-        quality=quality, deps=deps)
+        quality=quality, show_clouds=show_clouds, deps=deps)
     out_dir = cfg.out_dir
 
     coll = deps.build(cfg, frame_geom, region_geom)
@@ -579,6 +582,13 @@ def build_app():
                     info="The GIF is a low-resolution preview and the slowest step of "
                          "a render (~5 s per run). The MP4 and the per-frame PNGs are "
                          "written either way.")
+                show_clouds = gr.Checkbox(
+                    value=False, label="Show real clouds (true colour / CIR only)",
+                    info="Keeps clouds in the imagery instead of masking them to "
+                         "grey. Only for the RGB/CIR composites — index products "
+                         "(NDVI, LST, …) would colorize a cloud as a false data "
+                         "value, so they always mask. The cloudiest scenes are "
+                         "still filtered out either way.")
                 with gr.Accordion("🖋️ Presentation (title, subtitle, credit)", open=False):
                     title = gr.Textbox(
                         label="Title", value="",
@@ -649,7 +659,7 @@ def build_app():
         inputs = [aoi_file, buffer_m, sensor, index, start, end, cadence, region_cloud,
                   fps, dims, preset, aspect, quality, write_gif,
                   title, subtitle, credit, omit_credit,
-                  pool_start, pool_end, pool_strategy, project]
+                  pool_start, pool_end, pool_strategy, project, show_clouds]
         outputs = [video, gif, gallery, frames_zip, inventory_csv, status, chart]
 
         def _error(exc):
@@ -658,7 +668,8 @@ def build_app():
         def _go(aoi_file, buffer_m, sensor, index, start, end, cadence, region_cloud,
                 fps, dims, preset, aspect, quality, write_gif,
                 title, subtitle, credit, omit_credit,
-                pool_start, pool_end, pool_strategy, project, progress=gr.Progress()):
+                pool_start, pool_end, pool_strategy, project, show_clouds,
+                progress=gr.Progress()):
             import pandas as pd
             try:
                 progress(0.05, desc="Filtering imagery and building frames…")
@@ -670,7 +681,8 @@ def build_app():
                     title=title, subtitle=subtitle, credit=credit,
                     omit_credit=omit_credit,
                     pool_start_year=pool_start, pool_end_year=pool_end,
-                    pool_strategy=pool_strategy, project=project)
+                    pool_strategy=pool_strategy, project=project,
+                    show_clouds=show_clouds)
                 rows = []
                 for period, inside, outside in series:
                     if inside is not None:
@@ -688,7 +700,7 @@ def build_app():
         def _inventory(aoi_file, buffer_m, sensor, index, start, end, cadence,
                        region_cloud, fps, dims, preset, aspect, quality, write_gif,
                        title, subtitle, credit, omit_credit,
-                       pool_start, pool_end, pool_strategy, project,
+                       pool_start, pool_end, pool_strategy, project, show_clouds,
                        progress=gr.Progress()):
             try:
                 progress(0.05, desc="Listing candidate scenes…")
@@ -700,7 +712,8 @@ def build_app():
                     title=title, subtitle=subtitle, credit=credit,
                     omit_credit=omit_credit,
                     pool_start_year=pool_start, pool_end_year=pool_end,
-                    pool_strategy=pool_strategy, project=project)
+                    pool_strategy=pool_strategy, project=project,
+                    show_clouds=show_clouds)
                 progress(1.0, desc="Done")
                 return None, None, None, None, csv_path, msg, None
             except Exception as exc:   # surface a friendly message in the UI

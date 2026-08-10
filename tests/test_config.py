@@ -754,3 +754,29 @@ def test_wne_summer_pooled_example_loads_as_16_9(tmp_path):
     # 16:9 an audience actually expects on a slide or in a video player.
     cfg = RunConfig.from_yaml(_REPO_ROOT / "config" / "wne_summer_pooled.example.yaml")
     assert cfg.aspect == "16:9"
+
+
+def test_mask_clouds_defaults_on_and_loads_from_yaml(tmp_path):
+    assert RunConfig.from_yaml(_write(tmp_path, _base("index: rgb\n"))).mask_clouds is True
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+        "index: rgb\nmask_clouds: false\n").replace("sensor: landsat", "sensor: sentinel2")))
+    assert cfg.mask_clouds is False
+
+
+def test_mask_clouds_false_is_rejected_for_palette_indices(tmp_path):
+    # A palette index colorizes every unmasked pixel through the ramp, so a cloud
+    # left in the data would render as a plausible real value (the CLAUDE.md
+    # invariant: clouds must never read as low NDVI / bare soil). Only composites
+    # (rgb/cir), where a cloud looks like a cloud, may opt out.
+    with pytest.raises(ConfigError, match="composite"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: ndvi\nmask_clouds: false\n").replace(
+                "sensor: landsat", "sensor: sentinel2")))
+    with pytest.raises(ConfigError, match="composite"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nmask_clouds: false\n")))
+    # composites pass
+    for idx in ("rgb", "cir"):
+        cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+            f"index: {idx}\nmask_clouds: false\n").replace(
+                "sensor: landsat", "sensor: sentinel2")))
+        assert cfg.mask_clouds is False

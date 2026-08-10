@@ -177,3 +177,50 @@ def test_build_widens_the_date_range_to_the_pooled_years(monkeypatch):
 
     assert _run([2019, 2024]) == [("filterDate", "2019-01-01", "2025-01-01")]
     assert _run(None) == [("filterDate", "2022-05-01", "2022-08-01")]
+
+
+def test_build_skips_pixel_mask_when_cfg_mask_clouds_false(monkeypatch):
+    # mask_clouds: false (composites only; config.validate enforces that) drops the
+    # per-pixel QA mask while every scene-level cloud filter still runs. The fake
+    # coll INVOKES each mapped fn, so a raising mask_clouds proves the mask map is
+    # genuinely absent rather than just counting map calls.
+    def run(mask_clouds):
+        calls = []
+        class FakeImg:
+            def propertyNames(self): return "PROPS"
+            def copyProperties(self, img, names): return self
+        class FakeColl:
+            def filterDate(self, s, e): return self
+            def filterBounds(self, g): return self
+            def filter(self, f): calls.append(("filter", f)); return self
+            def map(self, fn): calls.append(("map",)); fn(FakeImg()); return self
+        class FakeSensor:
+            name = "sentinel2"; scene_cloud_property = "CLOUDY_PIXEL_PERCENTAGE"
+            def collection(self, ee_module=None): return FakeColl()
+            def cloud_band(self, image, ee_module=None): return image
+            def mask_clouds(self, image, ee_module=None):
+                calls.append(("mask",)); return image
+        class FakeIndex:
+            def compute(self, sensor, image, ee_module=None): return image
+        monkeypatch.setattr(C, "get_product", lambda s, i: (FakeSensor(), FakeIndex()))
+        monkeypatch.setattr(C, "add_region_cloud_fraction", lambda img, *a: img)
+        ee = types.SimpleNamespace(
+            Image=lambda x: x,
+            Filter=types.SimpleNamespace(
+                lte=lambda name, val: ("lte", name, val),
+                lt=lambda name, val: ("lt", name, val),
+                inList=lambda prop, vals: ("inList", prop, vals)))
+        cfg = types.SimpleNamespace(sensor="sentinel2", index="rgb", missions=None,
+                                    start="2022-01-01", end="2022-02-01",
+                                    max_cloud_percent=60, region_max_cloud_percent=10,
+                                    scale=10, mask_clouds=mask_clouds)
+        C.build(cfg, "FRAME", "REGION", ee_module=ee)
+        return calls
+
+    masked = run(mask_clouds=True)
+    unmasked = run(mask_clouds=False)
+    assert ("mask",) in masked and ("mask",) not in unmasked
+    # scene-level cloud filters are untouched by the flag
+    for calls in (masked, unmasked):
+        assert ("filter", ("lte", "CLOUDY_PIXEL_PERCENTAGE", 60)) in calls
+        assert ("filter", ("lt", "region_cloud_fraction", 0.1)) in calls

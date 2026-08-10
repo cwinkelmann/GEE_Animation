@@ -454,6 +454,7 @@ def test_build_app_input_order_matches_handler_param_order():
         ("credit", "Credit"), ("omit_credit", "Omit the data credit line"),
         ("pool_start", "Pool from year"), ("pool_end", "Pool to year"),
         ("pool_strategy", "Pooling strategy"), ("project", "Earth Engine project"),
+        ("show_clouds", "Show real clouds"),
     ]
     app = gui.build_app()
     checked = []
@@ -611,3 +612,30 @@ def test_run_animation_write_gif_false_threads_through_to_the_config(tmp_path):
     # the gallery/ZIP are built from the PNGs, which are never switched off in the GUI
     assert len(frame_pngs) == 2 and zip_path is not None
     assert captured["cfg"].frames is True
+
+
+def test_show_clouds_inverts_to_mask_clouds_for_composites(tmp_path):
+    aoi = _write_geojson(tmp_path)
+    captured = {}
+    gui.run_animation(aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2",
+                      index="rgb", start="2022-05-01", end="2022-07-01",
+                      out_dir=str(tmp_path), show_clouds=True,
+                      deps=_fake_deps(tmp_path, captured))
+    assert captured["cfg"].mask_clouds is False
+    # default (checkbox off) keeps masking on
+    captured = {}
+    gui.run_animation(aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2",
+                      index="rgb", start="2022-05-01", end="2022-07-01",
+                      out_dir=str(tmp_path), deps=_fake_deps(tmp_path, captured))
+    assert captured["cfg"].mask_clouds is True
+
+
+def test_show_clouds_rejected_for_palette_indices(tmp_path):
+    # config.validate owns the rule (composites only); the GUI surfaces the same
+    # error instead of silently rendering colorized clouds as fake NDVI values.
+    aoi = _write_geojson(tmp_path)
+    with pytest.raises(ValueError, match="composite"):
+        gui.run_animation(aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2",
+                          index="ndvi", start="2022-05-01", end="2022-07-01",
+                          out_dir=str(tmp_path), show_clouds=True,
+                          deps=_fake_deps(tmp_path, {}))

@@ -25,6 +25,13 @@ cadence: monthly
 max_cloud_percent: 70
 draw_region: true
 
+# True colour is the one product where a cloud looks like what it is, so skip the
+# per-pixel QA mask and keep real white clouds instead of grey cutouts. Composites
+# (rgb/cir) only — palette indices always mask, or a cloud would colorize as a
+# plausible false value (bright cloud ~ low NDVI ~ bare soil). Scene-level cloud
+# filters (max_cloud_percent, region_max_cloud_percent) still apply.
+mask_clouds: false
+
 pool_years: [2018, 2024]
 pool_strategy: gap_fill     # keep 2021/2022 where they have data; borrow only for gaps
 

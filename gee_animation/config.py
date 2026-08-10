@@ -138,6 +138,13 @@ class RunConfig:
     # only — every frame is labelled with its source year. None => off (default).
     pool_years: list = None
     pool_strategy: str = "least_cloudy"
+    # Per-pixel cloud masking (from top-level `mask_clouds`). True (default) masks
+    # cloud/shadow pixels via the sensor's QA layer so they render neutral grey —
+    # required for palette indices, where a colorized cloud would read as a real
+    # low value (e.g. bare soil on NDVI). False keeps clouds in the imagery and is
+    # only allowed for composites (rgb/cir), where real white clouds look natural
+    # and nothing is painted over. Scene-level cloud filters are unaffected.
+    mask_clouds: bool = True
     # Write per-frame AOI cloud fraction to <out_dir>/metadata.db (a reduceRegion per
     # frame, so opt-in).
     metadata: bool = False
@@ -236,6 +243,7 @@ class RunConfig:
                 subtitle=(str(raw["subtitle"]) if raw.get("subtitle") else None),
                 credit=credit,
                 draw_region=bool(raw.get("draw_region", True)),
+                mask_clouds=bool(raw.get("mask_clouds", True)),
                 region_line_width=(int(render["region_line_width"])
                                    if render.get("region_line_width") is not None else None),
                 anomaly=anomaly,
@@ -264,6 +272,15 @@ class RunConfig:
             get_product(self.sensor, self.index)
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
+        if not self.mask_clouds and not INDICES[self.index].composite:
+            # A palette index colorizes every unmasked pixel through the ramp, so a
+            # cloud left in the data renders as a plausible-looking real value
+            # (bright cloud ~ low NDVI ~ bare soil). Composites show clouds as what
+            # they are — white clouds — so only they may opt out of masking.
+            raise ConfigError(
+                f"mask_clouds: false is only supported for composite indices "
+                f"(rgb/cir); {self.index!r} colorizes pixels through a palette, so "
+                f"unmasked clouds would render as false data values")
         if self.credit == "" and self.sensor == "sentinel2":
             # An explicit empty credit suppresses the frame's only attribution line.
             # For sentinel2 that line is not decoration: the Copernicus licence
