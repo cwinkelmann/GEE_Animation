@@ -1794,7 +1794,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     # product name (`_line2_prefix`) — "" for single-band indices and untitled runs.
     header_title, header_subtitle, header_caveats = _header_text(cfg)
     header_prefix = _line2_prefix(cfg)
-    two_line_header = bool(header_subtitle or header_caveats or header_prefix)
+    two_line_header = _two_line_header(cfg)
     # Attribution is also run-level (same line on every frame) and, like the
     # header, resolved once rather than per frame — see `_default_credit`.
     credit_text = _default_credit(cfg)

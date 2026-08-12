@@ -277,10 +277,7 @@ def _text_value(text):
     """Blank/whitespace-only textbox => ``None`` (falls back to the on-frame default);
     anything else is passed through verbatim. Used for title/subtitle, which — unlike
     credit — have no meaningful "explicit empty" state to preserve."""
-    if text is None:
-        return None
-    text = str(text)
-    return text if text.strip() else None
+    return None if _blank(text) else str(text)
 
 
 def _credit_value(credit, omit_credit):
@@ -294,15 +291,12 @@ def _credit_value(credit, omit_credit):
     - box checked *and* textbox non-blank is contradictory — a friendly error, not a
       silent pick of one over the other.
     """
-    text = "" if credit is None else str(credit)
-    has_text = bool(text.strip())
-    if omit_credit and has_text:
+    text = _text_value(credit)
+    if omit_credit and text:
         raise ValueError(
             "credit text and \"Omit the data credit line\" are contradictory — "
             "clear the credit text or uncheck the box, not both")
-    if omit_credit:
-        return ""
-    return text if has_text else None
+    return "" if omit_credit else text
 
 
 def _quality_value(quality):
