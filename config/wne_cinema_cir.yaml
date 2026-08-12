@@ -14,6 +14,7 @@ index: cir
 cadence: monthly
 max_cloud_percent: 70
 draw_region: true
+mask_clouds: false
 
 pool_years: [2018, 2024]
 pool_strategy: gap_fill
