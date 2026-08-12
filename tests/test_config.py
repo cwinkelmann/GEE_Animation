@@ -803,3 +803,32 @@ def test_anomaly_rejects_quarterly_cadence(tmp_path):
     ).replace("cadence: monthly", "cadence: quarterly")
     with pytest.raises(ConfigError, match="monthly"):
         RunConfig.from_yaml(_write(tmp_path, body))
+
+
+def test_quoted_false_is_rejected_for_top_level_flags(tmp_path):
+    # YAML `mask_clouds: "false"` is a non-empty STRING; bool() would coerce it to
+    # True and silently keep masking the clouds the user asked to see. Same strict
+    # rule as render.gif/frames (_flag).
+    for flag in ("mask_clouds", "draw_region", "metadata"):
+        with pytest.raises(ConfigError, match=flag):
+            RunConfig.from_yaml(_write(tmp_path, _base(
+                f'index: rgb\nsensor2: x\n{flag}: "false"\n').replace(
+                    "sensor: landsat", "sensor: sentinel2").replace("sensor2: x\n", "")))
+
+
+def test_quality_rejects_yaml_booleans(tmp_path):
+    # `quality: true` is int()-able (bool is int) and would become quality 1 — the
+    # WORST setting — as a silent surprise.
+    with pytest.raises(ConfigError, match="quality"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n").replace(
+            "render: {fps: 4, scale: 30, dimensions: 768}",
+            "render: {fps: 4, scale: 30, dimensions: 768, quality: true}")))
+
+
+def test_credit_rejects_non_string_values(tmp_path):
+    # `credit: false` is falsy-but-not-"" and used to collapse to None — i.e. the
+    # automatic attribution the user was trying to switch off.
+    with pytest.raises(ConfigError, match="credit"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\ncredit: false\n")))
+    with pytest.raises(ConfigError, match="credit"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\ncredit: 0\n")))

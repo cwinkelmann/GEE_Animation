@@ -69,7 +69,11 @@ def expand(items, steps: int, period_gap):
             for k in range(1, n + 1):
                 t = k / (n + 1)
                 gen_vals, gen_valid = blend(values, valid, b_vals, b_valid, t)
-                yield gen_vals, gen_valid, f"{label} -> {b_label}  {round(100 * t)}%", False
+                # Clamp the caption to 1–99: at very high steps x gap the first/last
+                # generated frames would round to "0%"/"100%", captioning a blended
+                # frame as if it were the observation itself.
+                pct = min(99, max(1, round(100 * t)))
+                yield gen_vals, gen_valid, f"{label} -> {b_label}  {pct}%", False
         # Drop the left endpoint *before* pulling the next item, so the fetch that
         # the next iteration triggers overlaps with two observations alive, not three.
         current, values, valid = nxt, None, None

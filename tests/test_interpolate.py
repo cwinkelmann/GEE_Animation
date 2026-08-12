@@ -172,3 +172,15 @@ def test_gap_for_quarterly_counts_quarter_slots():
     assert gap("2022-Q1", "2022-Q2") == 1
     assert gap("2022-Q1", "2022-Q3") == 2   # a skipped quarter doubles the frames
     assert gap("2022-Q4", "2023-Q1") == 1   # year boundary is one step
+
+
+def test_generated_caption_pct_never_reads_0_or_100():
+    # steps x gap large enough that round(100*t) would hit 0 and 100 at the ends:
+    # a generated frame captioned "100%" reads as the observation itself.
+    ident = lambda a, b: 1
+    a = (np.zeros((1, 1)), np.ones((1, 1), bool), "2022-05")
+    b = (np.ones((1, 1)), np.ones((1, 1), bool), "2022-06")
+    out = list(expand([a, b], steps=250, period_gap=ident))
+    gen = [label for _v, _m, label, real in out if not real]
+    assert gen[0].endswith(" 1%") and gen[-1].endswith(" 99%")
+    assert not any(l.endswith(" 0%") or l.endswith(" 100%") for l in gen)

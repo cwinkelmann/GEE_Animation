@@ -44,13 +44,17 @@ def _opt_int(render: dict, key: str):
     value = render.get(key)
     if value is None:
         return None
+    if isinstance(value, bool):
+        # YAML `quality: true` would int() to 1 — the *worst* quality — with no
+        # diagnostic; a bool here is always a config mistake, never a number.
+        raise ConfigError(f"render.{key} must be a whole number, got {value!r}")
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"render.{key} must be a whole number, got {value!r}") from exc
 
 
-def _flag(render: dict, key: str, default=True):
+def _flag(render: dict, key: str, default=True, *, scope: str = "render."):
     """A `render.<key>` boolean, or `default` when the key is absent.
 
     Deliberately not `bool(...)`: YAML turns a *quoted* ``gif: "false"`` into a
@@ -66,7 +70,7 @@ def _flag(render: dict, key: str, default=True):
         return default
     value = render[key]
     if not isinstance(value, bool):
-        raise ConfigError(f"render.{key} must be true or false (got {value!r})")
+        raise ConfigError(f"{scope}{key} must be true or false (got {value!r})")
     return value
 
 
@@ -209,6 +213,15 @@ class RunConfig:
             # to None): "" is a distinct, deliberate "no credit line" choice that
             # render._default_credit and validate() both need to tell apart from
             # "not configured, pick the sensor default".
+            if ("credit" in raw and raw["credit"] is not None
+                    and not isinstance(raw["credit"], str)):
+                # `credit: false` is falsy-but-not-"" and would silently collapse to
+                # None — i.e. the automatic Copernicus line the user was trying to
+                # turn OFF. Only the exact "" opts out; make the near-miss loud.
+                raise ConfigError(
+                    f"credit must be a string (got {raw['credit']!r}); use "
+                    "credit: \"\" to omit the attribution line, or remove the key "
+                    "for the automatic sensor credit")
             credit = (str(raw["credit"]) if raw.get("credit")
                      else ("" if "credit" in raw and raw["credit"] == "" else None))
             cfg = cls(
@@ -242,15 +255,18 @@ class RunConfig:
                 title=(str(raw["title"]) if raw.get("title") else None),
                 subtitle=(str(raw["subtitle"]) if raw.get("subtitle") else None),
                 credit=credit,
-                draw_region=bool(raw.get("draw_region", True)),
-                mask_clouds=bool(raw.get("mask_clouds", True)),
+                # Strict bools, not bool(...): a quoted "false" is a non-empty string
+                # and truthy-coercing it would silently invert the user's intent
+                # (same trap _flag documents for gif/frames).
+                draw_region=_flag(raw, "draw_region", scope=""),
+                mask_clouds=_flag(raw, "mask_clouds", scope=""),
                 region_line_width=(int(render["region_line_width"])
                                    if render.get("region_line_width") is not None else None),
                 anomaly=anomaly,
                 baseline_years=raw.get("baseline_years"),
                 pool_years=raw.get("pool_years"),
                 pool_strategy=str(raw.get("pool_strategy") or "least_cloudy"),
-                metadata=bool(raw.get("metadata", False)),
+                metadata=_flag(raw, "metadata", default=False, scope=""),
                 missions=raw.get("missions"),
                 min_scenes=int(raw.get("min_scenes", 1)),
                 allow_upsample=bool(raw.get("allow_upsample", False)),

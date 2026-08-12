@@ -2753,3 +2753,46 @@ def test_render_unset_gif_still_defaults_on_without_interpolation(tmp_path):
     cfg.gif = None
     paths = render([Frame("2022-05", object())], cfg, fetch=_flat_fetch, geometry=None)
     assert any(p.suffix == ".gif" and p.exists() for p in paths)
+
+
+def test_resolve_droppables_keeps_the_earlier_of_two_colliding_droppables():
+    import gee_animation.render as R
+    # viz -1..1.2 puts the 0 tick and nice-mid 0.1 a few percent apart; the old
+    # mutual check dropped BOTH labels, leaving bare tick marks. Sequential
+    # admission keeps 0 (earlier in the list) and drops only the mid.
+    ticks = [(-1.0, "-1", "l", False), (0.0, "0", "m", True),
+             (0.1, "0.1", "m", True), (1.2, "1.2", "r", False)]
+    bounds = [(0, 20), (100, 110), (105, 120), (300, 330)]   # 0 and 0.1 overlap
+    show = R._resolve_droppables(ticks, bounds, gap=4)
+    assert show == [True, True, False, True]
+    # and a droppable colliding with a range END still drops
+    bounds = [(0, 20), (18, 30), (150, 165), (300, 330)]
+    assert R._resolve_droppables(ticks, bounds, gap=4) == [True, False, True, True]
+
+
+def test_header_subtitle_fits_is_not_fooled_by_substring_subtitles(monkeypatch):
+    import gee_animation.render as R
+    # Subtitle "2021" is a substring of the caveat "gap-filled from 2019-2021";
+    # when the drawing path drops the subtitle the fitted text still CONTAINS
+    # "2021", and the old `subtitle in text` check reported it as fitting.
+    caveats = "gap-filled from 2019–2021"
+    monkeypatch.setattr(R, "_fit_header_line2",
+                        lambda draw, sub, cav, px, avail, prefix="": (None, cav))
+    assert R.header_subtitle_fits(1920, 1080, "2021", caveats) is False
+    # untouched composition => genuinely fits
+    monkeypatch.setattr(
+        R, "_fit_header_line2",
+        lambda draw, sub, cav, px, avail, prefix="": (
+            None, " · ".join(p for p in (prefix, sub, cav) if p)))
+    assert R.header_subtitle_fits(1920, 1080, "2021", caveats) is True
+
+
+def test_fit_margins_rejects_a_canvas_too_short_for_the_margins():
+    import gee_animation.render as R
+    # ch=30 with a two-line header cannot hold one imagery row + margin floors;
+    # the letterbox would paste at a negative offset and crop the header silently.
+    with pytest.raises(RuntimeError, match="too short"):
+        R._fit_margins(100, 100, 30, 1.0, two_line_header=True)
+    # a canvas just past the floor still works
+    w, h = R._fit_margins(100, 100, 200, 1.0, two_line_header=True)
+    assert h >= 1 and h + sum(R._margins(h, True)) <= 200

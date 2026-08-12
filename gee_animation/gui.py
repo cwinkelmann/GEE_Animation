@@ -108,18 +108,20 @@ DEFAULT_AOI = os.environ.get("GEE_DEFAULT_AOI") or (str(_WNE_AOI) if _WNE_AOI.ex
 
 # Where previously-rendered runs live (overridable for a mounted output volume).
 OUTPUT_DIR = os.environ.get("GEE_OUTPUT_DIR", "out")
-_MONTH_RE = re.compile(r"\d{4}-\d{2}")   # a frame stem is "<name>_YYYY-MM"
+# A frame stem's period suffix: "YYYY-MM" (monthly), "YYYY-MM-DD" (sub-monthly)
+# or "YYYY-Qn" (quarterly) — every label format compositing.period_starts emits.
+_PERIOD_RE = re.compile(r"\d{4}-(?:\d{2}(?:-\d{2})?|Q[1-4])")
 
 
 def _run_frames(run_dir: Path, name: str) -> list:
-    """Per-month frame PNGs for animation `name` in `run_dir`, sorted by month.
+    """Per-period frame PNGs for animation `name` in `run_dir`, sorted by period.
 
-    A frame is exactly ``<name>_<YYYY-MM>.png`` — the strict suffix match keeps a
+    A frame is exactly ``<name>_<period>.png`` — the strict suffix match keeps a
     run named ``wne_lst`` from grabbing ``wne_lst_smw``'s frames in a shared folder.
     """
     frames = []
     for p in run_dir.glob(f"{name}_*.png"):
-        if _MONTH_RE.fullmatch(p.stem[len(name) + 1:]):
+        if _PERIOD_RE.fullmatch(p.stem[len(name) + 1:]):
             frames.append(p)
     return sorted(frames)
 

@@ -285,6 +285,30 @@ def _colorbar_ticks(vmin: float, vmax: float, units: str) -> list:
     return ticks
 
 
+def _resolve_droppables(ticks, bounds, gap):
+    """Which tick labels draw, given each label's (left, right) pixel `bounds`.
+
+    Non-droppable labels (the range ends — they ARE the data) always draw.
+    Droppables (the 0 tick, then the nice-mid) are admitted in list order, each
+    checked only against labels already admitted. Checking every droppable against
+    every OTHER label instead would let two close droppables knock each other out
+    mutually — e.g. viz -1..1.2 puts 0 and the nice-mid 0.1 within a few percent of
+    the ramp, and both labels would vanish, leaving two bare tick marks. Sequential
+    admission keeps the earlier one: 0 (the water/land teaching point) beats the mid.
+    """
+    show = [True] * len(ticks)
+    kept = [i for i, t in enumerate(ticks) if not t[3]]
+    for i, (_v, _label, _anchor, droppable) in enumerate(ticks):
+        if not droppable:
+            continue
+        lo, hi = bounds[i]
+        ok = all(hi + gap <= bounds[j][0] or lo - gap >= bounds[j][1] for j in kept)
+        show[i] = ok
+        if ok:
+            kept.append(i)
+    return show
+
+
 def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
                  x_offset: int = 0, region_w: int | None = None) -> np.ndarray:
     """Draw the index legend into the top-left of the imagery.
@@ -340,19 +364,13 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
             return x - tw, x
         return x - tw / 2, x + tw / 2
 
-    # A droppable (mid) label is measured against every other label, as
-    # draw_scale_bar measures its label with textbbox; skipped if it would overlap.
+    # Droppable (0 / mid) labels are measured with textbbox like draw_scale_bar's
+    # label, and admitted sequentially so two close droppables can't knock each
+    # other out mutually — see _resolve_droppables.
     gap = max(2, lw * 2)
-    show_label = [True] * len(ticks)
-    for i, (v, label, anchor, droppable) in enumerate(ticks):
-        if not droppable:
-            continue
-        lo, hi = _label_bounds(label, _x(v), anchor)
-        show_label[i] = all(
-            hi + gap <= _label_bounds(o_label, _x(o_v), o_anchor)[0]
-            or lo - gap >= _label_bounds(o_label, _x(o_v), o_anchor)[1]
-            for j, (o_v, o_label, o_anchor, _od) in enumerate(ticks) if j != i
-        )
+    show_label = _resolve_droppables(
+        ticks, [_label_bounds(label, _x(v), anchor)
+                for v, label, anchor, _d in ticks], gap)
 
     tick_top, tick_bot = y0 + bar_h, y0 + bar_h + lw + 2
     text_y = tick_bot + 1
@@ -407,7 +425,10 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
     right = max([x0 + bar_w, swatch_x0 + swatch_size] + [hi for _lo, hi in shown])
     left = min([x0] + [lo for lo, _hi in shown])
     panel_bottom = anchor_y + line_h if (show_low or show_high) else text_y + text_h
-    draw.rectangle([left - pad, panel_top - pad, right + pad, panel_bottom + pad],
+    # Top overhang clamped to 4 px: render() places the legend 4 px below the
+    # header bar, and on ≥1730 px canvases pad (lw*2 = 8+) would otherwise reach
+    # up past that gap and tint the header's bottom rows.
+    draw.rectangle([left - pad, panel_top - min(pad, 4), right + pad, panel_bottom + pad],
                    fill=(0, 0, 0, 130))
 
     draw.text((x0, panel_top), heading, fill=(255, 255, 255, 255), font=font)
@@ -816,7 +837,12 @@ def header_subtitle_fits(w: int, h: int, subtitle: str, caveats: str,
     draw = ImageDraw.Draw(Image.new("RGB", (1, 1)), "RGBA")
     _x, _pad, avail_w, _bar_h, _title_px, line2_px = _header_metrics(draw, w, h)
     _font_, text = _fit_header_line2(draw, subtitle, caveats, line2_px, avail_w, prefix)
-    return subtitle in text
+    # Exact-composition compare, not `subtitle in text`: a subtitle like "2021"
+    # is a substring of a "gap-filled from 2019–2021" caveat, which would report
+    # "fits" on the very frames that dropped it. The drawing path either keeps the
+    # line whole, trims the subtitle with "…", or drops it — only the untouched
+    # composition means the subtitle survived in full.
+    return text == " · ".join(p for p in (prefix, subtitle, caveats) if p)
 
 
 def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
@@ -1352,6 +1378,14 @@ def _fit_margins(pw: int, ph: int, ch: int, aoi_aspect: float,
     ph = min(ph, max(1, ch * (9 if two_line_header else 10) // 12))
     while ph > 1 and ph + sum(_margins(ph, two_line_header)) > ch:
         ph -= 1
+    floor = 1 + sum(_margins(1, two_line_header))
+    if ph == 1 and floor > ch:
+        # Even one imagery row plus the margin floors overflows the canvas; the
+        # letterbox would paste at a negative offset and silently crop the header.
+        # Only reachable with an absurd custom integer preset — fail loudly instead.
+        raise RuntimeError(
+            f"render.preset gives a {ch} px tall canvas, too short for the label "
+            f"margins (needs at least {floor} px) — use a larger preset")
     return max(1, min(pw, round(ph * aoi_aspect))), ph
 
 

@@ -639,3 +639,20 @@ def test_show_clouds_rejected_for_palette_indices(tmp_path):
                           index="ndvi", start="2022-05-01", end="2022-07-01",
                           out_dir=str(tmp_path), show_clouds=True,
                           deps=_fake_deps(tmp_path, {}))
+
+
+def test_run_frames_matches_every_period_label_format(tmp_path):
+    # Reloading a previous run must see quarterly ("2022-Q3") and sub-monthly
+    # ("2022-05-16") stems, not only monthly — a quarterly run used to reload as
+    # "0 frame(s)" with an empty gallery.
+    run = tmp_path / "run"
+    run.mkdir()
+    for stem in ("2022-05", "2022-05-16", "2022-Q3"):
+        (run / f"vid_{stem}.png").write_bytes(b"png")
+    (run / "vid_notaperiod.png").write_bytes(b"png")     # still excluded
+    (run / "vid_2022-Q7.png").write_bytes(b"png")        # no such quarter
+    names = [p.name for p in gui._run_frames(run, "vid")]
+    # set-compare: a real run never mixes cadences, so cross-format sort order
+    # ("-" < "." lexicographically) is irrelevant here
+    assert sorted(names) == sorted(
+        ["vid_2022-05.png", "vid_2022-05-16.png", "vid_2022-Q3.png"])
