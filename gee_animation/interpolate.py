@@ -101,7 +101,11 @@ def _slot(label: str, cadence: str) -> int:
     guessed from the label (see `gap_for`).
     """
     parts = label.split("-")
-    year, month = int(parts[0]), int(parts[1])
+    year = int(parts[0])
+    if cadence == "quarterly":
+        # "YYYY-Qn" — four slots per year; a skipped quarter is one missing slot.
+        return year * 4 + int(parts[1][1:]) - 1
+    month = int(parts[1])
     months = year * 12 + month
     if cadence == "monthly":
         return months

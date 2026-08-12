@@ -165,3 +165,10 @@ def test_gap_for_disagrees_between_sub_monthly_cadences_for_the_same_labels():
     # which grid it's on, so the cadence must be supplied by the caller.
     assert gap_for("semimonthly")("2022-05-01", "2022-06-01") == 2
     assert gap_for("10day")("2022-05-01", "2022-06-01") == 3
+
+
+def test_gap_for_quarterly_counts_quarter_slots():
+    gap = gap_for("quarterly")
+    assert gap("2022-Q1", "2022-Q2") == 1
+    assert gap("2022-Q1", "2022-Q3") == 2   # a skipped quarter doubles the frames
+    assert gap("2022-Q4", "2023-Q1") == 1   # year boundary is one step

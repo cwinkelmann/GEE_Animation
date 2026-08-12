@@ -461,3 +461,51 @@ def test_composite_without_pool_years_is_unchanged():
     frames = composite(coll, cfg)
     assert [(f.label, f.n_scenes) for f in frames] == [("2022-01", 2), ("2022-02", 1)]
     assert all("←" not in f.label for f in frames)
+
+
+def test_period_starts_quarterly_labels_and_spans():
+    assert period_starts("2022-01-01", "2023-01-01", "quarterly") == [
+        ("2022-Q1", "2022-01-01", "2022-04-01"),
+        ("2022-Q2", "2022-04-01", "2022-07-01"),
+        ("2022-Q3", "2022-07-01", "2022-10-01"),
+        ("2022-Q4", "2022-10-01", "2023-01-01"),
+    ]
+    # a start inside a quarter floors to that quarter, mirroring how a monthly run
+    # starting on the 15th composites the whole month
+    assert period_starts("2022-02-15", "2022-05-01", "quarterly") == [
+        ("2022-Q1", "2022-01-01", "2022-04-01"),
+        ("2022-Q2", "2022-04-01", "2022-07-01"),
+    ]
+
+
+def test_calendar_key_handles_multi_month_quarters():
+    from gee_animation.compositing import _calendar_key
+    # regression: single-month shapes keep their exact day windows
+    assert _calendar_key("2022-05-01", "2022-06-01") == ((5,), 1, 31)     # monthly
+    assert _calendar_key("2022-05-01", "2022-05-16") == ((5,), 1, 15)     # semimonthly
+    assert _calendar_key("2022-05-16", "2022-06-01") == ((5,), 16, 31)
+    # a quarter lists all three of its months; Q4's end date crosses New Year
+    assert _calendar_key("2022-01-01", "2022-04-01") == ((1, 2, 3), 1, 31)
+    assert _calendar_key("2022-10-01", "2023-01-01") == ((10, 11, 12), 1, 31)
+
+
+def test_gap_fill_quarterly_sees_every_month_of_the_quarter():
+    # The old single-month calendar key would have matched only January here and
+    # silently skipped the quarter (or under-counted it). Scenes in months 2 and 3
+    # of Q1 must both count toward the nominal year...
+    coll = PooledCollection([("2022-02-10", 0.2, "FEB"), ("2022-03-05", 0.3, "MAR")])
+    cfg = _pool_cfg(start="2022-01-01", end="2022-04-01", cadence="quarterly",
+                    pool_strategy="gap_fill", min_scenes=2)
+    frames = _pooled(coll, cfg)
+    assert len(frames) == 1
+    assert frames[0].label == "2022-Q1"
+    assert frames[0].n_scenes == 2 and frames[0].source is None
+    assert frames[0].image.tag == "median:2022-02-10,2022-03-05"
+    # ...and a borrow must consider donor scenes from ANY month of the quarter.
+    coll = PooledCollection([("2021-03-15", 0.1, "MAR21")])
+    cfg = _pool_cfg(start="2022-01-01", end="2022-04-01", cadence="quarterly",
+                    pool_strategy="gap_fill", pool_years=[2021, 2022])
+    frames = _pooled(coll, cfg)
+    assert len(frames) == 1
+    assert frames[0].label == "2022-Q1" and frames[0].source == 2021
+    assert frames[0].image.tag == "mosaic:MAR21"

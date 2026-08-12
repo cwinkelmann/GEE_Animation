@@ -67,3 +67,21 @@ def test_generated_text_submonthly_cross_month_same_year():
 
 def test_generated_text_submonthly_year_boundary():
     assert generated_text("2021-12-21", "2022-01-01", 50) == "between 21 December 2021 and 1 January 2022 · 50%"
+
+
+def test_period_text_quarterly_spells_the_month_range():
+    assert period_text("2022-Q1") == "January–March 2022"
+    assert period_text("2022-Q4") == "October–December 2022"
+
+
+def test_observed_text_quarterly():
+    assert observed_text("2022-Q3", 5, None) == "July–September 2022 · 5 passes"
+    assert (observed_text("2022-Q1", 1, 2019)
+            == "January–March 2022 · image from 2019 · 1 pass")
+
+
+def test_generated_text_quarterly_shares_or_splits_the_year_like_months():
+    assert (generated_text("2022-Q1", "2022-Q2", 36)
+            == "between January–March and April–June 2022 · 36%")
+    assert (generated_text("2022-Q4", "2023-Q1", 50)
+            == "between October–December 2022 and January–March 2023 · 50%")

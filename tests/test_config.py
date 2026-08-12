@@ -780,3 +780,26 @@ def test_mask_clouds_false_is_rejected_for_palette_indices(tmp_path):
             f"index: {idx}\nmask_clouds: false\n").replace(
                 "sensor: landsat", "sensor: sentinel2")))
         assert cfg.mask_clouds is False
+
+
+def test_quarterly_cadence_is_supported_and_quiet_for_landsat(tmp_path, caplog):
+    import logging
+    with caplog.at_level(logging.WARNING):
+        cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: lst\n").replace("cadence: monthly", "cadence: quarterly")))
+    assert cfg.cadence == "quarterly"
+    # quarterly bins are WIDER than monthly, so the sparse-bins warning that fires
+    # for sub-monthly landsat runs must stay silent here
+    assert "16-day repeat" not in caplog.text
+    with caplog.at_level(logging.WARNING):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: lst\n").replace("cadence: monthly", "cadence: 10day")))
+    assert "16-day repeat" in caplog.text
+
+
+def test_anomaly_rejects_quarterly_cadence(tmp_path):
+    body = _base(
+        "index: lst\nanomaly: climatology\nbaseline_years: [2015, 2024]\n"
+    ).replace("cadence: monthly", "cadence: quarterly")
+    with pytest.raises(ConfigError, match="monthly"):
+        RunConfig.from_yaml(_write(tmp_path, body))

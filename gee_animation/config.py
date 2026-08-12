@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 # semimonthly splits at the 1st/16th; 10day splits at the 1st/11th/21st (see
 # compositing._SPLIT_DAYS — bins stay aligned to calendar months).
-SUPPORTED_CADENCES = {"monthly", "semimonthly", "10day"}
+SUPPORTED_CADENCES = {"monthly", "semimonthly", "10day", "quarterly"}
 
 # Cross-year "best month" pooling (see compositing.pooled_composite).
 POOL_STRATEGIES = {"least_cloudy", "median", "gap_fill"}
@@ -296,7 +296,9 @@ class RunConfig:
             raise ConfigError(
                 f"unsupported cadence {self.cadence!r}; supported: {sorted(SUPPORTED_CADENCES)}"
             )
-        if self.cadence != "monthly" and self.sensor == "landsat":
+        if self.cadence in ("semimonthly", "10day") and self.sensor == "landsat":
+            # Sub-monthly only: quarterly bins are *wider* than monthly, so the
+            # 16-day repeat is a reason to prefer quarterly, not a warning case.
             log.warning(
                 "cadence %r with sensor 'landsat': Landsat's 16-day repeat leaves most "
                 "%s bins empty", self.cadence, self.cadence)
@@ -348,7 +350,7 @@ class RunConfig:
                 # sub-monthly slice would silently produce inflated z-scores.
                 raise ConfigError(
                     f"anomaly requires cadence: monthly (got {self.cadence!r}); "
-                    "sub-monthly composites cannot be scored against a monthly climatology")
+                    "only monthly composites can be scored against a monthly climatology")
             if self.anomaly not in ("climatology", "reference"):
                 raise ConfigError(
                     f"unknown anomaly {self.anomaly!r}; use 'climatology' or 'reference'")

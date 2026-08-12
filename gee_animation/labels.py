@@ -26,27 +26,38 @@ from __future__ import annotations
 import calendar
 
 
-def _parse(label: str) -> tuple[int, int, int | None]:
-    """(year, month, day) from a period label; `day` is None for "YYYY-MM"."""
+def _parse(label: str) -> tuple[int, int | None, int | None, int | None]:
+    """(year, month, day, quarter) from a period label. `day` is None for
+    "YYYY-MM"; `month`/`day` are None and `quarter` is set for "YYYY-Qn"."""
     parts = label.split("-")
-    year, month = int(parts[0]), int(parts[1])
+    year = int(parts[0])
+    if parts[1][:1] in ("Q", "q"):
+        return year, None, None, int(parts[1][1:])
+    month = int(parts[1])
     day = int(parts[2]) if len(parts) > 2 else None
-    return year, month, day
+    return year, month, day, None
 
 
-def _side(month: int, day: int | None) -> str:
-    """Month name, or "day month" for a sub-monthly label — year omitted; the
-    caller decides whether the year is shared (once) or must be shown per side."""
+def _side(month: int | None, day: int | None, quarter: int | None = None) -> str:
+    """Month name, "day month" for a sub-monthly label, or "January–March" for a
+    quarter — year omitted; the caller decides whether the year is shared (once)
+    or must be shown per side. A quarter is spelled as its month range rather
+    than "Q1", which is finance jargon to the audiences these frames target."""
+    if quarter is not None:
+        first = calendar.month_name[3 * quarter - 2]
+        last = calendar.month_name[3 * quarter]
+        return f"{first}–{last}"
     name = calendar.month_name[month]
     return f"{day} {name}" if day is not None else name
 
 
 def period_text(label: str) -> str:
-    """Plain-language rendering of one period label: "May 2022" (monthly) or
-    "11 May 2022" (sub-monthly), replacing the raw "YYYY-MM"/"YYYY-MM-DD" key.
+    """Plain-language rendering of one period label: "May 2022" (monthly),
+    "11 May 2022" (sub-monthly) or "January–March 2022" (quarterly), replacing
+    the raw "YYYY-MM"/"YYYY-MM-DD"/"YYYY-Qn" key.
     """
-    year, month, day = _parse(label)
-    return f"{_side(month, day)} {year}"
+    year, month, day, quarter = _parse(label)
+    return f"{_side(month, day, quarter)} {year}"
 
 
 def observed_text(label: str, n_scenes: int | None, source) -> str:
@@ -89,9 +100,9 @@ def generated_text(label_a: str, label_b: str, pct: int) -> str:
     the same way, including when the gap also crosses a month boundary
     ("between 21 May and 1 June 2022").
     """
-    year_a, month_a, day_a = _parse(label_a)
-    year_b, month_b, day_b = _parse(label_b)
-    side_a, side_b = _side(month_a, day_a), _side(month_b, day_b)
+    year_a, month_a, day_a, quarter_a = _parse(label_a)
+    year_b, month_b, day_b, quarter_b = _parse(label_b)
+    side_a, side_b = _side(month_a, day_a, quarter_a), _side(month_b, day_b, quarter_b)
     if year_a == year_b:
         span = f"between {side_a} and {side_b} {year_a}"
     else:
