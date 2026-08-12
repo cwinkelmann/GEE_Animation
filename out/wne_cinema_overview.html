@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grumsin Beech Forest — Satellite Timelapse Collection</title>
+<style>
+  :root {
+    --bg: #101418; --card: #1a2027; --ink: #e8ecef; --muted: #9aa7b0;
+    --accent: #f5c542; --line: #2c3540;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 2.5rem 1.5rem 4rem;
+  }
+  main { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 1.9rem; font-weight: 650; letter-spacing: .01em; }
+  .sub { color: var(--muted); margin: .4rem 0 2.2rem; max-width: 60ch; }
+  h2 {
+    font-size: 1.05rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--accent);
+    margin: 2.6rem 0 1rem; padding-bottom: .4rem; border-bottom: 1px solid var(--line);
+  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.4rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .card video { width: 100%; display: block; aspect-ratio: 16/9; background: #000; }
+  .card .body { padding: .9rem 1.1rem 1.1rem; }
+  .card h3 { font-size: 1.08rem; font-weight: 600; margin-bottom: .15rem; }
+  .period { color: var(--accent); font-size: .85rem; letter-spacing: .03em; }
+  .stats { color: var(--muted); font-size: .84rem; margin: .5rem 0 .55rem; }
+  .stats span { white-space: nowrap; }
+  .stats span + span::before { content: " · "; color: var(--line); }
+  .note { font-size: .9rem; color: var(--ink); opacity: .92; }
+  .links { margin-top: .7rem; font-size: .84rem; }
+  .links a { color: var(--accent); text-decoration: none; margin-right: 1.1em; }
+  .links a:hover { text-decoration: underline; }
+  .method { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+            padding: 1.3rem 1.5rem; margin-top: 1rem; font-size: .92rem; }
+  .method ul { margin: .5rem 0 0 1.2rem; }
+  .method li { margin: .35rem 0; }
+  .credits { color: var(--muted); font-size: .84rem; margin-top: 2.2rem; }
+  code { background: #0c1013; border: 1px solid var(--line); border-radius: 4px;
+         padding: .08em .4em; font-size: .86em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Grumsin Beech Forest — Satellite Timelapse Collection</h1>
+  <p class="sub">UNESCO World Heritage beech forest, Brandenburg, Germany. Nine animations
+  over a 22.2&nbsp;×&nbsp;9.35&nbsp;km frame centred on the Grumsin reserve, rendered from
+  Sentinel-2 and Landsat&nbsp;8/9 imagery. The players below use 720p previews; each card
+  links the full-quality 1080p master and the exact config that reproduces it.</p>
+
+  <h2>Two-year cinema set · 2021–2022</h2>
+  <div class="grid">
+    <div class="card">
+      <video controls preload="metadata" src="wne_cinema_ndvi_720p.mp4"></video>
+      <div class="body">
+        <h3>Vegetation greenness (NDVI)</h3>
+        <div class="period">Jan 2021 – Dec 2022 · monthly</div>
+        <div class="stats"><span>24 observed months</span><span>254 frames</span><span>2:07 @ 2 fps</span><span>master 134&nbsp;MB</span></div>
+        <p class="note">Colour-vision-safe ramp with a blue water range below NDVI&nbsp;0.
+        Watch the beech canopy flip from brown to deep green each May.</p>
+        <div class="links"><a href="wne_cinema_ndvi.mp4">1080p master</a><a href="../config/wne_cinema_ndvi.yaml">config</a></div>
+      </div>
+    </div>
+    <div class="card">
+      <video controls preload="metadata" src="wne_cinema_cir_720p.mp4"></video>
+      <div class="body">
+        <h3>Colour infrared (CIR)</h3>
+        <div class="period">Jan 2021 – Dec 2022 · monthly</div>
+        <div class="stats"><span>24 observed months</span><span>254 frames</span><span>2:07 @ 2 fps</span><span>master 120&nbsp;MB</span></div>
+        <p class="note">Near-infrared shown as red: healthy vegetation glows. Cloud pixels
+        are masked to grey in this version.</p>
+        <div class="links"><a href="wne_cinema_cir.mp4">1080p master</a><a href="../config/wne_cinema_cir.yaml">config</a></div>
+      </div>
+    </div>
+    <div class="card">
+      <video controls preload="metadata" src="wne_cinema_rgb_720p.mp4"></video>
+      <div class="body">
+        <h3>True colour (RGB) — real clouds</h3>
+        <div class="period">Jan 2021 – Dec 2022 · monthly</div>
+        <div class="stats"><span>24 observed months</span><span>254 frames</span><span>2:07 @ 2 fps</span><span>master 116&nbsp;MB</span></div>
+        <p class="note">Rendered with <code>mask_clouds:&nbsp;false</code>: clouds appear as
+        the translucent white they really are, instead of grey mask cutouts. The cloudiest
+        scenes are still filtered out before compositing.</p>
+        <div class="links"><a href="wne_cinema_rgb.mp4">1080p master</a><a href="../config/wne_cinema_rgb.yaml">config</a></div>
+      </div>
+    </div>
+    <div class="card">
+      <video controls preload="metadata" src="wne_cinema_lst_720p.mp4"></video>
+      <div class="body">
+        <h3>Land surface temperature (LST)</h3>
+        <div class="period">Jan 2021 – Dec 2022 · monthly · Landsat 8/9</div>
+        <div class="stats"><span>22 observed months</span><span>242 frames</span><span>2:01 @ 2 fps</span><span>master 55&nbsp;MB</span></div>
+        <p class="note">−3 to 46&nbsp;°C scale. Winter frames are heavily masked — thermal
+        retrieval fails under cloud, fog and snow — so early transitions hold static in the
+        data holes; summer shows the forest running cooler than the surrounding fields.</p>
+        <div class="links"><a href="wne_cinema_lst.mp4">1080p master</a><a href="../config/wne_cinema_lst.yaml">config</a></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>Long-term views</h2>
+  <div class="grid">
+    <div class="card">
+      <video controls preload="metadata" src="wne_cinema_ndvi_5yr_720p.mp4"></video>
+      <div class="body">
+        <h3>Vegetation greenness (NDVI) · five years</h3>
+        <div class="period">Jan 2018 – Dec 2022 · monthly</div>
+        <div class="stats"><span>60 observed months</span><span>650 frames</span><span>5:25 @ 2 fps</span><span>master 350&nbsp;MB</span></div>
+        <p class="note">Five complete green-up/green-down cycles with no empty months.
+        Compare the drought years 2018–2019 with 2021: cropland greenness collapses by
+        July while the beech forest stays near the top of the scale.</p>
+        <div class="links"><a href="wne_cinema_ndvi_5yr.mp4">1080p master</a><a href="../config/wne_cinema_ndvi_5yr.yaml">config</a></div>
+      </div>
+    </div>
+    <div class="card">
+      <video controls preload="metadata" src="wne_cinema_rgb_5yr_720p.mp4"></video>
+      <div class="body">
+        <h3>True colour · five years — real clouds</h3>
+        <div class="period">Jan 2018 – Dec 2022 · monthly</div>
+        <div class="stats"><span>60 observed months</span><span>650 frames</span><span>5:25 @ 2 fps</span><span>master 295&nbsp;MB</span></div>
+        <p class="note">Five full seasonal cycles with no empty months (gap-fill covered
+        every period). Includes the 2018–2019 drought summers — watch the fields brown
+        early while the beech canopy holds.</p>
+        <div class="links"><a href="wne_cinema_rgb_5yr.mp4">1080p master</a><a href="../config/wne_cinema_rgb_5yr.yaml">config</a></div>
+      </div>
+    </div>
+    <div class="card">
+      <video controls preload="metadata" src="wne_cinema_lst_5yr_720p.mp4"></video>
+      <div class="body">
+        <h3>Land surface temperature · five years</h3>
+        <div class="period">Jan 2018 – Dec 2022 · monthly · Landsat 8/9</div>
+        <div class="stats"><span>55 of 60 months observed</span><span>635 frames</span><span>5:18 @ 2 fps</span><span>master 139&nbsp;MB</span></div>
+        <p class="note">Five summers of forest-vs-field temperature contrast at cinema
+        pacing. The five unobservable months (all winter) are skipped, with transitions
+        spanning them proportionally.</p>
+        <div class="links"><a href="wne_cinema_lst_5yr.mp4">1080p master</a><a href="../config/wne_cinema_lst_5yr.yaml">config</a></div>
+      </div>
+    </div>
+    <div class="card">
+      <video controls preload="metadata" src="wne_cinema_lst_5yr_quarterly_720p.mp4"></video>
+      <div class="body">
+        <h3>Land surface temperature · five years, quarterly</h3>
+        <div class="period">2018 Q1 – 2022 Q4 · one frame per quarter · Landsat 8/9</div>
+        <div class="stats"><span>20 of 20 quarters observed</span><span>210 frames</span><span>1:45 @ 2 fps</span><span>master 58&nbsp;MB</span></div>
+        <p class="note">Each frame pools every usable Landsat pass of a whole quarter
+        (frames read “January–March 2021 · 3 passes”), so even winter composites are
+        nearly hole-free — the cleanest way to watch the seasonal temperature cycle
+        without monthly cloud gaps.</p>
+        <div class="links"><a href="wne_cinema_lst_5yr_quarterly.mp4">1080p master</a><a href="../config/wne_cinema_lst_5yr_quarterly.yaml">config</a></div>
+      </div>
+    </div>
+    <div class="card">
+      <video controls preload="metadata" src="wne_cinema_lst_10yr_720p.mp4"></video>
+      <div class="body">
+        <h3>Land surface temperature · ten years</h3>
+        <div class="period">Jan 2016 – Dec 2025 · monthly · Landsat 8/9</div>
+        <div class="stats"><span>110 of 120 months observed</span><span>700 frames</span><span>2:55 @ 4 fps</span><span>master 131&nbsp;MB</span></div>
+        <p class="note">A decade compressed: quicker pacing (4&nbsp;fps, 5 generated frames
+        per step) so the long span stays watchable. Gap-fill pool widened to 2016–2025.</p>
+        <div class="links"><a href="wne_cinema_lst_10yr.mp4">1080p master</a><a href="../config/wne_cinema_lst_10yr.yaml">config</a></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>How to read these animations</h2>
+  <div class="method">
+    <ul>
+      <li><strong>Only some frames are observations.</strong> Filled marker dot = a real
+      satellite composite; hollow dot = a generated in-between frame (the header states how
+      many). Generated frames exist for smooth playback only — never cite them as data.</li>
+      <li><strong>Borrowed months are labelled.</strong> Where a month had no usable imagery,
+      gap-fill borrows the same calendar month from another year and the frame says so
+      (e.g. “January 2021 · image from 2023”). The nominal year is kept wherever it has data.</li>
+      <li><strong>Grey / “no data” is honest absence.</strong> Masked cloud, shadow and failed
+      thermal retrievals are painted neutral grey (and listed in the legend), never filled in.
+      The one exception is the true-colour set, where clouds are deliberately left visible.</li>
+      <li><strong>Colour scales are fixed per video</strong>, so a colour means the same thing
+      in every frame — values are comparable across the whole animation.</li>
+      <li><strong>Reproduce any video</strong> with
+      <code>gee-animation --config config/wne_cinema_&lt;name&gt;.yaml</code> — imagery is
+      cached locally, so re-renders skip the downloads.</li>
+    </ul>
+  </div>
+
+  <p class="credits">Contains modified Copernicus Sentinel data 2018–2024 · Landsat imagery
+  courtesy of the U.S. Geological Survey · Rendered with the HNEE
+  <code>gee_animation</code> pipeline (Google Earth Engine, Sentinel-2 S2_SR_HARMONIZED,
+  Landsat Collection 2 Level 2). Generated August 2026.</p>
+</main>
+</body>
+</html>
