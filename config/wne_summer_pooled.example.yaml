@@ -5,7 +5,7 @@
 # `pool_years` had the clearest scene. On a real run of this config only 2 of 15 frames
 # came from 2022 — the result is a synthetic "typical summer", NOT a time series, and
 # must not be used for quantitative analysis, trend detection, or anything reported as a
-# measurement. Every frame carries its source year (`2022-05-11 <- 2018`) and the info
+# measurement. Every frame carries its source year ("11 May 2022 · image from 2018") and the info
 # bar names the pooled range.
 #
 # If you want the requested year preserved and only the empty periods filled, use

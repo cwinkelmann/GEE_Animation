@@ -9,7 +9,7 @@
 #     What you get is a smooth, near cloud-free seasonal loop; what you lose is the
 #     ability to compare frames in time.
 #     Use `gap_fill` if you want the year you actually asked for (see below).
-#     Every BORROWED frame is labelled with its source year ("2022-05 <- 2021") and the
+#     Every BORROWED frame is labelled with its source year ("May 2022 · image from 2021") and the
 #     info bar names the pooled range, so a viewer can always see what they are looking
 #     at. Frames that are genuinely from the requested year carry no such mark.
 name: wne_ndvi_pooled
@@ -39,7 +39,7 @@ pool_strategy: gap_fill      # Three strategies, in order of how much they chang
                              #   a non-pooled run) and is left unmarked. Only periods
                              #   the nominal year cannot fill borrow, and those borrow
                              #   the clearest single scene from another pooled year and
-                             #   are labelled with it ("2022-06 <- 2019"). Pick this
+                             #   are labelled with it ("June 2022 · image from 2019"). Pick this
                              #   when you want 2022, just without the holes.
                              #
                              # least_cloudy (default) = replaces EVERY period with the

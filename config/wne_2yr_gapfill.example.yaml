@@ -4,7 +4,7 @@
 # `pool_strategy: gap_fill` keeps the year you asked for wherever it has usable
 # imagery and borrows the same calendar slot from another year ONLY for periods that
 # would otherwise be empty. Frames from the requested year are drawn with a plain
-# label; borrowed frames are marked with their source year (`2022-09 <- 2018`). So
+# label; borrowed frames are marked with their source year ("September 2022 · image from 2018"). So
 # unmarked frames really are a time series — unlike `pool_strategy: least_cloudy`,
 # which re-picks every frame from whichever year was clearest (see
 # wne_summer_pooled.example.yaml).

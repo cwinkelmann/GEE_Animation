@@ -194,6 +194,11 @@ See `config/example.yaml` (Sentinel-2 NDVI) or `config/lst.example.yaml` (Landsa
   - **`frame`**: the animation extent (rectangle); aspect ratio is preserved when rendering.
   - **`region`**: the important region (polygon); only scenes where cloud coverage over this region is less than `region_max_cloud_percent` (default: 10%) are included, and its outline is drawn on each frame when `draw_region` is set.
 - **`start`/`end`**: ISO dates (end exclusive).
+- **`cadence`** (default `monthly`): how much time each frame composites — `monthly`, `semimonthly`, `10day`, or `quarterly` (whole calendar quarters, labelled "January–March 2022"; the widest bin, so even winter Landsat thermal composites come out nearly hole-free). Sub-monthly cadences warn for `landsat` (its 16-day repeat leaves most fine bins empty).
+- **`title`** / **`subtitle`** (optional): the frame header. `title` is the large first line (defaults to the index's plain-language name, e.g. "Vegetation greenness (NDVI)"); `subtitle` shares line 2 with the provenance notices (pooling/interpolation), which always win the space — the run warns if the subtitle had to be dropped.
+- **`credit`** (optional): the bottom-right attribution line. Omit the key for the automatic sensor credit (Copernicus/USGS/NASA — for Sentinel-2 the Copernicus notice is licence-required on published products); any string overrides it verbatim; an explicit `""` omits the line (the run warns for Sentinel-2).
+- **`mask_clouds`** (default `true`): per-pixel QA cloud masking. `false` keeps real clouds in the imagery instead of grey no-data cutouts — allowed only for the composites (`rgb`/`cir`), where a cloud looks like a cloud; palette indices always mask, because a colorized cloud would read as a real low value. Scene-level cloud filters apply either way.
+- **`pool_years`** / **`pool_strategy`** (optional): cross-year pooling `[firstYear, lastYear]`. `gap_fill` keeps the requested year wherever it has data and borrows another year's same calendar period only for empty ones (every borrowed frame is labelled "image from <year>"); `least_cloudy` re-picks every frame from the clearest pooled year (cosmetic, not a time series); `median` blends all pooled years.
 - **`sensor`**: `sentinel2`, `landsat` (Collection-2 L2, missions 4/5/7/8/9 harmonized — ~1984→present), or `modis` (MOD09A1, 8-day 500 m).
 - **`index`**: `ndvi`, `evi`, `ndwi` (McFeeters, open water), `ndmi` (moisture) — all sensors; or `lst` (USGS C2 L2 ST), `lst_smw` (Ermida et al. 2020 Statistical Mono-Window), or `lst_sharp` (Landsat only). `lst_sharp` is an NDVI-sharpened LST (an approximation — **not** the real ECOSTRESS mission; that product exists in EE as `NASA/ECOSTRESS/L2T_LSTE/V2` but is LA-only for now and its ISS orbit barely reaches this AOI's latitude).
 - **`missions`** (optional; Landsat only): whitelist of missions, e.g. `[L8, L9]`. Thermal indices (`lst`, `lst_smw`, `lst_sharp`) default to **L8/L9** — Landsat 7's SLC-off gaps and the coarse TM/ETM+ thermal band otherwise stripe a few-scene median. Reflectance indices default to all missions (4/5/7/8/9).
@@ -207,6 +212,9 @@ See `config/example.yaml` (Sentinel-2 NDVI) or `config/lst.example.yaml` (Landsa
 - **`render`** (fps/scale/dimensions/crs/preset/aspect/upscale): rendering parameters.
   - `render.crs` sets the output projection — omit for EPSG:4326 (plate carrée; at 53° N the x-axis is compressed by `cos(lat)`, so pixels are non-square), or set `auto` for the UTM zone from the AOI centroid (square pixels; the scale bar is then correct on both axes), or an explicit code like `EPSG:25833`.
   - **Screen output:** `render.preset` (`4k` / `1440p` / `1080p` / `720p`, or an integer long-edge) upscales the animation to a display resolution — the imagery is still *fetched* at the honest native resolution, then enlarged with `render.upscale` (`lanczos` default / `bicubic` / `bilinear` / `nearest`) while annotations are redrawn crisp at the output size. `render.aspect` (`match` default / `16:9` / `4:3` / `1:1` / `21:9` / …) letterboxes the frame to a target aspect. The MP4 is full resolution; the GIF is capped to ≤1280 px so it stays preview-sized.
+  - **Smooth playback:** `render.interpolate: N` generates N blended frames between consecutive observations (a skipped period gets proportionally more, so playback speed tracks elapsed time). Generated frames are labelled ("between May and June 2022 · 36%") and marked with a hollow dot — they are for watching, not citing. `render.interpolate_mode` is `auto` (data-space for single-band indices, crossfade for `rgb`/`cir`).
+  - **Output knobs:** `render.quality` (1–10, ffmpeg MP4 quality; default ≈5), `render.gif: false` skips the slow GIF preview (interpolated runs default it off), `render.frames: false` skips per-frame PNGs, `render.workers` parallelizes the thumbnail fetches, and `render.region_line_width` widens the region outline.
+  - **Caching:** raw thumbnails are cached on disk (platform cache dir; override with `render.cache_dir` or `$GEE_ANIMATION_CACHE_DIR`), so re-renders that only change client-side settings — fps, interpolation, titles, palette, quality, preset/aspect — skip every download.
 - **`out_dir`**: output directory (default `out`).
 
 Default GEE project is `hnee-331218`.
@@ -224,8 +232,7 @@ a neutral grey rather than an index colour.
   render is never finer than the data (Landsat thermal 100 m, MODIS 500 m,
   Sentinel-2 10/20 m, Landsat reflectance 30 m); set `allow_upsample: true` to render
   finer anyway (a warning names the true native GSD). `render.scale` is informational.
-- Sensors: Sentinel-2 and Landsat. One cadence (monthly) is supported; config
-  is structured to add more.
+- Cadences: `monthly` (default), `semimonthly`, `10day`, `quarterly`.
 - Sensors: Sentinel-2, Landsat, MODIS. Indices: NDVI, EVI, NDWI, NDMI (all
   sensors), LST, `lst_smw` and `lst_sharp` (Landsat only). Adding new indices/sensors
   requires registry changes in `products.py`.
