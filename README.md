@@ -65,20 +65,26 @@ rides the ISS — its coverage edge sits at ~53° N, right at this AOI's latitud
 Grumsin would be edge-of-swath at best. Watch the EE catalog release notes for wider
 ingest.)
 
-Every frame is annotated: an info bar (top) with the formula and bands used, a
-value colorbar (indices only), the region outline, a ground-distance scale bar,
-and the month.
+Every frame is annotated for a general audience: a title header (your `title`/
+`subtitle`, or the product's plain-language name), a legend naming the variable
+with numeric ticks, word anchors ("water" → "dense vegetation") and a no-data
+swatch, the region outline, a scale bar and north arrow, the automatic data
+credit (Copernicus/USGS/NASA), and a plain-language status line per frame —
+"May 2022 · 3 passes", "January 2021 · image from 2023 · 1 pass" for gap-filled
+frames, "between May and June 2022 · 36%" with a hollow marker dot for
+interpolation-generated ones.
 
 ### Example frames
 
-The full output in motion — a Sentinel-2 **NDVI timelapse** (monthly medians over
-2022) of the WNE / Grumsin beech-forest AOI, showing spring green-up and autumn
-senescence:
+The full output in motion — the Sentinel-2 **NDVI timelapse** (monthly medians,
+2021–2022) of the WNE / Grumsin beech-forest AOI, showing spring green-up and
+autumn senescence:
 
-<p align="center"><img src="docs/images/example_ndvi_timelapse.gif" width="480" alt="Animated NDVI timelapse over the WNE / Grumsin AOI, 2022"></p>
+<p align="center"><img src="docs/images/example_ndvi_timelapse.gif" width="480" alt="Animated NDVI timelapse over the WNE / Grumsin AOI, 2021-2022"></p>
 
-And one representative still frame per product (July 2022), rendered at the **4K
-16:9** screen preset (`preset: 4k`, `aspect: 16:9`) and shown downscaled here:
+And one representative still frame per product (July 2022), taken from the
+five-year showcase renders (`config/wne_cinema_*_5yr.yaml` — 1080p, 16:9,
+cross-year gap-fill, cinema-paced interpolation) and shown downscaled here:
 
 <table>
 <tr>
@@ -98,7 +104,8 @@ And one representative still frame per product (July 2022), rendered at the **4K
 <td align="center"><b>LST (SMW)</b> Ermida 2020 (Landsat)<br><img src="docs/images/example_lst_smw.png" width="360"></td>
 </tr>
 <tr>
-<td align="center" colspan="2"><b>LST-sharp</b> NDVI-sharpened LST (Landsat)<br><img src="docs/images/example_lst_sharp.png" width="360"></td>
+<td align="center"><b>LST-sharp</b> NDVI-sharpened LST (Landsat)<br><img src="docs/images/example_lst_sharp.png" width="360"></td>
+<td align="center"><b>NDVI</b> (MODIS, 500 m)<br><img src="docs/images/example_modis_ndvi.png" width="360"></td>
 </tr>
 </table>
 
@@ -107,8 +114,15 @@ Generate them all in one go:
 ```bash
 for c in example evi.example ndwi.example ndmi.example rgb.example cir.example \
          lst.example lst_smw.example lst_sharp.example modis.example; do
-  gee-animation --config "config.$c.yaml"
+  gee-animation --config "config/$c.yaml"
 done
+```
+
+For the presentation-grade five-year videos of every product (the frames above,
+in motion — YouTube/slide-ready, ~5½ min each):
+
+```bash
+for c in config/wne_cinema_*_5yr.yaml; do gee-animation --config "$c"; done
 ```
 
 Any reflectance product (`ndvi`, `evi`, `ndwi`, `ndmi`, `rgb`, `cir`) runs on any
