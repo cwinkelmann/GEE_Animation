@@ -2831,3 +2831,50 @@ def test_raw_frames_default_off_writes_nothing(tmp_path):
         return np.zeros((32, 32)), np.ones((32, 32), bool)
     render([Frame("2022-06", object())], cfg, fetch=fetch, geometry=None)
     assert not list(tmp_path.glob("*_raw_*.png"))
+
+
+def test_export_geotiffs_writes_cached_tifs_per_observed_frame(tmp_path, monkeypatch):
+    import gee_animation.render as R
+    from gee_animation import cache
+    cfg = _cfg(tmp_path, name="tifrun")
+    cfg.crs = "EPSG:32633"
+    cfg.cache = True
+    cfg.cache_dir = str(tmp_path / "cache")
+    cfg.workers = 2
+    urls = []
+    monkeypatch.setattr(R, "_fetch_url", lambda url, timeout=0: urls.append(url) or b"TIFBYTES")
+    class FakeSel:
+        def __init__(self, label): self.label = label
+        def getDownloadURL(self, params):
+            assert params["format"] == "GEO_TIFF" and params["filePerBand"] is False
+            assert params["scale"] == 20.0 and params["crs"] == "EPSG:32633"
+            return f"http://dl/{self.label}"
+    class FakeImg:
+        def __init__(self, label): self.label = label
+        def select(self, bands):
+            assert bands == "INDEX"          # index run exports index units
+            return FakeSel(self.label)
+    frames = [Frame("2022-05", FakeImg("2022-05")), Frame("2022-06", FakeImg("2022-06"))]
+    paths = R._export_geotiffs(frames, cfg, geometry="GEOM")
+    assert [p.name for p in paths] == ["tifrun_2022-05.tif", "tifrun_2022-06.tif"]
+    assert all(p.read_bytes() == b"TIFBYTES" for p in paths)
+    assert len(urls) == 2
+    # second export: pure cache hit, zero downloads, distinct per-frame entries
+    paths2 = R._export_geotiffs(frames, cfg, geometry="GEOM")
+    assert len(urls) == 2 and [p.name for p in paths2] == [p.name for p in paths]
+
+
+def test_render_returns_geotiff_paths_only_when_enabled(tmp_path, monkeypatch):
+    import gee_animation.render as R
+    cfg = _cfg(tmp_path, name="tifgate")
+    def fetch(image, cfg, geometry=None):
+        return np.zeros((16, 16)), np.ones((16, 16), bool)
+    called = []
+    monkeypatch.setattr(R, "_export_geotiffs",
+                        lambda frames, cfg, geometry: called.append(1) or [])
+    render([Frame("2022-06", object())], cfg, fetch=fetch, geometry=None)
+    assert not called                        # default off
+    cfg = _cfg(tmp_path, name="tifgate2")
+    cfg.geotiffs = True
+    render([Frame("2022-06", object())], cfg, fetch=fetch, geometry=None)
+    assert called == [1]

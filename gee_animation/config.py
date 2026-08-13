@@ -119,6 +119,11 @@ class RunConfig:
     # region outline only — no header/legend/scale bar/credit/marker/letterbox.
     # For layouts the annotated frames can't serve (posters, GIS overlays, papers).
     raw_frames: bool = False
+    # Also export each observed frame as a georeferenced GeoTIFF (`{name}_{label}.tif`,
+    # from render.geotiffs): the composited float values themselves (index units, or
+    # reflectance for rgb/cir) at native `scale` in the resolved CRS — for GIS use,
+    # not for viewing. Downloads are disk-cached like thumbnails.
+    geotiffs: bool = False
     # Frame header text (from top-level `title` / `subtitle`). `title` is the header's
     # large first line — what and where this animation is; it defaults to the index's
     # plain-language `products.Index.display_name` when unset, so a frame always says
@@ -257,6 +262,7 @@ class RunConfig:
                 gif=_flag(render, "gif", default=None),
                 frames=_flag(render, "frames"),
                 raw_frames=_flag(render, "raw_frames", default=False),
+                geotiffs=_flag(render, "geotiffs", default=False),
                 out_dir=str(raw.get("out_dir", "out")),
                 title=(str(raw["title"]) if raw.get("title") else None),
                 subtitle=(str(raw["subtitle"]) if raw.get("subtitle") else None),

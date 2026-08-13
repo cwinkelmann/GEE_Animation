@@ -71,6 +71,10 @@ CLIENT_SIDE_FIELDS = frozenset({
     # (render.raw_frames) — turning it on must not refetch a single thumbnail,
     # or backfilling raw frames for an archived run would re-download years.
     "raw_frames",
+    # the geotiff flag itself is thumbnail-neutral: the tif download has its own
+    # key namespace (format: GEO_TIFF in the fetch params), so enabling exports
+    # must not invalidate the png thumbs.
+    "geotiffs",
     # the cache controls themselves: where entries live and whether they are used
     # cannot change what EE computes.
     "cache", "cache_dir",

@@ -130,6 +130,59 @@ def _thumb_params(cfg, geometry) -> dict:
     return params
 
 
+def _geotiff_params(cfg, geometry) -> dict:
+    """getDownloadURL parameters for a georeferenced GeoTIFF of the frame data.
+
+    Unlike the visualization thumbnail (8-bit, viz-stretched, no georeferencing),
+    this exports the composited values themselves — float index units, or float
+    reflectance for the rgb/cir bands — on the native `cfg.scale` grid in the
+    already-resolved `cfg.crs`. ``format: GEO_TIFF`` returns the tif directly
+    (no zip); ``filePerBand: False`` keeps a composite in one multiband file.
+    """
+    params = {
+        "region": geometry,
+        "scale": float(cfg.scale),
+        "format": "GEO_TIFF",
+        "filePerBand": False,
+    }
+    crs = getattr(cfg, "crs", None)
+    if crs:
+        params["crs"] = crs
+    return params
+
+
+def _export_geotiffs(frames, cfg, geometry) -> list:
+    """Write one georeferenced GeoTIFF per observed frame: ``{name}_{label}.tif``.
+
+    Raw bytes are disk-cached exactly like thumbnails (the ``GEO_TIFF`` format
+    entry in the params keeps the two namespaces apart), so a re-export of an
+    unchanged run downloads nothing. Fetches run across `cfg.workers` threads;
+    paths return in frame order.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    out_dir = Path(cfg.out_dir)
+    composite = _is_composite(cfg)
+    params = _geotiff_params(cfg, geometry)
+
+    def one(frame):
+        with cache.frame_identity(getattr(frame, "label", None),
+                                  getattr(frame, "source", None)):
+            key = cache.thumb_key(cfg, params, composite)
+            data = cache.load(cfg, key)
+            if data is None:
+                bands = ["R", "G", "B"] if composite else "INDEX"
+                url = frame.image.select(bands).getDownloadURL(params)
+                data = _fetch_url(url, timeout=300)
+                cache.store(cfg, key, data)
+        path = out_dir / f"{cfg.name}_{frame.label}.tif"
+        path.write_bytes(data)
+        return path
+
+    workers = max(1, int(getattr(cfg, "workers", 4) or 4))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(one, frames))
+
+
 def _decode_thumbnail(data: bytes, cfg, composite: bool):
     """Decode raw PNG bytes from EE into ``(array, valid)`` — see _fetch_thumbnail."""
     if composite:
@@ -1981,4 +2034,8 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     # fails mid-run cannot be mistaken for an encode failure and quietly demoted to a
     # truncated GIF (see `_ProducerError`).
     paths = assemble_stream(_produced(_finished()), cfg)
-    return paths + png_paths
+    # GeoTIFF export last: by now every frame's thumbnail fetch has already
+    # warmed the EE session, and a mid-run failure here cannot cost the video.
+    tif_paths = (_export_geotiffs(frames, cfg, geometry)
+                 if getattr(cfg, "geotiffs", False) else [])
+    return paths + png_paths + tif_paths
