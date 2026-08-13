@@ -130,18 +130,40 @@ def _thumb_params(cfg, geometry) -> dict:
     return params
 
 
+def _geotiff_scale(cfg) -> float:
+    """Export grid spacing (m): `cfg.scale`, never finer than the product's native GSD.
+
+    `cfg.scale` is a *render* knob that configs routinely inherit from a template
+    (the cinema LST configs carry `scale: 10`, copied from an NDVI config, against
+    a 100 m thermal product). For a picture that only costs smoothness, and
+    `_cap_dimensions` already guards it; for a GeoTIFF it would be an outright
+    false claim of resolution — plus 100x the pixels — so the export clamps to
+    native. `allow_upsample` opts out, the same escape hatch `_cap_dimensions` honours.
+    """
+    scale = float(getattr(cfg, "scale", 0) or 0)
+    native = native_scale_m(getattr(cfg, "sensor", None), getattr(cfg, "index", None))
+    if getattr(cfg, "allow_upsample", False) or not native:
+        return scale or float(native or 30)
+    if scale and scale >= native:
+        return scale
+    if scale and scale < native:
+        log.info("geotiff export at native %d m (config scale %g m would upsample)",
+                 native, scale)
+    return float(native)
+
+
 def _geotiff_params(cfg, geometry) -> dict:
     """getDownloadURL parameters for a georeferenced GeoTIFF of the frame data.
 
     Unlike the visualization thumbnail (8-bit, viz-stretched, no georeferencing),
     this exports the composited values themselves — float index units, or float
-    reflectance for the rgb/cir bands — on the native `cfg.scale` grid in the
-    already-resolved `cfg.crs`. ``format: GEO_TIFF`` returns the tif directly
-    (no zip); ``filePerBand: False`` keeps a composite in one multiband file.
+    reflectance for the rgb/cir bands — on the native grid (see `_geotiff_scale`)
+    in the already-resolved `cfg.crs`. ``format: GEO_TIFF`` returns the tif
+    directly (no zip); ``filePerBand: False`` keeps a composite in one multiband file.
     """
     params = {
         "region": geometry,
-        "scale": float(cfg.scale),
+        "scale": _geotiff_scale(cfg),
         "format": "GEO_TIFF",
         "filePerBand": False,
     }
@@ -158,9 +180,13 @@ def _export_geotiffs(frames, cfg, geometry) -> list:
     entry in the params keeps the two namespaces apart), so a re-export of an
     unchanged run downloads nothing. Fetches run across `cfg.workers` threads;
     paths return in frame order.
+
+    Files land in ``<out_dir>/geotiffs/<name>/`` — a GIS data product, kept out
+    of the way of the pictures rather than interleaved with them.
     """
     from concurrent.futures import ThreadPoolExecutor
-    out_dir = Path(cfg.out_dir)
+    out_dir = Path(cfg.out_dir) / "geotiffs" / cfg.name
+    out_dir.mkdir(parents=True, exist_ok=True)
     composite = _is_composite(cfg)
     params = _geotiff_params(cfg, geometry)
 

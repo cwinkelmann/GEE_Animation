@@ -18,7 +18,7 @@ from gee_animation.compositing import Frame
 def _cfg(tmp_path, name="anim", fps=2):
     return types.SimpleNamespace(
         name=name, out_dir=str(tmp_path),
-        index="ndvi", viz_min=-0.2, viz_max=0.9, palette=["#000000", "#ffffff"],
+        sensor="sentinel2", index="ndvi", viz_min=-0.2, viz_max=0.9, palette=["#000000", "#ffffff"],
         fps=fps, scale=20, dimensions=64, frame_aoi={"bbox": [0, 0, 1, 1]},
     )
 
@@ -1573,7 +1573,7 @@ def test_render_pooled_frame_png_filename_is_the_clean_period_key(tmp_path):
 
 def _cfg_ns():
     return types.SimpleNamespace(
-        index="ndvi", viz_min=-0.2, viz_max=0.9, palette=["#000000", "#ffffff"],
+        sensor="sentinel2", index="ndvi", viz_min=-0.2, viz_max=0.9, palette=["#000000", "#ffffff"],
     )
 
 
@@ -2837,6 +2837,7 @@ def test_export_geotiffs_writes_cached_tifs_per_observed_frame(tmp_path, monkeyp
     import gee_animation.render as R
     from gee_animation import cache
     cfg = _cfg(tmp_path, name="tifrun")
+    cfg.sensor = "sentinel2"          # native 10 m: the configured scale stands
     cfg.crs = "EPSG:32633"
     cfg.cache = True
     cfg.cache_dir = str(tmp_path / "cache")
@@ -2847,6 +2848,7 @@ def test_export_geotiffs_writes_cached_tifs_per_observed_frame(tmp_path, monkeyp
         def __init__(self, label): self.label = label
         def getDownloadURL(self, params):
             assert params["format"] == "GEO_TIFF" and params["filePerBand"] is False
+            # fixture scale 20 m is coarser than S2 native 10 m -> honoured as-is
             assert params["scale"] == 20.0 and params["crs"] == "EPSG:32633"
             return f"http://dl/{self.label}"
     class FakeImg:
@@ -2857,6 +2859,7 @@ def test_export_geotiffs_writes_cached_tifs_per_observed_frame(tmp_path, monkeyp
     frames = [Frame("2022-05", FakeImg("2022-05")), Frame("2022-06", FakeImg("2022-06"))]
     paths = R._export_geotiffs(frames, cfg, geometry="GEOM")
     assert [p.name for p in paths] == ["tifrun_2022-05.tif", "tifrun_2022-06.tif"]
+    assert all(p.parent == tmp_path / "geotiffs" / "tifrun" for p in paths)
     assert all(p.read_bytes() == b"TIFBYTES" for p in paths)
     assert len(urls) == 2
     # second export: pure cache hit, zero downloads, distinct per-frame entries
@@ -2878,3 +2881,37 @@ def test_render_returns_geotiff_paths_only_when_enabled(tmp_path, monkeypatch):
     cfg.geotiffs = True
     render([Frame("2022-06", object())], cfg, fetch=fetch, geometry=None)
     assert called == [1]
+
+
+def test_geotiff_scale_clamps_to_native_resolution():
+    import gee_animation.render as R
+    # the cinema LST configs carry scale: 10 (inherited from an NDVI template) against
+    # a 100 m thermal product — exporting that would claim 10x false resolution
+    cfg = types.SimpleNamespace(sensor="landsat", index="lst", scale=10, crs=None)
+    assert R._geotiff_scale(cfg) == 100.0
+    # a coarser-than-native request is the user's choice and is honoured
+    cfg.scale = 250
+    assert R._geotiff_scale(cfg) == 250.0
+    # allow_upsample keeps the explicit escape hatch _cap_dimensions honours
+    cfg.scale, cfg.allow_upsample = 10, True
+    assert R._geotiff_scale(cfg) == 10.0
+    # Sentinel-2 NDVI at 10 m is already native: unchanged
+    s2 = types.SimpleNamespace(sensor="sentinel2", index="ndvi", scale=10, crs=None)
+    assert R._geotiff_scale(s2) == 10.0
+    # 20 m SWIR index is not honestly 10 m
+    s2b = types.SimpleNamespace(sensor="sentinel2", index="ndmi", scale=10, crs=None)
+    assert R._geotiff_scale(s2b) == 20.0
+
+
+def test_geotiffs_land_in_their_own_subfolder(tmp_path, monkeypatch):
+    import gee_animation.render as R
+    cfg = _cfg(tmp_path, name="tifdir")
+    cfg.sensor, cfg.crs, cfg.cache = "sentinel2", None, False
+    monkeypatch.setattr(R, "_fetch_url", lambda url, timeout=0: b"TIF")
+    class FakeImg:
+        def select(self, bands): return types.SimpleNamespace(
+            getDownloadURL=lambda params: "http://dl")
+    paths = R._export_geotiffs([Frame("2022-05", FakeImg())], cfg, geometry="GEOM")
+    assert paths[0] == tmp_path / "geotiffs" / "tifdir" / "tifdir_2022-05.tif"
+    assert paths[0].read_bytes() == b"TIF"
+    assert not list(tmp_path.glob("*.tif"))     # not loose in out/
