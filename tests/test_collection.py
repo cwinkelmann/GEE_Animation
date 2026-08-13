@@ -224,3 +224,44 @@ def test_build_skips_pixel_mask_when_cfg_mask_clouds_false(monkeypatch):
     for calls in (masked, unmasked):
         assert ("filter", ("lte", "CLOUDY_PIXEL_PERCENTAGE", 60)) in calls
         assert ("filter", ("lt", "region_cloud_fraction", 0.1)) in calls
+
+
+def test_build_applies_the_sensor_aux_hook_after_the_filters(monkeypatch):
+    # Sentinel-2's s2cloudless join runs through Sensor.attach_aux; build must call
+    # it with the (possibly pool-widened) date range and the frame geometry, and
+    # sensors without the hook (plain FakeSensor, no attach_aux attr) must not break.
+    calls = []
+    class FakeColl:
+        def filterDate(self, s, e): calls.append(("filterDate", s, e)); return self
+        def filterBounds(self, g): calls.append(("filterBounds", g)); return self
+        def filter(self, f): return self
+        def map(self, fn): return self
+    def attach(coll, start, end, geom, ee_module=None):
+        calls.append(("attach", start, end, geom)); return coll
+    class FakeSensor:
+        name = "sentinel2"; scene_cloud_property = "CLOUDY_PIXEL_PERCENTAGE"
+        attach_aux = staticmethod(attach)
+        def collection(self, ee_module=None): return FakeColl()
+        def cloud_band(self, image, ee_module=None): return image
+        def mask_clouds(self, image, ee_module=None): return image
+    class FakeIndex:
+        def compute(self, sensor, image, ee_module=None): return image
+    monkeypatch.setattr(C, "get_product", lambda s, i: (FakeSensor(), FakeIndex()))
+    monkeypatch.setattr(C, "add_region_cloud_fraction", lambda img, *a: img)
+    ee = types.SimpleNamespace(
+        Image=lambda x: x,
+        Filter=types.SimpleNamespace(
+            lte=lambda name, val: ("lte", name, val),
+            lt=lambda name, val: ("lt", name, val),
+            inList=lambda prop, vals: ("inList", prop, vals)))
+    cfg = types.SimpleNamespace(sensor="sentinel2", index="ndvi", missions=None,
+                                start="2022-01-01", end="2022-03-01",
+                                max_cloud_percent=60, region_max_cloud_percent=10,
+                                scale=10, pool_years=[2020, 2023],
+                                pool_strategy="gap_fill")
+    C.build(cfg, "FRAME", "REGION", ee_module=ee)
+    attach_call = next(c for c in calls if c[0] == "attach")
+    # pool widening happened BEFORE the hook: the aux collection covers every
+    # pooled candidate year, not just the nominal range
+    assert attach_call == ("attach", "2020-01-01", "2024-01-01", "FRAME")
+    assert calls.index(("filterBounds", "FRAME")) < calls.index(attach_call)

@@ -232,13 +232,13 @@ def test_landsat_collection_harmonizes_l4_to_l9():
         "LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2"]
     dst_sets = {s[2] for s in selects}
     # every mission is renamed to the SAME canonical band set
-    assert dst_sets == {("blue", "green", "red", "nir", "swir1", "swir2", "thermal", "QA_PIXEL")}
+    assert dst_sets == {("blue", "green", "red", "nir", "swir1", "swir2", "thermal", "st_qa", "QA_PIXEL")}
     by_id = {s[0]: s[1] for s in selects}
     # TM/ETM+ thermal is ST_B6, red=SR_B3, nir=SR_B4; OLI thermal is ST_B10, red=SR_B4, nir=SR_B5
     assert by_id["LANDSAT/LT05/C02/T1_L2"] == (
-        "SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "ST_B6", "QA_PIXEL")
+        "SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "ST_B6", "ST_QA", "QA_PIXEL")
     assert by_id["LANDSAT/LC08/C02/T1_L2"] == (
-        "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "ST_B10", "QA_PIXEL")
+        "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "ST_B10", "ST_QA", "QA_PIXEL")
 
 
 def test_s2_and_modis_collection_merge():
@@ -296,80 +296,132 @@ def test_ndvi_uses_scaled_reflectance_and_keeps_time():
 
 
 def test_lst_applies_scale_offset_kelvin_to_celsius_and_keeps_time():
-    rec = {}
+    rec = {"selects": []}
     class FakeResult:
         def set(self, k, v): rec["set"] = (k, v); return "lst_band"
+    class FakeStQa:
+        def multiply(self, v): rec["qa_scale"] = v; return self
+        def lte(self, v): rec["qa_max"] = v; return "qa_ok"
     class FakeBand:
         def multiply(self, v): rec["multiply"] = v; return self
         def add(self, v): rec["add"] = v; return self
         def subtract(self, v): rec["subtract"] = v; return self
+        def updateMask(self, m): rec["masked_with"] = m; return self
         def rename(self, n): rec["rename"] = n; return FakeResult()
     class FakeImg:
-        def select(self, b): rec["select"] = b; return FakeBand()
+        def select(self, b):
+            rec["selects"].append(b)
+            return FakeStQa() if b == "st_qa" else FakeBand()
         def get(self, k): rec["get"] = k; return "TS"
     out = P.INDICES["lst"].compute(object(), FakeImg(), ee_module=None)
-    assert rec["select"] == "thermal"   # canonical harmonized thermal band (ST_B6/ST_B10)
+    assert "thermal" in rec["selects"] and "st_qa" in rec["selects"]
     assert rec["multiply"] == 0.00341802 and rec["add"] == 149.0 and rec["subtract"] == 273.15
+    # ST_QA gate: scale 0.01 K, pixels above ST_QA_MAX_K masked before the rename
+    assert rec["qa_scale"] == 0.01 and rec["qa_max"] == P.ST_QA_MAX_K
+    assert rec["masked_with"] == "qa_ok"
     assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
     assert out == "lst_band"
 
 
-def test_landsat_mask_and_cloud_band_use_qa_bits():
-    rec = {}
-    class FakeQA:
-        def bitwiseAnd(self, bits): rec["bits"] = bits; return self
-        def eq(self, v): rec["eq"] = v; return "clearmask"
-        def neq(self, v): rec["neq"] = v; return self
-        def rename(self, n): rec["rename"] = n; return "cloudband"
-    class FakeImg:
-        def select(self, b): rec["select"] = b; return FakeQA()
-        def updateMask(self, m): rec["masked_with"] = m; return "masked"
-    expected_bits = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5)
-    assert P.SENSORS["landsat"].mask_clouds(FakeImg()) == "masked"
-    assert rec["bits"] == expected_bits and rec["eq"] == 0 and rec["masked_with"] == "clearmask"
-    rec.clear()
-    assert P.SENSORS["landsat"].cloud_band(FakeImg()) == "cloudband"
-    assert rec["bits"] == expected_bits and rec["neq"] == 0 and rec["rename"] == "cloud"
+def test_landsat_mask_and_cloud_band_use_qa_bits_and_confidence():
+    def run(fn):
+        rec = {"bitand": [], "shifts": [], "and": 0, "or": 0}
+        class FakeQA:
+            def bitwiseAnd(self, bits): rec["bitand"].append(bits); return self
+            def eq(self, v): rec["eq"] = v; return self
+            def neq(self, v): rec["neq"] = v; return self
+            def rightShift(self, sft): rec["shifts"].append(sft); return self
+            def lte(self, v): rec["lte"] = v; return self
+            def gte(self, v): rec["gte"] = v; return self
+            def And(self, other): rec["and"] += 1; return self
+            def Or(self, other): rec["or"] += 1; return self
+            def rename(self, n): rec["rename"] = n; return "cloudband"
+        class FakeImg:
+            def select(self, b): rec["select"] = b; return FakeQA()
+            def updateMask(self, m): rec["masked"] = True; return "masked"
+        rec["out"] = fn(FakeImg())
+        return rec
+    flag_bits = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5)
+    rec = run(P.SENSORS["landsat"].mask_clouds)
+    assert rec["out"] == "masked" and rec["bitand"][0] == flag_bits and rec["eq"] == 0
+    # medium+ confidence cloud/shadow/cirrus also masked (bit pairs 8-9/10-11/14-15)
+    assert rec["shifts"] == [8, 10, 14] and rec["lte"] == 1 and rec["and"] == 3
+    rec = run(P.SENSORS["landsat"].cloud_band)
+    assert rec["out"] == "cloudband" and rec["bitand"][0] == flag_bits and rec["neq"] == 0
+    assert rec["shifts"] == [8, 10, 14] and rec["gte"] == 2 and rec["or"] == 3
+    assert rec["rename"] == "cloud"
 
 
-def test_s2_mask_and_cloud_band_use_scl_classes():
-    rec = {"neq": [], "and_count": 0}
-
-    class FakeMask:
-        def And(self, other):
-            rec["and_count"] += 1
-            return self
-
-    class FakeSCL:
-        def neq(self, cls):
-            rec["neq"].append(cls)
-            return ("neq", cls)
-        def remap(self, frm, to, default):
-            rec["remap"] = (frm, to, default)
-            return self
-        def rename(self, n):
-            rec["rename"] = n
-            return "cloudband"
-
-    class FakeImg:
-        def select(self, b):
-            rec["select"] = b
-            return FakeSCL()
-        def updateMask(self, m):
-            rec["masked"] = True
-            return "masked"
-
-    ee = types.SimpleNamespace(Image=types.SimpleNamespace(constant=lambda v: FakeMask()))
+def test_s2_mask_and_cloud_band_use_scl_and_s2cloudless():
+    def fresh():
+        rec = {"neq": [], "and_count": 0, "selects": []}
+        class FakeProb:
+            def lte(self, v): rec["lte"] = v; return "prob_ok"
+            def gt(self, v): rec["gt"] = v; return "prob_bad"
+        class FakeMask:
+            def And(self, other):
+                rec["and_count"] += 1; rec["last_and"] = other; return self
+        class FakeSCL:
+            def neq(self, cls): rec["neq"].append(cls); return ("neq", cls)
+            def remap(self, frm, to, default): rec["remap"] = (frm, to, default); return self
+            def Or(self, other): rec["or_with"] = other; return self
+            def rename(self, n): rec["rename"] = n; return "cloudband"
+        class FakeImg:
+            def select(self, b):
+                rec["selects"].append(b)
+                return FakeProb() if b == "cloud_prob" else FakeSCL()
+            def updateMask(self, m): rec["masked"] = True; return "masked"
+        ee = types.SimpleNamespace(
+            Image=types.SimpleNamespace(constant=lambda v: FakeMask()))
+        return rec, FakeImg, ee
+    rec, FakeImg, ee = fresh()
     assert P.SENSORS["sentinel2"].mask_clouds(FakeImg(), ee_module=ee) == "masked"
-    assert rec["select"] == "SCL"
-    assert rec["neq"] == [3, 8, 9, 10, 11] and rec["and_count"] == 5 and rec["masked"] is True
+    assert rec["neq"] == [3, 8, 9, 10, 11]         # SCL shadow/cloud/cirrus/snow classes
+    # 5 SCL classes + the s2cloudless probability screen = 6 ANDs, the last being
+    # the probability<=threshold mask — the screen SCL alone lacks.
+    assert rec["and_count"] == 6
+    assert rec["lte"] == P.S2_CLOUD_PROB_MAX and rec["last_and"] == "prob_ok"
+    rec, FakeImg, _ee = fresh()
+    assert P.SENSORS["sentinel2"].cloud_band(FakeImg(), ee_module=None) == "cloudband"
+    assert rec["remap"] == ([3, 8, 9, 10, 11], [1, 1, 1, 1, 1], 0)
+    assert rec["gt"] == P.S2_CLOUD_PROB_MAX and rec["or_with"] == "prob_bad"
+    assert rec["rename"] == "cloud"
 
-    rec.clear()
-    cb = P.SENSORS["sentinel2"].cloud_band(FakeImg())
-    assert rec["remap"][0] == [3, 8, 9, 10, 11] and rec["remap"][2] == 0
-    assert rec["rename"] == "cloud" and cb == "cloudband"
 
-
+def test_s2_attach_cloud_prob_joins_and_adds_the_band():
+    rec = {}
+    class FakeProbColl:
+        def filterDate(self, s_, e_): rec["prob_dates"] = (s_, e_); return self
+        def filterBounds(self, g): rec["prob_bounds"] = g; return self
+    class FakeJoined:
+        def map(self, fn): rec["mapped"] = fn("granule"); return "joined_coll"
+    class FakeBand:
+        def select(self, b): rec["band_select"] = b; return self
+        def rename(self, n): rec["band_rename"] = n; return "cloud_prob_band"
+    class FakeGranule:
+        def get(self, k): rec["got"] = k; return "prob_img_ref"
+        def addBands(self, b): rec["added"] = b; return "granule_with_band"
+    def image(x):
+        return FakeGranule() if x == "granule" else FakeBand()
+    ee = types.SimpleNamespace(
+        ImageCollection=lambda arg: (FakeProbColl()
+                                     if arg == "COPERNICUS/S2_CLOUD_PROBABILITY"
+                                     else FakeJoined()),
+        Image=image,
+        Join=types.SimpleNamespace(saveFirst=lambda key: types.SimpleNamespace(
+            apply=lambda a, b, f: rec.update(join=(key, f)) or "joined_raw")),
+        Filter=types.SimpleNamespace(equals=lambda **kw: ("equals", kw)))
+    out = P._s2_attach_cloud_prob("PRIMARY", "2022-01-01", "2023-01-01", "GEOM",
+                                  ee_module=ee)
+    assert out == "joined_coll"
+    assert rec["prob_dates"] == ("2022-01-01", "2023-01-01")
+    assert rec["prob_bounds"] == "GEOM"
+    key, filt = rec["join"]
+    assert key == "cloud_prob_img"
+    assert filt == ("equals", {"leftField": "system:index", "rightField": "system:index"})
+    # the map really attaches the probability band to each granule
+    assert rec["got"] == "cloud_prob_img" and rec["band_select"] == "probability"
+    assert rec["band_rename"] == "cloud_prob" and rec["mapped"] == "granule_with_band"
 def test_every_index_has_a_plain_language_display_name():
     # The frame header names the product in words a non-specialist reads; an index
     # added later without one would silently fall back to a bare acronym.

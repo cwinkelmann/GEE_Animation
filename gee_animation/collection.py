@@ -86,6 +86,13 @@ def build(cfg, frame_geom, region_geom, *, apply_cloud_filters: bool = True, ee_
             .filterDate(cfg.start, cfg.end)
             .filterBounds(frame_geom)
         )
+    # Sensor-specific auxiliary data (e.g. Sentinel-2's s2cloudless probability
+    # band) joins here, after the date/bounds filters so the aux collection is
+    # filtered to the same window. cfg.start/end are already pool-widened above,
+    # so pooled candidate scenes get their aux band too.
+    attach = getattr(sensor, "attach_aux", None)
+    if attach is not None:
+        coll = attach(coll, cfg.start, cfg.end, frame_geom, ee_module=ee_module)
     # Landsat mission selection (thermal defaults to L8/L9); applied to either path.
     missions = effective_missions(cfg)
     if missions is not None:

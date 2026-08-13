@@ -36,7 +36,11 @@ log = logging.getLogger(__name__)
 
 #: Bumped whenever the *stored representation* changes (e.g. if we ever store a
 #: decoded array instead of PNG bytes), so old entries can never be misread.
-CACHE_VERSION = 1
+# v2: cloud masking upgraded server-side (s2cloudless join for Sentinel-2,
+# QA confidence bits + ST_QA gate for Landsat) — code changes are invisible to
+# the config-derived key, so the version bump is what invalidates every thumb
+# fetched under the old masks.
+CACHE_VERSION = 2
 
 #: Env var overriding the cache location (see `cache_dir`).
 ENV_CACHE_DIR = "GEE_ANIMATION_CACHE_DIR"

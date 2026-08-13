@@ -14,17 +14,57 @@ _S2_ALIASES = (("B2", "B3", "B4", "B8", "B11", "B12"),
                ("blue", "green", "red", "nir", "swir1", "swir2"))
 
 
+# s2cloudless probability (percent) above which a pixel is cloud. SCL detects
+# cloud CORES well but misses thin edges, haze and some shadows around them —
+# those undetected pixels then colorize as plausible index values (user-reported
+# on NDVI). 40 is deliberately stricter than the tutorial's 50–60: over a
+# temperate forest AOI the cost of over-masking (a few extra grey pixels) is
+# far below the cost of haze reading as data. Code-level constant, not config:
+# changing it is a science decision and CACHE_VERSION covers invalidation.
+S2_CLOUD_PROB_MAX = 40
+
+
+def _s2_attach_cloud_prob(coll, start, end, geom, ee_module=ee):
+    """Join s2cloudless (COPERNICUS/S2_CLOUD_PROBABILITY) onto every granule.
+
+    Adds the matching probability image's band as ``cloud_prob``, so
+    `_s2_mask_clouds`/`_s2_cloud_band` can screen pixels SCL alone misses.
+    Inner-join semantics: the rare granule with no probability match is dropped
+    entirely — a scene that cannot be cloud-screened must not enter a composite
+    as if it were clear.
+    """
+    prob = (ee_module.ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")
+            .filterDate(start, end)
+            .filterBounds(geom))
+    joined = ee_module.Join.saveFirst("cloud_prob_img").apply(
+        coll, prob,
+        ee_module.Filter.equals(leftField="system:index", rightField="system:index"))
+
+    def _add(img):
+        img = ee_module.Image(img)
+        return img.addBands(
+            ee_module.Image(img.get("cloud_prob_img"))
+            .select("probability").rename("cloud_prob"))
+
+    return ee_module.ImageCollection(joined).map(_add)
+
+
 def _s2_mask_clouds(image, ee_module=ee):
     scl = image.select("SCL")
     mask = ee_module.Image.constant(1)
     for cls in _S2_SCL_CLOUD:
         mask = mask.And(scl.neq(cls))
+    # s2cloudless catches what SCL misses (thin edges, haze); the band is attached
+    # by _s2_attach_cloud_prob, which every pipeline path reaches via collection.build.
+    mask = mask.And(image.select("cloud_prob").lte(S2_CLOUD_PROB_MAX))
     return image.updateMask(mask)
 
 
 def _s2_cloud_band(image, ee_module=ee):
     scl = image.select("SCL")
-    return scl.remap(_S2_SCL_CLOUD, [1] * len(_S2_SCL_CLOUD), 0).rename("cloud")
+    scl_bad = scl.remap(_S2_SCL_CLOUD, [1] * len(_S2_SCL_CLOUD), 0)
+    prob_bad = image.select("cloud_prob").gt(S2_CLOUD_PROB_MAX)
+    return scl_bad.Or(prob_bad).rename("cloud")
 
 
 def _s2_reflectance(image, ee_module=ee):
@@ -38,9 +78,9 @@ _L_QA_BITS = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5)
 # L4/5/7 (TM/ETM+) and L8/9 (OLI/TIRS) name bands differently; harmonize every
 # mission to a single canonical band set at collection build. SR and ST scale
 # factors are identical across all C2 L2 missions, and QA_PIXEL is standardized.
-_L_CANON = ["blue", "green", "red", "nir", "swir1", "swir2", "thermal", "QA_PIXEL"]
-_L_TM_SRC = ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "ST_B6", "QA_PIXEL"]
-_L_OLI_SRC = ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "ST_B10", "QA_PIXEL"]
+_L_CANON = ["blue", "green", "red", "nir", "swir1", "swir2", "thermal", "st_qa", "QA_PIXEL"]
+_L_TM_SRC = ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "ST_B6", "ST_QA", "QA_PIXEL"]
+_L_OLI_SRC = ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "ST_B10", "ST_QA", "QA_PIXEL"]
 # (mission id, Collection-2 L2 id) per mission; each image is tagged with a
 # "mission" property so build() can select missions (e.g. L8/L9-only for thermal).
 _L_TM_MISSIONS = (("L4", "LANDSAT/LT04/C02/T1_L2"), ("L5", "LANDSAT/LT05/C02/T1_L2"),
@@ -60,13 +100,28 @@ def _landsat_collection(ee_module=ee):
     return merged
 
 
+# QA_PIXEL confidence bit-pairs (1 low, 2 medium, 3 high): cloud 8–9,
+# cloud shadow 10–11, cirrus 14–15. The flag bits in _L_QA_BITS fire at high
+# confidence; additionally masking medium-confidence pixels is the Landsat
+# counterpart of the s2cloudless screen — it catches the thin edges/haze that
+# leave cold smears in LST and false lows in the reflectance indices.
+_L_CONF_SHIFTS = (8, 10, 14)
+
+
 def _landsat_mask_clouds(image, ee_module=ee):
-    clear = image.select("QA_PIXEL").bitwiseAnd(_L_QA_BITS).eq(0)
+    qa = image.select("QA_PIXEL")
+    clear = qa.bitwiseAnd(_L_QA_BITS).eq(0)
+    for shift in _L_CONF_SHIFTS:
+        clear = clear.And(qa.rightShift(shift).bitwiseAnd(3).lte(1))
     return image.updateMask(clear)
 
 
 def _landsat_cloud_band(image, ee_module=ee):
-    return image.select("QA_PIXEL").bitwiseAnd(_L_QA_BITS).neq(0).rename("cloud")
+    qa = image.select("QA_PIXEL")
+    bad = qa.bitwiseAnd(_L_QA_BITS).neq(0)
+    for shift in _L_CONF_SHIFTS:
+        bad = bad.Or(qa.rightShift(shift).bitwiseAnd(3).gte(2))
+    return bad.rename("cloud")
 
 
 def _landsat_reflectance(image, ee_module=ee):
@@ -142,9 +197,18 @@ def _ndvi(sensor, image, ee_module=ee):
             .set("system:time_start", image.get("system:time_start")))
 
 
+# Max acceptable surface-temperature retrieval uncertainty (kelvin). Landsat C2 L2
+# ships per-pixel ST_QA (scale 0.01 K); cloud-contaminated retrievals carry high
+# uncertainty even when CFMask never flags the cloud, so this gate removes the
+# cold smears undetected cloud leaves in LST. Typical clear-sky ST_QA is 2–4 K.
+ST_QA_MAX_K = 5.0
+
+
 def _lst(sensor, image, ee_module=ee):
+    st_uncertainty = image.select("st_qa").multiply(0.01)
     return (image.select("thermal")
             .multiply(0.00341802).add(149.0).subtract(273.15)
+            .updateMask(st_uncertainty.lte(ST_QA_MAX_K))
             .rename(INDEX_BAND)
             .set("system:time_start", image.get("system:time_start")))
 
@@ -238,6 +302,10 @@ class Sensor:
     mask_clouds: Callable
     cloud_band: Callable
     reflectance: Callable
+    # Optional (coll, start, end, geom, ee_module) -> coll, applied by
+    # collection.build right after the date/bounds filters: attaches auxiliary
+    # per-granule data the masks need (e.g. Sentinel-2's s2cloudless band).
+    attach_aux: Callable = None
 
 
 @dataclass(frozen=True)
@@ -277,7 +345,8 @@ class Index:
 SENSORS = {
     "sentinel2": Sensor("sentinel2", _merged("COPERNICUS/S2_SR_HARMONIZED"),
                         "CLOUDY_PIXEL_PERCENTAGE",
-                        _s2_mask_clouds, _s2_cloud_band, _s2_reflectance),
+                        _s2_mask_clouds, _s2_cloud_band, _s2_reflectance,
+                        attach_aux=_s2_attach_cloud_prob),
     "landsat": Sensor("landsat", _landsat_collection, "CLOUD_COVER",
                       _landsat_mask_clouds, _landsat_cloud_band, _landsat_reflectance),
     "modis": Sensor("modis", _merged("MODIS/061/MOD09A1"), None,
