@@ -437,7 +437,7 @@ def test_header_text_uses_the_index_display_name_when_no_title_is_set():
     assert title == "Vegetation greenness (NDVI)"
     assert (subtitle, caveats) == ("", "")
     assert _header_text(types.SimpleNamespace(index="lst_smw"))[0] == \
-        "Land surface temperature (split-window)"
+        "Land surface temperature (mono-window)"
 
 
 def test_header_text_prefers_an_explicit_title():

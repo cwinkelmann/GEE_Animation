@@ -400,7 +400,11 @@ INDICES["lst_smw"] = Index("lst_smw", frozenset({"landsat"}),
                            build_collection=smw_lst.landsat_collection,
                            bands="TOA Tb, NIR, Red, Green, QA",
                            formula="A*Tb/e + B/e + C  (Ermida 2020 SMW)", units="°C",
-                           display_name="Land surface temperature (split-window)",
+                           # Ermida et al. (2020) is the Statistical MONO-Window
+                           # algorithm (ONE thermal band + emissivity + water-vapour
+                           # coefficients); "split-window" is the two-band family
+                           # (e.g. MODIS MxD11) and was a mislabel here.
+                           display_name="Land surface temperature (mono-window)",
                            low_label="cooler", high_label="warmer")
 
 # MODIS LST (MOD11A1 Terra daily, 1 km) — coarse but ~daily, so it fills the

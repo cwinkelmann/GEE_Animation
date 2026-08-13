@@ -27,7 +27,7 @@ Filled in:
 > forest, Brandenburg, Germany, May–Oct 2022 (monthly). Contains modified Copernicus
 > Sentinel data 2022.
 
-**Thermal** (LST, LST split-window, LST sharpened — usually the one worth publishing
+**Thermal** (LST, LST mono-window, LST sharpened — usually the one worth publishing
 alongside the inside-vs-outside chart, §5):
 
 > {display_name} over {region}, {start}–{end}. The forest reads {cooler/warmer} than
