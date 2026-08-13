@@ -345,9 +345,14 @@ INDICES = {
     # (first/last stop) deuteranopia separation is unaffected: still 89.5/255. This
     # is not a water mask: turbid/vegetated water with slightly positive NDVI still
     # renders brownish.
+    # Top two stops are GREENS (ColorBrewer Greens), not BrBG's dark teal: on-frame
+    # the teal top end sat visually close to the water blue (user feedback), while
+    # green vs blue stays separated for deuteranopia too (it is green vs RED/brown
+    # that collapses — hence the pale-yellow buffer between the browns and the
+    # greens). Water-stop criteria (stops 1-2) unchanged.
     "ndvi": Index("ndvi", _REFL,
                   (-0.2, 1.0, ["#4575b4", "#aeaec7", "#8c510a", "#d8b365",
-                               "#f6e8c3", "#5ab4ac", "#01665e"]), _ndvi,
+                               "#f6e8c3", "#41ab5d", "#006d2c"]), _ndvi,
                   bands="NIR, Red", formula="(NIR - Red) / (NIR + Red)",
                   display_name="Vegetation greenness (NDVI)",
                   low_label="water", high_label="dense vegetation"),
