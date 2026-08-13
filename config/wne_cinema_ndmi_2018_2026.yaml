@@ -30,5 +30,7 @@ render:
   upscale: lanczos
   region_line_width: 5
   quality: 8
+  raw_frames: true               # keep the map-only image per observed month
+  geotiffs: true                 # georeferenced float export per observed month
 
 viz: { min: -0.5, max: 0.8 }       # NDMI: moist canopy ~0.4-0.8, dry soil negative
