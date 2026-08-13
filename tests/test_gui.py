@@ -455,6 +455,12 @@ def test_build_app_input_order_matches_handler_param_order():
         ("pool_start", "Pool from year"), ("pool_end", "Pool to year"),
         ("pool_strategy", "Pooling strategy"), ("project", "Earth Engine project"),
         ("show_clouds", "Show real clouds"),
+        ("crs_choice", "Projection (CRS)"), ("crs_custom", "Custom EPSG code"),
+        ("interpolate", "Generated frames between observations"),
+        ("interpolate_mode", "Interpolation mode"),
+        ("min_scenes", "Minimum satellite passes per frame"),
+        ("raw_frames", "Also save raw map images"),
+        ("geotiffs", "Also export GeoTIFFs"),
     ]
     app = gui.build_app()
     checked = []
@@ -656,3 +662,45 @@ def test_run_frames_matches_every_period_label_format(tmp_path):
     # ("-" < "." lexicographically) is irrelevant here
     assert sorted(names) == sorted(
         ["vid_2022-05.png", "vid_2022-05-16.png", "vid_2022-Q3.png"])
+
+
+def test_crs_value_maps_every_dropdown_choice():
+    # "auto" is the default and the whole point of the projection fix: UTM, square
+    # pixels. Labelled choices carry their explanation after the code.
+    assert gui._crs_value(gui.CRS_AUTO, None) == "auto"
+    assert gui._crs_value(gui.CRS_4326, None) == "EPSG:4326"
+    assert gui._crs_value("EPSG:3035 (ETRS89 / LAEA Europe)", None) == "EPSG:3035"
+    assert gui._crs_value("custom…", "EPSG:25833") == "EPSG:25833"
+    # custom selected but left blank must fail loudly, not silently fall back
+    with pytest.raises(ValueError, match="custom"):
+        gui._crs_value("custom…", "   ")
+
+
+def test_new_render_controls_reach_the_config(tmp_path):
+    aoi = _write_geojson(tmp_path)
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        crs_choice="custom…", crs_custom="EPSG:25833", interpolate=10,
+        interpolate_mode="crossfade", min_scenes=3, raw_frames=True, geotiffs=True,
+        deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.crs == "EPSG:25833"
+    assert cfg.interpolate == 10 and cfg.interpolate_mode == "crossfade"
+    assert cfg.min_scenes == 3
+    assert cfg.raw_frames is True and cfg.geotiffs is True
+
+
+def test_render_controls_defaults_are_the_safe_ones(tmp_path):
+    aoi = _write_geojson(tmp_path)
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.crs == "auto"                    # the projection fix is the default
+    assert cfg.interpolate == 0                 # no invented frames unless asked
+    assert cfg.min_scenes == 1
+    assert cfg.raw_frames is False and cfg.geotiffs is False

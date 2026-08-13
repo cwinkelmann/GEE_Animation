@@ -49,6 +49,33 @@ DEFAULT_ASPECT = "match"
 QUALITY_CHOICES = ["default"] + [str(n) for n in range(1, 11)]
 DEFAULT_QUALITY = "default"
 
+# Render projection (cfg.crs). "auto" = the UTM zone of the AOI centroid: square
+# pixels and a scale bar that is correct on BOTH axes. EPSG:4326 (plate carrée) is
+# offered only because it was the historical default — at 53°N it stretches the
+# x-axis by 1/cos(lat) ~= 1.66x. Custom lets an institutional CRS be typed in.
+CRS_AUTO = "auto (UTM zone of the AOI — square pixels)"
+CRS_4326 = "EPSG:4326 (plate carrée — stretched away from the equator)"
+CRS_CHOICES = [CRS_AUTO, CRS_4326, "EPSG:3035 (ETRS89 / LAEA Europe)", "custom…"]
+DEFAULT_CRS = CRS_AUTO
+
+# Interpolation mode (cfg.interpolate_mode); "auto" picks data-space for single-band
+# indices and crossfade for the rgb/cir composites, which have no index units left.
+INTERPOLATE_MODE_CHOICES = ["auto", "data", "crossfade"]
+
+
+def _crs_value(choice, custom):
+    """Dropdown + custom textbox -> cfg.crs."""
+    if choice == CRS_AUTO:
+        return "auto"
+    if choice == "custom…":
+        code = _text_value(custom)
+        if not code:
+            raise ValueError(
+                "projection 'custom…' selected but no EPSG code given — type e.g. "
+                "EPSG:25833, or pick one of the listed projections")
+        return code
+    return str(choice).split(" ", 1)[0]      # "EPSG:4326 (…)" -> "EPSG:4326"
+
 # Shown next to the pooling controls *and* appended to the status of any pooled run —
 # the trade-off has to be visible before the user renders. Wording from
 # config/pooled.example.yaml.
@@ -349,7 +376,9 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
              project, out_dir, cadence, preset, aspect, write_gif,
              pool_start_year, pool_end_year, pool_strategy,
              title=None, subtitle=None, credit=None, omit_credit=False,
-             quality=None, show_clouds=False, deps):
+             quality=None, show_clouds=False, crs_choice=DEFAULT_CRS,
+             crs_custom=None, interpolate=0, interpolate_mode="auto",
+             raw_frames=False, geotiffs=False, min_scenes=1, deps):
     """Authenticate, resolve the AOIs and build a validated RunConfig.
 
     Returns ``(cfg, frame_geom, region_geom, warnings)``. Shared by
@@ -396,6 +425,12 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
         # `show_clouds` inverts to the config's mask_clouds; validate() rejects it
         # for palette indices, surfacing the same error the YAML path would give.
         mask_clouds=not bool(show_clouds),
+        # Projection: "auto" (UTM) is the default everywhere — see CRS_CHOICES.
+        crs=_crs_value(crs_choice, crs_custom),
+        interpolate=int(interpolate or 0),
+        interpolate_mode=str(interpolate_mode or "auto"),
+        raw_frames=bool(raw_frames), geotiffs=bool(geotiffs),
+        min_scenes=max(1, int(min_scenes or 1)),
         title=_text_value(title), subtitle=_text_value(subtitle),
         credit=_credit_value(credit, omit_credit),
         quality=_quality_value(quality),
@@ -410,7 +445,10 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
                   write_gif=True, pool_start_year=None, pool_end_year=None,
                   pool_strategy="least_cloudy",
                   title=None, subtitle=None, credit=None, omit_credit=False,
-                  quality=None, show_clouds=False, deps=DEFAULT_DEPS):
+                  quality=None, show_clouds=False, crs_choice=DEFAULT_CRS,
+                  crs_custom=None, interpolate=0, interpolate_mode="auto",
+                  raw_frames=False, geotiffs=False, min_scenes=1,
+                  deps=DEFAULT_DEPS):
     """Write the per-scene usable/rejected inventory CSV. Returns ``(csv_path, status)``.
 
     Mirrors ``cli.run(..., inventory=True)``, including its refusal to combine the
@@ -435,7 +473,10 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
         aspect=aspect, write_gif=write_gif, pool_start_year=None, pool_end_year=None,
         pool_strategy=pool_strategy,
         title=title, subtitle=subtitle, credit=credit, omit_credit=omit_credit,
-        quality=quality, show_clouds=show_clouds, deps=deps)
+        quality=quality, show_clouds=show_clouds, crs_choice=crs_choice,
+        crs_custom=crs_custom, interpolate=interpolate,
+        interpolate_mode=interpolate_mode, raw_frames=raw_frames,
+        geotiffs=geotiffs, min_scenes=min_scenes, deps=deps)
     path = deps.inventory(cfg, frame_geom, region_geom)
     status = (f"Wrote the scene inventory for {sensor} {index.upper()} "
               f"({cfg.start} → {cfg.end}, {cfg.cadence}) — one row per candidate scene "
@@ -455,7 +496,10 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
                   write_gif=True, pool_start_year=None, pool_end_year=None,
                   pool_strategy="least_cloudy",
                   title=None, subtitle=None, credit=None, omit_credit=False,
-                  quality=None, show_clouds=False, deps=DEFAULT_DEPS):
+                  quality=None, show_clouds=False, crs_choice=DEFAULT_CRS,
+                  crs_custom=None, interpolate=0, interpolate_mode="auto",
+                  raw_frames=False, geotiffs=False, min_scenes=1,
+                  deps=DEFAULT_DEPS):
     """Build one animation from GUI inputs.
 
     Returns ``(mp4_path, gif_path, frame_pngs, frames_zip, status, series)`` where
@@ -475,7 +519,10 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
         aspect=aspect, write_gif=write_gif, pool_start_year=pool_start_year,
         pool_end_year=pool_end_year, pool_strategy=pool_strategy,
         title=title, subtitle=subtitle, credit=credit, omit_credit=omit_credit,
-        quality=quality, show_clouds=show_clouds, deps=deps)
+        quality=quality, show_clouds=show_clouds, crs_choice=crs_choice,
+        crs_custom=crs_custom, interpolate=interpolate,
+        interpolate_mode=interpolate_mode, raw_frames=raw_frames,
+        geotiffs=geotiffs, min_scenes=min_scenes, deps=deps)
     out_dir = cfg.out_dir
 
     coll = deps.build(cfg, frame_geom, region_geom)
@@ -585,6 +632,44 @@ def build_app():
                          "(NDVI, LST, …) would colorize a cloud as a false data "
                          "value, so they always mask. The cloudiest scenes are "
                          "still filtered out either way.")
+                with gr.Accordion("🗺️ Projection & smoothing", open=False):
+                    crs_choice = gr.Dropdown(
+                        CRS_CHOICES, value=DEFAULT_CRS, label="Projection (CRS)",
+                        info="'auto' picks the AOI's UTM zone: square pixels and a "
+                             "scale bar correct on both axes. EPSG:4326 stretches "
+                             "the x-axis by 1/cos(latitude) — ~1.66x at 53°N.")
+                    crs_custom = gr.Textbox(
+                        label="Custom EPSG code", value="",
+                        placeholder="EPSG:25833 — only used when 'custom…' is selected")
+                    with gr.Row():
+                        interpolate = gr.Number(
+                            value=0, precision=0, minimum=0,
+                            label="Generated frames between observations",
+                            info="0 = off (a slideshow). 10 at 2 fps is the "
+                                 "'cinema' pacing; generated frames are labelled "
+                                 "and marked with a hollow dot.")
+                        interpolate_mode = gr.Dropdown(
+                            INTERPOLATE_MODE_CHOICES, value="auto",
+                            label="Interpolation mode",
+                            info="'auto' = blend index values for single-band "
+                                 "products, crossfade for RGB/CIR composites.")
+                    min_scenes = gr.Number(
+                        value=1, precision=0, minimum=1,
+                        label="Minimum satellite passes per frame",
+                        info="Periods backed by fewer passes are skipped. 1 keeps "
+                             "everything; raise it to reject thin composites.")
+                with gr.Accordion("💾 Extra outputs (GIS / re-use)", open=False):
+                    raw_frames = gr.Checkbox(
+                        value=False, label="Also save raw map images",
+                        info="One PNG per observed period with NO header, legend, "
+                             "scale bar or credit — just the map, for your own "
+                             "layouts.")
+                    geotiffs = gr.Checkbox(
+                        value=False, label="Also export GeoTIFFs",
+                        info="One georeferenced .tif per observed period holding "
+                             "the real values (not colours), at the product's "
+                             "native resolution, in the chosen projection. "
+                             "Written to <out>/geotiffs/<run>/.")
                 with gr.Accordion("🖋️ Presentation (title, subtitle, credit)", open=False):
                     title = gr.Textbox(
                         label="Title", value="",
@@ -655,7 +740,9 @@ def build_app():
         inputs = [aoi_file, buffer_m, sensor, index, start, end, cadence, region_cloud,
                   fps, dims, preset, aspect, quality, write_gif,
                   title, subtitle, credit, omit_credit,
-                  pool_start, pool_end, pool_strategy, project, show_clouds]
+                  pool_start, pool_end, pool_strategy, project, show_clouds,
+                  crs_choice, crs_custom, interpolate, interpolate_mode,
+                  min_scenes, raw_frames, geotiffs]
         outputs = [video, gif, gallery, frames_zip, inventory_csv, status, chart]
 
         def _error(exc):
@@ -665,7 +752,8 @@ def build_app():
                 fps, dims, preset, aspect, quality, write_gif,
                 title, subtitle, credit, omit_credit,
                 pool_start, pool_end, pool_strategy, project, show_clouds,
-                progress=gr.Progress()):
+                crs_choice, crs_custom, interpolate, interpolate_mode,
+                min_scenes, raw_frames, geotiffs, progress=gr.Progress()):
             import pandas as pd
             try:
                 progress(0.05, desc="Filtering imagery and building frames…")
@@ -678,7 +766,10 @@ def build_app():
                     omit_credit=omit_credit,
                     pool_start_year=pool_start, pool_end_year=pool_end,
                     pool_strategy=pool_strategy, project=project,
-                    show_clouds=show_clouds)
+                    show_clouds=show_clouds, crs_choice=crs_choice,
+                    crs_custom=crs_custom, interpolate=interpolate,
+                    interpolate_mode=interpolate_mode, min_scenes=min_scenes,
+                    raw_frames=raw_frames, geotiffs=geotiffs)
                 rows = []
                 for period, inside, outside in series:
                     if inside is not None:
@@ -697,7 +788,8 @@ def build_app():
                        region_cloud, fps, dims, preset, aspect, quality, write_gif,
                        title, subtitle, credit, omit_credit,
                        pool_start, pool_end, pool_strategy, project, show_clouds,
-                       progress=gr.Progress()):
+                       crs_choice, crs_custom, interpolate, interpolate_mode,
+                       min_scenes, raw_frames, geotiffs, progress=gr.Progress()):
             try:
                 progress(0.05, desc="Listing candidate scenes…")
                 csv_path, msg = run_inventory(
@@ -709,7 +801,10 @@ def build_app():
                     omit_credit=omit_credit,
                     pool_start_year=pool_start, pool_end_year=pool_end,
                     pool_strategy=pool_strategy, project=project,
-                    show_clouds=show_clouds)
+                    show_clouds=show_clouds, crs_choice=crs_choice,
+                    crs_custom=crs_custom, interpolate=interpolate,
+                    interpolate_mode=interpolate_mode, min_scenes=min_scenes,
+                    raw_frames=raw_frames, geotiffs=geotiffs)
                 progress(1.0, desc="Done")
                 return None, None, None, None, csv_path, msg, None
             except Exception as exc:   # surface a friendly message in the UI
