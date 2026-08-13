@@ -1,0 +1,34 @@
+# Cinema set: 2021-2022, gap-filled, interpolated, 16:9-filling frame.
+name: wne_cinema_ndmi_2018_2026
+project: hnee-331218
+title: Grumsin Beech Forest
+subtitle: UNESCO World Heritage site, Brandenburg, Germany
+aoi:
+  frame: { bbox: [13.7311, 52.9440, 14.0623, 53.0280] }  # 22.2 x 9.35 km fills the 16:9 place box
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 20
+start: "2018-01-01"
+end: "2026-08-01"
+sensor: sentinel2
+index: ndmi
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+
+pool_years: [2018, 2026]
+pool_strategy: gap_fill
+
+render:
+  fps: 2
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 10
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: "16:9"
+  upscale: lanczos
+  region_line_width: 5
+  quality: 8
+
+viz: { min: -0.5, max: 0.8 }       # NDMI: moist canopy ~0.4-0.8, dry soil negative
