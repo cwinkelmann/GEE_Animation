@@ -156,6 +156,9 @@ def test_frame_label_is_part_of_the_key(tmp_path, urlopen_counter):
     ("preset", "1080p"),
     ("name", "other-name"),
     ("out_dir", "somewhere-else"),
+    # raw frames are a local png write of already-fetched pixels; backfilling
+    # them for an archived run must reuse every cached thumbnail.
+    ("raw_frames", True),
 ])
 def test_client_side_change_still_hits_the_cache(tmp_path, urlopen_counter, field, value):
     _fetch_thumbnail(_FakeImage(), _cfg(tmp_path), "GEOM")
@@ -344,3 +347,4 @@ def test_url_error_is_retried(tmp_path, monkeypatch, no_sleep):
     assert len(calls) == 2
     assert no_sleep == [2.0]
     assert arr.shape == (8, 8)
+

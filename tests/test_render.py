@@ -2796,3 +2796,38 @@ def test_fit_margins_rejects_a_canvas_too_short_for_the_margins():
     # a canvas just past the floor still works
     w, h = R._fit_margins(100, 100, 200, 1.0, two_line_header=True)
     assert h >= 1 and h + sum(R._margins(h, True)) <= 200
+
+
+def test_raw_frames_written_byte_exact_to_the_pure_imagery(tmp_path):
+    # raw_frames: true writes {name}_raw_{label}.png alongside the annotated frames —
+    # the map itself, BEFORE any furniture. With no preset/region/bounds the raw file
+    # must be byte-identical to colorize+apply_nodata of the fetched array, and the
+    # annotated frame must be taller (margins) — proving the raw copy escaped the
+    # overlay pipeline entirely.
+    from gee_animation.imaging import colorize
+    from gee_animation.render import apply_nodata, render
+    cfg = _cfg(tmp_path, name="rawrun")
+    cfg.raw_frames = True
+    arr = np.linspace(-0.2, 0.9, 64 * 64).reshape(64, 64)
+    valid = np.ones((64, 64), bool)
+    valid[:4, :4] = False
+    def fetch(image, cfg, geometry=None):
+        return arr, valid
+    paths = render([Frame("2022-06", object())], cfg, fetch=fetch, geometry=None)
+    raw = tmp_path / "rawrun_raw_2022-06.png"
+    annotated = tmp_path / "rawrun_2022-06.png"
+    assert raw.exists() and annotated.exists()
+    assert raw in paths                      # offered as an output like other PNGs
+    expected = apply_nodata(colorize(arr, cfg.viz_min, cfg.viz_max, cfg.palette), valid)
+    got = np.asarray(Image.open(raw))
+    assert got.shape == expected.shape and (got == expected).all()
+    ann = np.asarray(Image.open(annotated))
+    assert ann.shape[0] > got.shape[0]       # margins/furniture on the annotated one
+
+
+def test_raw_frames_default_off_writes_nothing(tmp_path):
+    cfg = _cfg(tmp_path, name="norawrun")
+    def fetch(image, cfg, geometry=None):
+        return np.zeros((32, 32)), np.ones((32, 32), bool)
+    render([Frame("2022-06", object())], cfg, fetch=fetch, geometry=None)
+    assert not list(tmp_path.glob("*_raw_*.png"))

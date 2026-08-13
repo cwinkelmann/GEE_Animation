@@ -63,6 +63,10 @@ CLIENT_SIDE_FIELDS = frozenset({
     # attribution line: drawn locally into the bottom bar (render._default_credit),
     # never sent to EE — changing/overriding the credit must not recompute frames.
     "credit",
+    # raw map frames: an extra LOCAL png write of already-fetched pixels
+    # (render.raw_frames) — turning it on must not refetch a single thumbnail,
+    # or backfilling raw frames for an archived run would re-download years.
+    "raw_frames",
     # the cache controls themselves: where entries live and whether they are used
     # cannot change what EE computes.
     "cache", "cache_dir",

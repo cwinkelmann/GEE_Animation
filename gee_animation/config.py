@@ -114,6 +114,11 @@ class RunConfig:
     # frames). Only an explicit True/False here can override that.
     gif: bool | None = None
     frames: bool = True
+    # Also write each observed frame as a RAW map image (`{name}_raw_{label}.png`,
+    # from render.raw_frames): the colorized composite + no-data grey + upscale +
+    # region outline only — no header/legend/scale bar/credit/marker/letterbox.
+    # For layouts the annotated frames can't serve (posters, GIS overlays, papers).
+    raw_frames: bool = False
     # Frame header text (from top-level `title` / `subtitle`). `title` is the header's
     # large first line — what and where this animation is; it defaults to the index's
     # plain-language `products.Index.display_name` when unset, so a frame always says
@@ -251,6 +256,7 @@ class RunConfig:
                 upscale=str(render.get("upscale", "lanczos")),
                 gif=_flag(render, "gif", default=None),
                 frames=_flag(render, "frames"),
+                raw_frames=_flag(render, "raw_frames", default=False),
                 out_dir=str(raw.get("out_dir", "out")),
                 title=(str(raw["title"]) if raw.get("title") else None),
                 subtitle=(str(raw["subtitle"]) if raw.get("subtitle") else None),

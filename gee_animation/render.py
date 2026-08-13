@@ -1845,6 +1845,13 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     out_dir = Path(cfg.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     want_frames = bool(getattr(cfg, "frames", True))
+    # `render.raw_frames`: also keep each observed frame as a RAW map image —
+    # colorized composite + no-data grey + upscale + region outline, captured
+    # before any furniture (scale bar, north arrow, margins, header, credit,
+    # marker, colorbar, letterbox) is drawn. Written as `{name}_raw_{label}.png`
+    # so the raw set sorts/moves as its own run. For re-use in layouts the
+    # annotated frames can't serve (posters, GIS overlays, papers).
+    want_raw = bool(getattr(cfg, "raw_frames", False))
     png_paths: list[Path] = []
 
     def _finished():
@@ -1863,6 +1870,8 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         # the fetch lookahead already holds.
         batch_rgb: list[np.ndarray] = []
         batch_labels: list[str] = []
+        raw_rgb: list[np.ndarray] = []
+        raw_labels: list[str] = []
 
         def flush():
             if batch_rgb:
@@ -1870,6 +1879,11 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                     _write_frames(out_dir, cfg.name, batch_rgb, batch_labels, workers))
                 batch_rgb.clear()
                 batch_labels.clear()
+            if raw_rgb:
+                png_paths.extend(_write_frames(
+                    out_dir, f"{cfg.name}_raw", raw_rgb, raw_labels, workers))
+                raw_rgb.clear()
+                raw_labels.clear()
 
         for rgb, valid, text, label in _imagery_sequence(frames, cfg, fetch, geometry,
                                                          workers, composite):
@@ -1895,6 +1909,15 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                 # masks is always non-None here, so draw_region would just forward
                 # straight to _composite_region without reading `width` — call it direct.
                 rgb = _composite_region(rgb, *region_masks, color=REGION_OUTLINE_RGB)
+            if want_raw and label is not None:
+                # RAW capture point: the map itself (colorized + no-data + upscale +
+                # region outline), before the first piece of furniture below. Observed
+                # frames only — a generated frame is not data. Safe to hold by
+                # reference: every drawer below returns a new array.
+                raw_rgb.append(rgb)
+                raw_labels.append(label)
+                if len(raw_rgb) >= workers:
+                    flush()
             if bounds is not None:
                 rgb = draw_scale_bar(rgb, frame_width_m)
                 # Georeferenced-adjacent, same as the scale bar it stacks above: drawn
