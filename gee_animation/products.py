@@ -238,6 +238,20 @@ def _ndmi(sensor, image, ee_module=ee):
             .set("system:time_start", image.get("system:time_start")))
 
 
+def _ndre(sensor, image, ee_module=ee):
+    # NDRE = (nir − red_edge)/(nir + red_edge) — chlorophyll/nitrogen-sensitive,
+    # slower to saturate over dense canopy than NDVI. Sentinel-2 only: the red
+    # edge (B5, 705 nm, 20 m) has no counterpart in Landsat or MODIS, so this
+    # reads B5 straight off the raw image rather than through the shared
+    # reflectance alias table (which only carries the 6 bands common to every
+    # reflectance sensor). Scaled the same way _s2_reflectance scales its bands.
+    refl = sensor.reflectance(image, ee_module)
+    red_edge = image.select("B5").multiply(0.0001).rename("red_edge")
+    combo = refl.select("nir").rename("nir").addBands(red_edge)
+    return (combo.normalizedDifference(["nir", "red_edge"]).rename(INDEX_BAND)
+            .set("system:time_start", image.get("system:time_start")))
+
+
 def _rgb(sensor, image, ee_module=ee):
     # True-colour composite: R=Red, G=Green, B=Blue (natural colour).
     return (sensor.reflectance(image, ee_module)
@@ -364,7 +378,7 @@ THERMAL_INDICES = frozenset({"lst", "lst_smw", "lst_sharp", "lst_modis"})
 
 # Coarsest-relevant native ground sampling (metres) per sensor, with overrides.
 _SENSOR_NATIVE_M = {"sentinel2": 10, "landsat": 30, "modis": 500, "modis_lst": 1000}
-_S2_20M_INDICES = frozenset({"ndmi"})   # uses the 20 m SWIR band
+_S2_20M_INDICES = frozenset({"ndmi", "ndre"})   # ndmi: 20 m SWIR; ndre: 20 m red edge (B5)
 
 
 def native_scale_m(sensor: str, index: str) -> int:
@@ -447,6 +461,12 @@ INDICES = {
                   bands="NIR, SWIR1", formula="(NIR - SWIR1) / (NIR + SWIR1)",
                   display_name="Vegetation moisture (NDMI)",
                   low_label="dry", high_label="moist"),
+    "ndre": Index("ndre", frozenset({"sentinel2"}),
+                  (-0.2, 1.0, ["#a1622f", "#f6e8c3", "#238b45"]), _ndre,
+                  bands="NIR, Red Edge (B5)",
+                  formula="(NIR - RedEdge) / (NIR + RedEdge)",
+                  display_name="Vegetation red-edge index (NDRE)",
+                  low_label="bare/stressed", high_label="dense vegetation"),
     "rgb": Index("rgb", _REFL, (0.0, 0.3, None), _rgb,
                  bands="Red, Green, Blue", composite=True,
                  display_name="True colour"),

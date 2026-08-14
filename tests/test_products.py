@@ -8,7 +8,7 @@ _REFL_INDICES = frozenset({"sentinel2", "landsat", "modis"})
 
 def test_registry_contents():
     assert set(P.SENSORS) == {"sentinel2", "landsat", "modis", "modis_lst"}
-    assert set(P.INDICES) == {"ndvi", "lst", "lst_smw", "evi", "ndwi", "ndmi",
+    assert set(P.INDICES) == {"ndvi", "lst", "lst_smw", "evi", "ndwi", "ndmi", "ndre",
                               "rgb", "cir", "lst_sharp", "lst_modis"}
     assert P.INDICES["lst_modis"].sensors == frozenset({"modis_lst"})   # MODIS-only LST
     assert P.SENSORS["modis_lst"].scene_cloud_property is None          # no per-scene cloud
@@ -100,6 +100,78 @@ def test_ndmi_is_nir_swir1_normalized_difference():
     out = P.INDICES["ndmi"].compute(sensor, img, ee_module=None)
     assert rec["nd"] == ("nir", "swir1")                   # moisture index
     assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
+
+
+def test_ndre_is_sentinel2_only_at_its_native_20m_red_edge_scale():
+    assert P.INDICES["ndre"].sensors == frozenset({"sentinel2"})
+    assert P.native_scale_m("sentinel2", "ndre") == 20   # 20 m red edge (B5)
+    with pytest.raises(ValueError, match="not available"):
+        P.get_product("landsat", "ndre")   # no red-edge band on Landsat/MODIS
+    with pytest.raises(ValueError, match="not available"):
+        P.get_product("modis", "ndre")
+
+
+def test_ndre_is_nir_rededge_normalized_difference_from_raw_b5():
+    rec = {}
+
+    class FakeResult:
+        def set(self, k, v):
+            rec["set"] = (k, v)
+            return "ndre_band"
+
+    class FakeCombo:
+        def normalizedDifference(self, bands):
+            rec["nd"] = tuple(bands)
+            return self
+
+        def rename(self, n):
+            rec["rename"] = n
+            return FakeResult()
+
+    class FakeNir:
+        def rename(self, n):
+            rec["nir_rename"] = n
+            return self
+
+        def addBands(self, other):
+            rec["added"] = other
+            return FakeCombo()
+
+    class FakeRedEdge:
+        def rename(self, n):
+            rec["re_rename"] = n
+            return "red_edge_band"
+
+    class FakeB5:
+        def multiply(self, v):
+            rec["b5_multiply"] = v
+            return FakeRedEdge()
+
+    class FakeRefl:
+        def select(self, b):
+            rec["refl_select"] = b
+            return FakeNir()
+
+    class FakeSensor:
+        def reflectance(self, image, ee_module=None):
+            rec["refl"] = True
+            return FakeRefl()
+
+    class FakeImg:
+        def select(self, b):
+            rec["img_select"] = b
+            return FakeB5()
+
+        def get(self, k):
+            return "TS"
+
+    out = P.INDICES["ndre"].compute(FakeSensor(), FakeImg(), ee_module=None)
+    assert rec["refl"] and rec["refl_select"] == "nir"
+    assert rec["img_select"] == "B5" and rec["b5_multiply"] == 0.0001   # same scale as _s2_reflectance
+    assert rec["nir_rename"] == "nir" and rec["re_rename"] == "red_edge"
+    assert rec["nd"] == ("nir", "red_edge")
+    assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
+    assert out == "ndre_band"
 
 
 def test_lst_sharp_uses_distrad_fit_reduceresolution_and_residual():
