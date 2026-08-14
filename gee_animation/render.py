@@ -152,6 +152,55 @@ def _geotiff_scale(cfg) -> float:
     return float(native)
 
 
+#: Earth Engine's hard cap on a synchronous getDownloadURL response (48 MiB).
+#: Exceeding it is a flat refusal ("Total request size ... must be less than or
+#: equal to 50331648 bytes"), not a slow request — no retry can help.
+EE_SYNC_DOWNLOAD_MAX_BYTES = 50331648
+
+#: Bytes per sample once the export is cast to float32 (see `_export_geotiffs`).
+_GEOTIFF_BYTES_PER_SAMPLE = 4
+
+
+def _geotiff_source(image, bands):
+    """The image to export: selected bands, cast to float32.
+
+    EE composites default to float64, which doubles the response for no gain —
+    the underlying data is 12-bit reflectance (or a ratio derived from it), so
+    float32's ~7 significant digits are far more precision than exists. Halving
+    the bytes is what brings a 3-band composite under EE's synchronous download
+    cap (49.7 MiB -> 24.8 MiB for a 2239x969 frame).
+    """
+    return image.select(bands).toFloat()
+
+
+def _geotiff_fit_scale(cfg, bounds, bands: int, scale: float) -> float:
+    """Coarsen `scale` if the export would exceed EE's synchronous download cap.
+
+    A 3-band composite over a wide frame at native resolution is the case that
+    blows the cap: 2239x969 px x 3 bands x 8 bytes = 49.7 MiB as float64, which
+    EE refuses outright. Casting to float32 (`_export_geotiffs`) halves that and
+    is the real fix; this is the backstop for a frame wide enough that even
+    float32 does not fit — better an honest 14 m export with a logged warning
+    than no file at all.
+    """
+    if not bounds or not scale:
+        return scale
+    minx, miny, maxx, maxy = bounds
+    mid = math.radians((miny + maxy) / 2.0)
+    w_m = (maxx - minx) * 111320.0 * math.cos(mid)
+    h_m = (maxy - miny) * 111320.0
+    predicted = (w_m / scale) * (h_m / scale) * bands * _GEOTIFF_BYTES_PER_SAMPLE
+    if predicted <= EE_SYNC_DOWNLOAD_MAX_BYTES:
+        return scale
+    # Area scales with 1/scale^2, so the linear factor is the square root.
+    coarser = scale * math.sqrt(predicted / EE_SYNC_DOWNLOAD_MAX_BYTES)
+    log.warning(
+        "geotiff export would be %.1f MiB at %g m, over Earth Engine's %.0f MiB "
+        "synchronous download cap; exporting at %.1f m instead",
+        predicted / 1048576, scale, EE_SYNC_DOWNLOAD_MAX_BYTES / 1048576, coarser)
+    return coarser
+
+
 def _geotiff_params(cfg, geometry) -> dict:
     """getDownloadURL parameters for a georeferenced GeoTIFF of the frame data.
 
@@ -196,6 +245,10 @@ def _export_geotiffs(frames, cfg, geometry) -> list:
     out_dir.mkdir(parents=True, exist_ok=True)
     composite = _is_composite(cfg)
     params = _geotiff_params(cfg, geometry)
+    # Backstop for a frame so wide that even float32 exceeds the cap.
+    params["scale"] = _geotiff_fit_scale(
+        cfg, _aoi_bounds(getattr(cfg, "frame_aoi", None) or {}),
+        3 if composite else 1, params["scale"])
     failed: list[str] = []
 
     def one(frame):
@@ -206,13 +259,13 @@ def _export_geotiffs(frames, cfg, geometry) -> list:
             if data is None:
                 bands = ["R", "G", "B"] if composite else "INDEX"
                 try:
-                    url = frame.image.select(bands).getDownloadURL(params)
+                    url = _geotiff_source(frame.image, bands).getDownloadURL(params)
                     data = _fetch_url(url, timeout=300)
                 except Exception as exc:          # noqa: BLE001 — recorded below
                     log.warning("geotiff export failed for %s (%s); retrying once",
                                 frame.label, exc)
                     try:
-                        url = frame.image.select(bands).getDownloadURL(params)
+                        url = _geotiff_source(frame.image, bands).getDownloadURL(params)
                         data = _fetch_url(url, timeout=300)
                     except Exception as exc2:     # noqa: BLE001
                         log.warning("geotiff export gave up on %s (%s)",

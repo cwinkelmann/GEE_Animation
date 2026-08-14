@@ -2838,6 +2838,9 @@ def test_export_geotiffs_writes_cached_tifs_per_observed_frame(tmp_path, monkeyp
     from gee_animation import cache
     cfg = _cfg(tmp_path, name="tifrun")
     cfg.sensor = "sentinel2"          # native 10 m: the configured scale stands
+    # a realistic showcase frame (~22 x 9 km); the fixture default is a whole
+    # degree square, which legitimately exceeds EE's download cap at 20 m
+    cfg.frame_aoi = {"bbox": [13.7311, 52.9440, 14.0623, 53.0280]}
     cfg.crs = "EPSG:32633"
     cfg.cache = True
     cfg.cache_dir = str(tmp_path / "cache")
@@ -2855,7 +2858,8 @@ def test_export_geotiffs_writes_cached_tifs_per_observed_frame(tmp_path, monkeyp
         def __init__(self, label): self.label = label
         def select(self, bands):
             assert bands == "INDEX"          # index run exports index units
-            return FakeSel(self.label)
+            return self
+        def toFloat(self): return FakeSel(self.label)
     frames = [Frame("2022-05", FakeImg("2022-05")), Frame("2022-06", FakeImg("2022-06"))]
     paths = R._export_geotiffs(frames, cfg, geometry="GEOM")
     assert [p.name for p in paths] == ["tifrun_2022-05.tif", "tifrun_2022-06.tif"]
@@ -2909,7 +2913,8 @@ def test_geotiffs_land_in_their_own_subfolder(tmp_path, monkeypatch):
     cfg.sensor, cfg.crs, cfg.cache = "sentinel2", None, False
     monkeypatch.setattr(R, "_fetch_url", lambda url, timeout=0: b"TIF")
     class FakeImg:
-        def select(self, bands): return types.SimpleNamespace(
+        def select(self, bands): return self
+        def toFloat(self): return types.SimpleNamespace(
             getDownloadURL=lambda params: "http://dl")
     paths = R._export_geotiffs([Frame("2022-05", FakeImg())], cfg, geometry="GEOM")
     assert paths[0] == tmp_path / "geotiffs" / "tifdir" / "tifdir_2022-05.tif"
@@ -2935,7 +2940,8 @@ def test_geotiff_export_skips_frames_ee_refuses_and_keeps_the_rest(tmp_path, mon
     monkeypatch.setattr(R, "_fetch_url", fake_fetch)
     class FakeImg:
         def __init__(self, label): self.label = label
-        def select(self, bands):
+        def select(self, bands): return self
+        def toFloat(self):
             return types.SimpleNamespace(
                 getDownloadURL=lambda params: f"http://dl/{self.label}")
     frames = [Frame(l, FakeImg(l)) for l in ("2022-05", "2022-06", "2022-07")]
@@ -2946,3 +2952,38 @@ def test_geotiff_export_skips_frames_ee_refuses_and_keeps_the_rest(tmp_path, mon
     assert "2022-06" in caplog.text and "incomplete" in caplog.text
     # the good frames really were written
     assert all(p.read_bytes() == b"TIF" for p in paths)
+
+
+def test_geotiff_source_casts_to_float32():
+    # EE composites default to float64, doubling the response for precision the
+    # 12-bit source never had — and that is what pushed a 3-band export over EE's
+    # 48 MiB synchronous download cap.
+    import gee_animation.render as R
+    calls = {}
+    class FakeImg:
+        def select(self, bands): calls["bands"] = bands; return self
+        def toFloat(self): calls["cast"] = True; return "float32_image"
+    assert R._geotiff_source(FakeImg(), ["R", "G", "B"]) == "float32_image"
+    assert calls == {"bands": ["R", "G", "B"], "cast": True}
+
+
+def test_geotiff_fit_scale_coarsens_only_when_over_the_cap():
+    import gee_animation.render as R
+    cfg = types.SimpleNamespace()
+    # the real showcase frame: 22.2 x 9.35 km. 1 band at 10 m float32 = 8.3 MiB -> fits
+    bounds = (13.7311, 52.9440, 14.0623, 53.0280)
+    assert R._geotiff_fit_scale(cfg, bounds, 1, 10.0) == 10.0
+    # 3 bands at 10 m float32 = 24.8 MiB -> still fits (this is the composite fix)
+    assert R._geotiff_fit_scale(cfg, bounds, 3, 10.0) == 10.0
+    # a frame 4x wider would not fit even as float32: scale must coarsen, and the
+    # coarsened export must actually come in under the cap
+    wide = (13.0, 52.9440, 14.5, 53.0280)
+    out = R._geotiff_fit_scale(cfg, wide, 3, 10.0)
+    assert out > 10.0
+    import math
+    minx, miny, maxx, maxy = wide
+    w = (maxx - minx) * 111320.0 * math.cos(math.radians((miny + maxy) / 2))
+    h = (maxy - miny) * 111320.0
+    assert (w / out) * (h / out) * 3 * 4 <= R.EE_SYNC_DOWNLOAD_MAX_BYTES + 1
+    # no bounds -> unchanged, never a crash
+    assert R._geotiff_fit_scale(cfg, None, 3, 10.0) == 10.0
