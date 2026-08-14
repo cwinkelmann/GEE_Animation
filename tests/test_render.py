@@ -2915,3 +2915,34 @@ def test_geotiffs_land_in_their_own_subfolder(tmp_path, monkeypatch):
     assert paths[0] == tmp_path / "geotiffs" / "tifdir" / "tifdir_2022-05.tif"
     assert paths[0].read_bytes() == b"TIF"
     assert not list(tmp_path.glob("*.tif"))     # not loose in out/
+
+
+def test_geotiff_export_skips_frames_ee_refuses_and_keeps_the_rest(tmp_path, monkeypatch, caplog):
+    # An rgb/cir composite at 10 m over a wide frame can answer "Computation timed
+    # out". That must not abort a nine-minute render that already produced the
+    # video: retry once, then log and skip, returning the frames that did export.
+    import logging
+    import gee_animation.render as R
+    cfg = _cfg(tmp_path, name="tifskip")
+    cfg.sensor, cfg.crs, cfg.cache, cfg.workers = "sentinel2", None, False, 1
+    attempts = {}
+    def fake_fetch(url, timeout=0):
+        label = url.rsplit("/", 1)[-1]
+        attempts[label] = attempts.get(label, 0) + 1
+        if label == "2022-06":
+            raise RuntimeError("Computation timed out.")
+        return b"TIF"
+    monkeypatch.setattr(R, "_fetch_url", fake_fetch)
+    class FakeImg:
+        def __init__(self, label): self.label = label
+        def select(self, bands):
+            return types.SimpleNamespace(
+                getDownloadURL=lambda params: f"http://dl/{self.label}")
+    frames = [Frame(l, FakeImg(l)) for l in ("2022-05", "2022-06", "2022-07")]
+    with caplog.at_level(logging.WARNING):
+        paths = R._export_geotiffs(frames, cfg, geometry="GEOM")
+    assert [p.name for p in paths] == ["tifskip_2022-05.tif", "tifskip_2022-07.tif"]
+    assert attempts["2022-06"] == 2                 # tried, retried once, gave up
+    assert "2022-06" in caplog.text and "incomplete" in caplog.text
+    # the good frames really were written
+    assert all(p.read_bytes() == b"TIF" for p in paths)

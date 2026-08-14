@@ -509,3 +509,58 @@ def test_gap_fill_quarterly_sees_every_month_of_the_quarter():
     assert len(frames) == 1
     assert frames[0].label == "2022-Q1" and frames[0].source == 2021
     assert frames[0].image.tag == "mosaic:MAR21"
+
+
+def test_fetch_scene_arrays_splits_the_window_on_a_timeout():
+    # A 9-year lst_sharp pool answered "Computation timed out" on the single
+    # batched getInfo and killed the whole run. The window must halve and retry,
+    # keeping each sub-window's timestamps paired with its own cloud values.
+    import ee as _ee
+    from gee_animation.compositing import _fetch_scene_arrays
+    seen = []
+    class FakeColl:
+        def __init__(self, s="2018-01-01", e="2027-01-01"): self.s, self.e = s, e
+        def filterDate(self, s, e): return FakeColl(s, e)
+        def aggregate_array(self, prop): return (self.s, self.e, prop)
+    class FakeEE:
+        @staticmethod
+        def Dictionary(props):
+            s, e, _ = props["time"]
+            seen.append((s, e))
+            def get_info():
+                # the full span is too heavy; each half evaluates fine
+                if (s, e) == ("2018-01-01", "2027-01-01"):
+                    raise _ee.EEException("Computation timed out.")
+                base = 1 if s == "2018-01-01" else 10
+                out = {"time": [base, base + 1]}
+                if "region_cloud" in props:
+                    out["region_cloud"] = [base / 100, (base + 1) / 100]
+                return out
+            return types.SimpleNamespace(getInfo=get_info)
+    millis, clouds = _fetch_scene_arrays(FakeColl(), "2018-01-01", "2027-01-01",
+                                         want_clouds=True, ee_module=FakeEE)
+    assert seen[0] == ("2018-01-01", "2027-01-01")          # tried whole span first
+    assert len(seen) == 3                                     # then both halves
+    assert millis == [1, 2, 10, 11]                           # concatenated in order
+    assert clouds == [0.01, 0.02, 0.1, 0.11]                  # stays aligned 1:1
+    assert len(millis) == len(clouds)
+
+
+def test_fetch_scene_arrays_does_not_split_on_unrelated_errors():
+    # A bad band name must surface at once, not be retried over 64 sub-windows.
+    import ee as _ee
+    from gee_animation.compositing import _fetch_scene_arrays
+    calls = []
+    class FakeColl:
+        def filterDate(self, s, e): return self
+        def aggregate_array(self, prop): return prop
+    class FakeEE:
+        @staticmethod
+        def Dictionary(props):
+            calls.append(1)
+            def boom(): raise _ee.EEException("Image.select: no band named 'INDEX'")
+            return types.SimpleNamespace(getInfo=boom)
+    with pytest.raises(_ee.EEException, match="no band named"):
+        _fetch_scene_arrays(FakeColl(), "2018-01-01", "2027-01-01",
+                            want_clouds=False, ee_module=FakeEE)
+    assert len(calls) == 1

@@ -183,12 +183,20 @@ def _export_geotiffs(frames, cfg, geometry) -> list:
 
     Files land in ``<out_dir>/geotiffs/<name>/`` — a GIS data product, kept out
     of the way of the pictures rather than interleaved with them.
+
+    **The export never costs the animation.** It runs after the video is already
+    written, and a frame Earth Engine refuses to compute (an rgb/cir composite at
+    10 m over a wide frame answers "Computation timed out") is retried once, then
+    logged and skipped. Returning 100 of 103 tifs plus a warning naming the gaps
+    beats aborting a nine-minute render that already succeeded — the missing
+    frames can be re-exported later, from cache, for free.
     """
     from concurrent.futures import ThreadPoolExecutor
     out_dir = Path(cfg.out_dir) / "geotiffs" / cfg.name
     out_dir.mkdir(parents=True, exist_ok=True)
     composite = _is_composite(cfg)
     params = _geotiff_params(cfg, geometry)
+    failed: list[str] = []
 
     def one(frame):
         with cache.frame_identity(getattr(frame, "label", None),
@@ -197,8 +205,20 @@ def _export_geotiffs(frames, cfg, geometry) -> list:
             data = cache.load(cfg, key)
             if data is None:
                 bands = ["R", "G", "B"] if composite else "INDEX"
-                url = frame.image.select(bands).getDownloadURL(params)
-                data = _fetch_url(url, timeout=300)
+                try:
+                    url = frame.image.select(bands).getDownloadURL(params)
+                    data = _fetch_url(url, timeout=300)
+                except Exception as exc:          # noqa: BLE001 — recorded below
+                    log.warning("geotiff export failed for %s (%s); retrying once",
+                                frame.label, exc)
+                    try:
+                        url = frame.image.select(bands).getDownloadURL(params)
+                        data = _fetch_url(url, timeout=300)
+                    except Exception as exc2:     # noqa: BLE001
+                        log.warning("geotiff export gave up on %s (%s)",
+                                    frame.label, exc2)
+                        failed.append(frame.label)
+                        return None
                 cache.store(cfg, key, data)
         path = out_dir / f"{cfg.name}_{frame.label}.tif"
         path.write_bytes(data)
@@ -206,7 +226,13 @@ def _export_geotiffs(frames, cfg, geometry) -> list:
 
     workers = max(1, int(getattr(cfg, "workers", 4) or 4))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(one, frames))
+        paths = [p for p in pool.map(one, frames) if p is not None]
+    if failed:
+        log.warning("geotiff export incomplete: %d of %d frames missing (%s). "
+                    "Re-run to retry just those — the rest come from cache.",
+                    len(failed), len(frames), ", ".join(sorted(failed)[:8])
+                    + (" …" if len(failed) > 8 else ""))
+    return paths
 
 
 def _decode_thumbnail(data: bytes, cfg, composite: bool):

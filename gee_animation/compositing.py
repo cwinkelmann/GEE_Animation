@@ -112,6 +112,76 @@ def _calendar_key(p_start_iso: str, p_end_iso: str) -> tuple[tuple[int, ...], in
     return tuple(months), 1, 31
 
 
+# Server-side failures that a SMALLER date window can get past. Deliberately
+# narrow, like metadata._LIMIT_HINTS: an ordinary EE error (bad band name) must
+# surface at once rather than be retried over four sub-windows. "Computation
+# timed out" is the one that killed a 9-year lst_sharp pool — the sharpening
+# chain per scene is heavy enough that the whole span cannot be evaluated inside
+# EE's request budget, while each half can.
+_SPLIT_HINTS = ("timed out", "timeout", "deadline",
+                "memory limit", "user memory", "out of memory",
+                "limit exceeded", "too many", "too large")
+
+#: How many times the pooled window may be halved (2^6 = 64 sub-windows) before
+#: giving up and surfacing the error. A pool that still fails this deep has a
+#: real problem, not a size problem.
+MAX_SPLITS = 6
+
+
+def _is_splittable_error(exc) -> bool:
+    """True for server-side failures worth retrying over a narrower date range."""
+    return isinstance(exc, ee.EEException) and any(
+        h in str(exc).lower() for h in _SPLIT_HINTS)
+
+
+def _midpoint(start: str, end: str) -> str:
+    a, b = date.fromisoformat(start), date.fromisoformat(end)
+    return (a + (b - a) / 2).isoformat()
+
+
+def _fetch_scene_arrays(pooled, start: str, end: str, want_clouds: bool,
+                        ee_module=ee, _depth: int = 0):
+    """``(millis, clouds)`` for every pooled scene in ``[start, end)``.
+
+    ONE round trip when the span evaluates inside Earth Engine's budget — the
+    batched `ee.Dictionary` idiom `inventory.scene_inventory` uses, which is what
+    makes the timestamps and the cloud fractions come from a single evaluation of
+    a single collection, so their positional alignment is structural rather than
+    assumed.
+
+    When the span is too heavy (a multi-year pool of an expensive index: EE
+    answers "Computation timed out"), the window is halved and the two sub-windows
+    are fetched separately, then concatenated. Alignment survives because each
+    sub-fetch pairs its own timestamps with its own cloud values; only the order
+    of whole sub-windows is imposed, and `pooled_composite` matches candidates by
+    date, never by position across the whole array.
+
+    `clouds` is None when `want_clouds` is False (the `median` strategy ranks
+    nothing), and stays None through concatenation.
+    """
+    props = {"time": pooled.filterDate(start, end)
+                           .aggregate_array("system:time_start")}
+    if want_clouds:
+        props["region_cloud"] = (pooled.filterDate(start, end)
+                                 .aggregate_array("region_cloud_fraction"))
+    try:
+        data = ee_module.Dictionary(props).getInfo()
+    except Exception as exc:                      # noqa: BLE001 — re-raised below
+        mid = _midpoint(start, end)
+        if (_depth >= MAX_SPLITS or not _is_splittable_error(exc)
+                or mid <= start or mid >= end):
+            raise
+        log.info("pooled scene metadata for %s..%s exceeded Earth Engine's budget "
+                 "(%s); splitting at %s", start, end, exc, mid)
+        l_millis, l_clouds = _fetch_scene_arrays(pooled, start, mid, want_clouds,
+                                                 ee_module, _depth + 1)
+        r_millis, r_clouds = _fetch_scene_arrays(pooled, mid, end, want_clouds,
+                                                 ee_module, _depth + 1)
+        clouds = None if not want_clouds else (l_clouds or []) + (r_clouds or [])
+        return l_millis + r_millis, clouds
+    return data["time"], data.get("region_cloud")
+
+
 def _cloud_rank(clouds, i) -> float:
     """Sort key for the least-cloudy pick. A missing region_cloud_fraction (scene
     fully masked over the region, so reduceRegion came back empty) sorts last —
@@ -199,15 +269,12 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
     # already widened to the same range).
     pooled = collection.filterDate(*span)
 
-    props = {"time": pooled.aggregate_array("system:time_start")}
-    if strategy in ("least_cloudy", "gap_fill"):
-        # gap_fill ranks clouds only for the periods it has to borrow, but the ranking
-        # data still comes from the SAME single Dictionary — fetching it lazily per
-        # gap would be one round trip per empty period.
-        props["region_cloud"] = pooled.aggregate_array("region_cloud_fraction")
-    data = ee_module.Dictionary(props).getInfo()
-    millis = data["time"]
-    clouds = data.get("region_cloud")
+    want_clouds = strategy in ("least_cloudy", "gap_fill")
+    # gap_fill ranks clouds only for the periods it has to borrow, but the ranking
+    # data still comes from the SAME batched fetch — fetching it lazily per gap
+    # would be one round trip per empty period.
+    millis, clouds = _fetch_scene_arrays(pooled, span[0], span[1], want_clouds,
+                                         ee_module)
     if clouds is not None and len(clouds) != len(millis):
         # Fail loudly rather than rank scene i by scene j's cloud value: that would
         # put the wrong source year on the label, which is the one thing this mode
