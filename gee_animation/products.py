@@ -431,8 +431,16 @@ def _dw_reduce_period(collection, ee_module=ee):
 
 
 def _dw_landcover(sensor, image, ee_module=ee):
-    """A single image's land cover, for the paths that select one acquisition."""
-    return _dw_class_to_rgb(image.select("label"), ee_module).set(
+    """Per-image step: keep the class PROBABILITIES, defer the classification.
+
+    `collection.build` maps this over every scene *before* compositing, so
+    painting classes here would leave `reduce_period` holding finished RGB with
+    nothing left to average — the probabilities have to survive to the point
+    where a period is actually formed. All four period-forming sites go through
+    `compositing._period_image`, so every frame reaches `_dw_reduce_period`,
+    which is where argmax and painting belong.
+    """
+    return image.select(_DW_PROB_BANDS).set(
         "system:time_start", image.get("system:time_start"))
 
 

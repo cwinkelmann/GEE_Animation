@@ -52,6 +52,7 @@ PNG per month. Bands below are canonical roles (NIR/Red/Green/Blue/SWIR1/Thermal
 | LST   | Landsat | `ST_B × 0.00341802 + 149.0 − 273.15` °C — USGS C2 L2 ST band | `config/lst.example.yaml` (`wne_lst`) |
 | LST (SMW) | Landsat | `A·Tb/ε + B/ε + C` — Ermida (2020) Statistical Mono-Window from TOA brightness temp, ASTER-GED emissivity ε, NCEP water vapour | `config/lst_smw.example.yaml` (`wne_lst_smw`) |
 | LST-sharp | Landsat | `LST − 16·(NDVI − NDVI₁₀₀ₘ)` — NDVI-sharpened LST (approximation) | `config/lst_sharp.example.yaml` (`wne_lst_sharp`) |
+| Land cover | Dynamic World | 9-class map (Google/WRI, 10 m); categorical — swatch legend, no interpolation | `config/wne_landcover.example.yaml` (`wne_landcover`) |
 | NDVI  | MODIS | `(NIR − Red) / (NIR + Red)` on MOD09A1 (500 m) | `config/modis.example.yaml` (`wne_modis_ndvi`) |
 
 Two Landsat LST methods are available: `lst` = the USGS Collection-2 Level-2

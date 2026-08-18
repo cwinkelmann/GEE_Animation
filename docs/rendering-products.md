@@ -80,6 +80,7 @@ B8, Landsat NIR = SR_B5 for OLI). Reflectance scaling is per sensor: Sentinel-2
 | `lst_smw` | Landsat | 100 m | −10 … 40 | °C | cooler → warmer |
 | `lst_sharp` | Landsat | **30** m | −10 … 40 | °C | cooler → warmer |
 | `lst_modis` | MODIS (MOD11A1) | 1000 m | −10 … 40 | °C | cooler → warmer |
+| `landcover` | Dynamic World | 10 m | *(classes)* | — | 9 labelled swatches |
 
 ### Vegetation and water indices
 
@@ -112,6 +113,34 @@ and no meaningful `aoi_mean`. They are the only products allowed to set
 `mask_clouds: false`, which keeps real white clouds instead of grey cutouts —
 for a photo-like product a cloud looks like a cloud, whereas a palette index
 would colorize it into a plausible false value.
+
+### Land cover (categorical)
+
+`landcover` is the only **classified** product, and it behaves differently at
+three points in the pipeline:
+
+- **Compositing.** A period's image is the argmax of the *mean* class
+  probabilities, not a median. The median of `{water=0, trees=1, built=6}` is
+  "trees" — an artefact of the numbering, not a fact about the ground. Averaging
+  probabilities is Dynamic World's own recipe and uses every pass's confidence
+  rather than only its winner. The hook is `Index.reduce_period`, and every site
+  that forms a period image routes through `compositing._period_image`.
+- **Legend.** Labelled swatches (`render.add_class_legend`), not a ramp: a ramp
+  answers "how much", a class map answers "what". Classes absent from a frame
+  stay listed so the legend does not change length between frames.
+- **Interpolation is forbidden.** `validate()` rejects `render.interpolate > 0`,
+  because blending two class colours yields a colour no class owns and a viewer
+  would read the in-between frames as a category that does not exist. Use
+  `upscale: nearest` for the same reason.
+
+Dynamic World is Sentinel-2 derived, 10 m, from 2015-06-27, and already
+cloud-screened at source — unseen pixels arrive masked, so the sensor applies no
+cloud mask of its own and carries no per-scene cloud metadata. Quarterly cadence
+is the sensible default: monthly land cover flickers between classes on marginal
+pixels without anything having changed.
+
+Class colours are applied with `remap`, never a palette stretch, so each class
+lands on its exact Dynamic World colour.
 
 ### Thermal
 

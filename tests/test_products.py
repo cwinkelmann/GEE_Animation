@@ -573,3 +573,18 @@ def test_dynamicworld_period_reduction_argmaxes_mean_probabilities():
     assert steps["toArray"] and steps["argmax"] and steps["get"] == [0]
     assert painted["img"] == "CLASS_IMG"
     assert painted["set"] == ("system:time_start", "TS")
+
+
+def test_dw_per_image_step_keeps_probabilities_for_the_period_reducer():
+    # Regression from a live run: painting classes per image left reduce_period
+    # holding [R,G,B] and asking for band 'water' -> "did not match any bands".
+    # The per-image step must pass the probabilities through untouched.
+    seen = {}
+    class FakeImg:
+        def select(self, bands): seen["bands"] = bands; return self
+        def set(self, k, v): seen["set"] = (k, v); return "PROBS"
+        def get(self, k): return "TS"
+    out = P.INDICES["landcover"].compute(None, FakeImg(), ee_module=None)
+    assert out == "PROBS"
+    assert seen["bands"] == P._DW_PROB_BANDS      # not painted to R/G/B here
+    assert seen["set"] == ("system:time_start", "TS")
