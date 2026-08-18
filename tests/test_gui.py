@@ -571,7 +571,8 @@ def test_load_previous_run_enriches_status_from_metadata(tmp_path):
     d = tmp_path / "run"
     _make_run(d, "a", ["2022-01", "2022-02"])
     metadata.write_db(d / "metadata.db", {"name": "a", "sensor": "landsat", "index": "lst"},
-                      [("2022-01", 3, 0.1, 20.0), ("2022-02", 4, 0.0, 24.0)])
+                      [("2022-01", 3, 0.1, 20.0, None, None, None, None, None),
+                       ("2022-02", 4, 0.0, 24.0, None, None, None, None, None)])
     *_, status = gui.load_previous_run(str(d / "a.mp4"))
     assert "2 months 2022-01→2022-02 in metadata" in status
     assert "mean value 22.0" in status and "range 20.0…24.0" in status   # over aoi_mean

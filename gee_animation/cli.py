@@ -52,7 +52,8 @@ def run(config_path: str, deps=DEFAULT_DEPS, inventory: bool = False) -> list[Pa
         )
     frames = deps.anomaly(frames, cfg, frame_geom, region_geom, deps.build)
     if getattr(cfg, "metadata", False):
-        deps.metadata(frames, cfg, region_geom)   # <out_dir>/metadata.db
+        # frame_geom defines the "outside" comparison area (frame minus region)
+        deps.metadata(frames, cfg, region_geom, frame_geom=frame_geom)
     return deps.render(frames, cfg, geometry=frame_geom)
 
 
