@@ -461,6 +461,10 @@ def test_build_app_input_order_matches_handler_param_order():
         ("min_scenes", "Minimum satellite passes per frame"),
         ("raw_frames", "Also save raw map images"),
         ("geotiffs", "Also export GeoTIFFs"),
+        ("write_metadata", "Record per-frame statistics"),
+        ("fit_frame", "Fit the frame to the output shape"),
+        ("viz_min", "Colour scale min"), ("viz_max", "Colour scale max"),
+        ("missions", "Landsat missions"),
     ]
     app = gui.build_app()
     checked = []
@@ -705,3 +709,75 @@ def test_render_controls_defaults_are_the_safe_ones(tmp_path):
     assert cfg.interpolate == 0                 # no invented frames unless asked
     assert cfg.min_scenes == 1
     assert cfg.raw_frames is False and cfg.geotiffs is False
+
+
+def test_viz_override_and_partial_override(tmp_path):
+    # Blank boxes inherit the index default; either bound alone still overrides —
+    # the showcase configs pin tighter ranges than the registry defaults because
+    # -1..1 wastes half the ramp on a normalized-difference index.
+    aoi = _write_geojson(tmp_path)
+    captured = {}
+    _run(tmp_path, captured, index="ndmi", viz_min=-0.5, viz_max=0.8)
+    assert (captured["cfg"].viz_min, captured["cfg"].viz_max) == (-0.5, 0.8)
+    captured = {}
+    _run(tmp_path, captured, index="ndmi", viz_max=0.8)      # min left blank
+    assert (captured["cfg"].viz_min, captured["cfg"].viz_max) == (-1.0, 0.8)
+    captured = {}
+    _run(tmp_path, captured, index="ndmi")                    # both blank
+    assert (captured["cfg"].viz_min, captured["cfg"].viz_max) == (-1.0, 1.0)
+
+
+def test_viz_override_rejects_an_inverted_range(tmp_path):
+    with pytest.raises(ValueError, match="below"):
+        _run(tmp_path, {}, index="ndvi", viz_min=1.0, viz_max=0.0)
+
+
+def test_missions_and_metadata_reach_the_config(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, sensor="landsat", index="lst",
+         missions=["L5", "L7", "L8", "L9"], write_metadata=True)
+    assert captured["cfg"].missions == ["L5", "L7", "L8", "L9"]
+    assert captured["cfg"].metadata is True
+    captured = {}
+    _run(tmp_path, captured, sensor="landsat", index="lst")
+    assert captured["cfg"].missions is None       # empty = the L8/L9 default
+    assert captured["cfg"].metadata is False
+
+
+def test_fit_frame_grows_the_frame_to_the_canvas_aspect(tmp_path):
+    # The fake frame_bbox returns a square-ish [0,0,2,2]; at 16:9 with a two-line
+    # header that pillarboxes badly, so the short side must grow to ~2.373.
+    import math
+    captured = {}
+    _run(tmp_path, captured, preset="1080p", aspect="16:9", interpolate=10,
+         fit_frame=True)
+    minlon, minlat, maxlon, maxlat = captured["cfg"].frame_aoi["bbox"]
+    lat = (minlat + maxlat) / 2
+    w = (maxlon - minlon) * 111320 * math.cos(math.radians(lat))
+    h = (maxlat - minlat) * 110540
+    assert abs(w / h - 2.3733) < 0.01
+    # the original region is still inside the grown frame
+    assert minlon <= 0.0 and maxlon >= 2.0 and minlat <= 0.0 and maxlat >= 2.0
+    # and it is off by default
+    captured = {}
+    _run(tmp_path, captured, preset="1080p", aspect="16:9", interpolate=10)
+    assert captured["cfg"].frame_aoi["bbox"] == [0.0, 0.0, 2.0, 2.0]
+
+
+def test_fit_frame_is_a_noop_without_a_preset_or_fixed_aspect(tmp_path):
+    for kw in ({"preset": gui.NATIVE_PRESET, "aspect": "16:9"},
+               {"preset": "1080p", "aspect": "match"}):
+        captured = {}
+        _run(tmp_path, captured, fit_frame=True, **kw)
+        assert captured["cfg"].frame_aoi["bbox"] == [0.0, 0.0, 2.0, 2.0]
+
+
+def test_number_value_keeps_negative_and_zero_bounds():
+    # Regression: _blank() treats any non-positive number as unset (right for
+    # pooling years, wrong for a colour scale) — a viz min of -0.5 or 0 must survive.
+    assert gui._number_value(-0.5) == -0.5
+    assert gui._number_value(0) == 0.0
+    assert gui._number_value("-0.2") == -0.2
+    assert gui._number_value(None) is None
+    assert gui._number_value("") is None and gui._number_value("   ") is None
+    assert gui._number_value("not a number") is None

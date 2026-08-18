@@ -63,6 +63,25 @@ DEFAULT_CRS = CRS_AUTO
 INTERPOLATE_MODE_CHOICES = ["auto", "data", "crossfade"]
 
 
+def _number_value(value):
+    """A signed number from a Gradio Number box, or None when it is empty.
+
+    Deliberately NOT `_blank`: that treats any non-positive number as unset, which
+    is right for pooling years (no year is <= 0) and wrong here — a colour-scale
+    bound of -0.5 or 0 is a real value a user typed.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _crs_value(choice, custom):
     """Dropdown + custom textbox -> cfg.crs."""
     if choice == CRS_AUTO:
@@ -378,7 +397,9 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
              title=None, subtitle=None, credit=None, omit_credit=False,
              quality=None, show_clouds=False, crs_choice=DEFAULT_CRS,
              crs_custom=None, interpolate=0, interpolate_mode="auto",
-             raw_frames=False, geotiffs=False, min_scenes=1, deps):
+             raw_frames=False, geotiffs=False, min_scenes=1,
+             fit_frame=False, viz_min=None, viz_max=None, missions=None,
+             write_metadata=False, deps):
     """Authenticate, resolve the AOIs and build a validated RunConfig.
 
     Returns ``(cfg, frame_geom, region_geom, warnings)``. Shared by
@@ -391,13 +412,31 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
         raise ValueError("please upload an AOI (a GeoJSON file or a zipped shapefile)")
     get_product(sensor, index)   # validate the (sensor, index) pair up front
     region_aoi = _region_aoi_from_upload(aoi_path)
-    viz_min, viz_max, palette = INDICES[index].default_viz
+    d_min, d_max, palette = INDICES[index].default_viz
+    # Blank boxes inherit the index default; either one alone still overrides.
+    lo, hi = _number_value(viz_min), _number_value(viz_max)
+    viz_min = d_min if lo is None else lo
+    viz_max = d_max if hi is None else hi
+    if viz_min >= viz_max:
+        raise ValueError(
+            f"viz min ({viz_min}) must be below viz max ({viz_max})")
     palette = palette or []      # composites (rgb/cir) carry no palette
     out_dir = out_dir or tempfile.mkdtemp()
 
     deps.init(project)
     region_geom = deps.parse(region_aoi)
     frame_bbox = deps.frame_bbox(region_geom, float(buffer_m))
+    if fit_frame:
+        # Margins come out of the canvas HEIGHT, so imagery fills the width only at
+        # one aspect; a symmetric buffer around a square-ish region pillarboxes into
+        # black bars. Grow the short side to that aspect (never cropping the region).
+        two_line = bool(_text_value(subtitle)
+                        or _pool_years(pool_start_year, pool_end_year)
+                        or int(interpolate or 0))
+        target = render.required_frame_aspect(_preset_value(preset), aspect or None,
+                                              two_line)
+        if target:
+            frame_bbox = aoi.fit_bbox_to_aspect(frame_bbox, target)
     frame_aoi = {"bbox": frame_bbox}
     frame_geom = deps.parse(frame_aoi)
 
@@ -431,6 +470,8 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
         interpolate_mode=str(interpolate_mode or "auto"),
         raw_frames=bool(raw_frames), geotiffs=bool(geotiffs),
         min_scenes=max(1, int(min_scenes or 1)),
+        missions=(list(missions) or None) if missions else None,
+        metadata=bool(write_metadata),
         title=_text_value(title), subtitle=_text_value(subtitle),
         credit=_credit_value(credit, omit_credit),
         quality=_quality_value(quality),
@@ -448,7 +489,8 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
                   quality=None, show_clouds=False, crs_choice=DEFAULT_CRS,
                   crs_custom=None, interpolate=0, interpolate_mode="auto",
                   raw_frames=False, geotiffs=False, min_scenes=1,
-                  deps=DEFAULT_DEPS):
+                  fit_frame=False, viz_min=None, viz_max=None, missions=None,
+                  write_metadata=False, deps=DEFAULT_DEPS):
     """Write the per-scene usable/rejected inventory CSV. Returns ``(csv_path, status)``.
 
     Mirrors ``cli.run(..., inventory=True)``, including its refusal to combine the
@@ -476,7 +518,9 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
         quality=quality, show_clouds=show_clouds, crs_choice=crs_choice,
         crs_custom=crs_custom, interpolate=interpolate,
         interpolate_mode=interpolate_mode, raw_frames=raw_frames,
-        geotiffs=geotiffs, min_scenes=min_scenes, deps=deps)
+        geotiffs=geotiffs, min_scenes=min_scenes, fit_frame=fit_frame,
+        viz_min=viz_min, viz_max=viz_max, missions=missions,
+        write_metadata=write_metadata, deps=deps)
     path = deps.inventory(cfg, frame_geom, region_geom)
     status = (f"Wrote the scene inventory for {sensor} {index.upper()} "
               f"({cfg.start} → {cfg.end}, {cfg.cadence}) — one row per candidate scene "
@@ -499,7 +543,8 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
                   quality=None, show_clouds=False, crs_choice=DEFAULT_CRS,
                   crs_custom=None, interpolate=0, interpolate_mode="auto",
                   raw_frames=False, geotiffs=False, min_scenes=1,
-                  deps=DEFAULT_DEPS):
+                  fit_frame=False, viz_min=None, viz_max=None, missions=None,
+                  write_metadata=False, deps=DEFAULT_DEPS):
     """Build one animation from GUI inputs.
 
     Returns ``(mp4_path, gif_path, frame_pngs, frames_zip, status, series)`` where
@@ -522,7 +567,9 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
         quality=quality, show_clouds=show_clouds, crs_choice=crs_choice,
         crs_custom=crs_custom, interpolate=interpolate,
         interpolate_mode=interpolate_mode, raw_frames=raw_frames,
-        geotiffs=geotiffs, min_scenes=min_scenes, deps=deps)
+        geotiffs=geotiffs, min_scenes=min_scenes, fit_frame=fit_frame,
+        viz_min=viz_min, viz_max=viz_max, missions=missions,
+        write_metadata=write_metadata, deps=deps)
     out_dir = cfg.out_dir
 
     coll = deps.build(cfg, frame_geom, region_geom)
@@ -670,6 +717,33 @@ def build_app():
                              "the real values (not colours), at the product's "
                              "native resolution, in the chosen projection. "
                              "Written to <out>/geotiffs/<run>/.")
+                    write_metadata = gr.Checkbox(
+                        value=False, label="Record per-frame statistics",
+                        info="Writes out/metadata.db: mean and 10th/90th "
+                             "percentiles inside the AOI and outside it, plus "
+                             "the pass count and clear fraction — the table to "
+                             "plot a time series from.")
+                with gr.Accordion("🔬 Advanced (exact reproduction)", open=False):
+                    fit_frame = gr.Checkbox(
+                        value=False, label="Fit the frame to the output shape",
+                        info="Grows the buffered frame to the aspect that fills "
+                             "the canvas, so a square-ish AOI at 16:9 does not "
+                             "render with black bars down the sides. The region "
+                             "is never cropped.")
+                    with gr.Row():
+                        viz_min = gr.Number(
+                            value=None, label="Colour scale min",
+                            info="Empty = the index default. The defaults are "
+                                 "deliberately wide; pinning the range is what "
+                                 "makes a ramp use its full width.")
+                        viz_max = gr.Number(value=None, label="Colour scale max")
+                    missions = gr.CheckboxGroup(
+                        ["L4", "L5", "L7", "L8", "L9"], value=[],
+                        label="Landsat missions (empty = default)",
+                        info="Thermal products default to L8/L9 — Landsat 7's "
+                             "SLC-off stripes and the coarser TM/ETM+ thermal "
+                             "band otherwise streak a thin median. Tick more to "
+                             "reach back to 1984, accepting that trade.")
                 with gr.Accordion("🖋️ Presentation (title, subtitle, credit)", open=False):
                     title = gr.Textbox(
                         label="Title", value="",
@@ -742,7 +816,8 @@ def build_app():
                   title, subtitle, credit, omit_credit,
                   pool_start, pool_end, pool_strategy, project, show_clouds,
                   crs_choice, crs_custom, interpolate, interpolate_mode,
-                  min_scenes, raw_frames, geotiffs]
+                  min_scenes, raw_frames, geotiffs, write_metadata, fit_frame,
+                  viz_min, viz_max, missions]
         outputs = [video, gif, gallery, frames_zip, inventory_csv, status, chart]
 
         def _error(exc):
@@ -753,7 +828,8 @@ def build_app():
                 title, subtitle, credit, omit_credit,
                 pool_start, pool_end, pool_strategy, project, show_clouds,
                 crs_choice, crs_custom, interpolate, interpolate_mode,
-                min_scenes, raw_frames, geotiffs, progress=gr.Progress()):
+                min_scenes, raw_frames, geotiffs, write_metadata, fit_frame,
+                viz_min, viz_max, missions, progress=gr.Progress()):
             import pandas as pd
             try:
                 progress(0.05, desc="Filtering imagery and building frames…")
@@ -769,7 +845,9 @@ def build_app():
                     show_clouds=show_clouds, crs_choice=crs_choice,
                     crs_custom=crs_custom, interpolate=interpolate,
                     interpolate_mode=interpolate_mode, min_scenes=min_scenes,
-                    raw_frames=raw_frames, geotiffs=geotiffs)
+                    raw_frames=raw_frames, geotiffs=geotiffs,
+                    write_metadata=write_metadata, fit_frame=fit_frame,
+                    viz_min=viz_min, viz_max=viz_max, missions=missions)
                 rows = []
                 for period, inside, outside in series:
                     if inside is not None:
@@ -789,7 +867,8 @@ def build_app():
                        title, subtitle, credit, omit_credit,
                        pool_start, pool_end, pool_strategy, project, show_clouds,
                        crs_choice, crs_custom, interpolate, interpolate_mode,
-                       min_scenes, raw_frames, geotiffs, progress=gr.Progress()):
+                       min_scenes, raw_frames, geotiffs, write_metadata, fit_frame,
+                       viz_min, viz_max, missions, progress=gr.Progress()):
             try:
                 progress(0.05, desc="Listing candidate scenes…")
                 csv_path, msg = run_inventory(
@@ -804,7 +883,9 @@ def build_app():
                     show_clouds=show_clouds, crs_choice=crs_choice,
                     crs_custom=crs_custom, interpolate=interpolate,
                     interpolate_mode=interpolate_mode, min_scenes=min_scenes,
-                    raw_frames=raw_frames, geotiffs=geotiffs)
+                    raw_frames=raw_frames, geotiffs=geotiffs,
+                    write_metadata=write_metadata, fit_frame=fit_frame,
+                    viz_min=viz_min, viz_max=viz_max, missions=missions)
                 progress(1.0, desc="Done")
                 return None, None, None, None, csv_path, msg, None
             except Exception as exc:   # surface a friendly message in the UI

@@ -2144,3 +2144,30 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     tif_paths = (_export_geotiffs(frames, cfg, geometry)
                  if getattr(cfg, "geotiffs", False) else [])
     return paths + png_paths + tif_paths
+
+
+def required_frame_aspect(preset, aspect, two_line_header: bool = True) -> float | None:
+    """Imagery aspect (w/h, in metres) that exactly fills a preset's canvas width.
+
+    The label margins come out of the canvas HEIGHT, so imagery only spans the full
+    width at one specific aspect — a square-ish AOI rendered at ``aspect: "16:9"``
+    pillarboxes into black bars however large the preset is. At 1080p with a
+    two-line header that aspect is ~2.373, and at 4k/720p it is within a thousandth
+    of the same number, because the margins scale with the canvas.
+
+    `two_line_header` is true whenever header line 2 exists at all: a subtitle is
+    set, the run pools years, the run interpolates, or the product is a titled
+    composite. Returns None when there is no preset (nothing to fill).
+    """
+    long_edge = PRESETS.get(str(preset)) if preset else None
+    if not long_edge:
+        return None
+    ratio = ASPECTS.get(str(aspect))
+    if not ratio:
+        return None
+    canvas_w, canvas_h = ((long_edge, round(long_edge / ratio)) if ratio >= 1
+                          else (round(long_edge * ratio), long_edge))
+    ph = canvas_h
+    while ph > 1 and ph + sum(_margins(ph, two_line_header)) > canvas_h:
+        ph -= 1
+    return canvas_w / ph
