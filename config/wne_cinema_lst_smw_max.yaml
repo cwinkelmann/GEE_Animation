@@ -1,0 +1,64 @@
+# Maximum-span Landsat surface temperature over Grumsin: the whole usable archive.
+#
+# SCIENTIFIC RUN, not a showcase loop. Two deliberate differences from the
+# wne_cinema_* set:
+#
+#   * NO cross-year pooling. gap_fill would borrow another year's imagery for an
+#     empty month, which is fine for a pretty loop and fatal for a temperature
+#     time series — every frame here is real data for its own period, so the
+#     metadata table can be plotted as a measurement.
+#   * metadata: true. Each frame's mean/p10/p90 inside the reserve AND over the
+#     frame minus the reserve are written to out/metadata.db (see
+#     metadata.write_frame_metadata), which is the point of the run.
+#
+# Missions: L5/L7/L8/L9 — Landsat 4's mission was short and sparse. Caveats that
+# belong on any plot made from this: TM thermal is 120 m and ETM+ 60 m (both
+# resampled to 30 m), TIRS is 100 m; Landsat 7 after 2003-05 has SLC-off stripes,
+# which leave wedge-shaped no-data but do not bias the pixels that remain; and
+# the 2012-2013 window is thin (L5 retired 2011-11, L8 began 2013-04), so expect
+# a gap there rather than reading it as a data anomaly.
+name: wne_cinema_lst_smw_max
+project: hnee-331218
+
+title: Grumsin Beech Forest
+subtitle: UNESCO World Heritage site, Brandenburg, Germany
+
+aoi:
+  frame: { bbox: [13.7311, 52.9440, 14.0623, 53.0280] }  # 22.2 x 9.35 km, fills 16:9
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 40      # looser than the showcase runs: a rejected
+                                    # month is a hole in the series, and the
+                                    # per-frame cloud fraction is recorded anyway
+
+start: "1984-01-01"
+end: "2026-08-01"
+
+sensor: landsat
+index: lst_smw
+cadence: monthly
+max_cloud_percent: 80
+missions: [L5, L7, L8, L9]
+min_scenes: 1
+draw_region: true
+
+metadata: true                      # -> out/metadata.db (the deliverable)
+
+viz:
+  min: -10.0
+  max: 46.0                         # wider than the showcase runs: 42 years
+                                    # includes colder winters than 2018-2026
+
+render:
+  fps: 4                            # ~500 observations; cinema pacing would run
+  interpolate: 5                    # ~40 min, this lands nearer 12 min
+  interpolate_mode: auto
+  scale: 30
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: "16:9"
+  upscale: lanczos
+  region_line_width: 5
+  quality: 8
+  raw_frames: true
+  geotiffs: true
