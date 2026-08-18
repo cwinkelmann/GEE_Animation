@@ -564,3 +564,46 @@ def test_fetch_scene_arrays_does_not_split_on_unrelated_errors():
         _fetch_scene_arrays(FakeColl(), "2018-01-01", "2027-01-01",
                             want_clouds=False, ee_module=FakeEE)
     assert len(calls) == 1
+
+
+def test_period_image_uses_the_index_reducer_when_it_has_one():
+    # A median of class LABELS is an artefact of the numbering ({water=0, trees=1,
+    # built=6} -> "trees"), so a categorical index owns its own reduction. Every
+    # site that forms a period image must honour that hook.
+    from gee_animation.compositing import _period_image, _has_reducer
+    class FakeColl:
+        def median(self): return "MEDIAN"
+    cfg = types.SimpleNamespace(index="ndvi")
+    assert _period_image(FakeColl(), cfg) == "MEDIAN"     # continuous -> median
+    assert not _has_reducer(cfg)
+    cfg = types.SimpleNamespace(index="landcover")
+    assert _has_reducer(cfg)
+    called = {}
+    import gee_animation.products as P
+    orig = P.INDICES["landcover"].reduce_period
+    def _fake_reduce(coll):
+        called["coll"] = coll
+        return "CLASSIFIED"
+    object.__setattr__(P.INDICES["landcover"], "reduce_period", _fake_reduce)
+    try:
+        assert _period_image(FakeColl(), cfg) == "CLASSIFIED"
+    finally:
+        object.__setattr__(P.INDICES["landcover"], "reduce_period", orig)
+    assert "coll" in called
+
+
+def test_pooled_least_cloudy_uses_the_index_reducer_instead_of_mosaic():
+    # The one non-median site: least_cloudy mosaics a single instant's tiles. A
+    # categorical index must still reduce its own way there, or the frame would be
+    # raw probability bands rather than painted classes.
+    import gee_animation.products as P
+    coll = PooledCollection([("2021-05-14", 0.10, "A"), ("2022-05-11", 0.80, "B")])
+    cfg = _pool_cfg(index="landcover")
+    orig = P.INDICES["landcover"].reduce_period
+    object.__setattr__(P.INDICES["landcover"], "reduce_period",
+                       lambda c: FakeImage("CLASSIFIED"))
+    try:
+        frames = _pooled(coll, cfg)
+    finally:
+        object.__setattr__(P.INDICES["landcover"], "reduce_period", orig)
+    assert frames[0].image.tag == "CLASSIFIED"     # not "mosaic:A"

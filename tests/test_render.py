@@ -2987,3 +2987,48 @@ def test_geotiff_fit_scale_coarsens_only_when_over_the_cap():
     assert (w / out) * (h / out) * 3 * 4 <= R.EE_SYNC_DOWNLOAD_MAX_BYTES + 1
     # no bounds -> unchanged, never a crash
     assert R._geotiff_fit_scale(cfg, None, 3, 10.0) == 10.0
+
+
+def _classified_cfg(tmp_path, name="lc"):
+    cfg = _cfg(tmp_path, name=name)
+    cfg.sensor, cfg.index = "dynamicworld", "landcover"
+    cfg.viz_min, cfg.viz_max, cfg.palette = 0.0, 255.0, []
+    return cfg
+
+
+def test_class_legend_draws_a_swatch_per_class_plus_no_data(tmp_path):
+    import gee_animation.render as R
+    from gee_animation.products import INDICES
+    cfg = _classified_cfg(tmp_path)
+    base = np.zeros((400, 700, 3), dtype=np.uint8)
+    out = R.add_class_legend(base.copy(), cfg)
+    assert out.shape == base.shape and out.dtype == base.dtype
+    assert not np.array_equal(out, base)          # something was drawn
+    # every class colour appears somewhere in the legend area
+    painted = {tuple(px) for row in out[:, :120] for px in row}
+    for _v, _name, hx in INDICES["landcover"].classes:
+        rgb = tuple(int(hx.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+        assert rgb in painted, f"class colour {hx} missing from the legend"
+    # and the no-data grey is listed too, so an absent-data pixel is explained
+    assert tuple(R.NODATA_RGB) in painted
+
+
+def test_class_legend_is_a_noop_for_a_continuous_index(tmp_path):
+    import gee_animation.render as R
+    cfg = _cfg(tmp_path)                 # plain ndvi: no classes
+    base = np.zeros((200, 400, 3), dtype=np.uint8)
+    assert np.array_equal(R.add_class_legend(base.copy(), cfg), base)
+
+
+def test_render_gives_a_classified_product_swatches_not_a_colorbar(tmp_path, monkeypatch):
+    import gee_animation.render as R
+    seen = []
+    monkeypatch.setattr(R, "add_class_legend",
+                        lambda rgb, *a, **k: seen.append("classes") or rgb)
+    monkeypatch.setattr(R, "add_colorbar",
+                        lambda rgb, *a, **k: seen.append("ramp") or rgb)
+    cfg = _classified_cfg(tmp_path)
+    def fetch(image, cfg_, geometry=None):
+        return np.zeros((32, 32, 3)), np.ones((32, 32), bool)   # composite shape
+    render([Frame("2022-06", object())], cfg, fetch=fetch, geometry=None)
+    assert seen == ["classes"]            # never the ramp

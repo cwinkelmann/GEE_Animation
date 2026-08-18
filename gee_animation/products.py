@@ -332,6 +332,17 @@ class Index:
     # uses it instead of the sensor's default collection — for indices that need a
     # bespoke, satellite-aware source (e.g. lst_smw joins the TOA thermal band).
     build_collection: Callable = None
+    # Optional (collection, ee_module) -> Image, used INSTEAD of `.median()` wherever
+    # compositing forms one period's image. A median is meaningless for a categorical
+    # product — the median of {water=0, trees=1, built=6} is "trees", an artefact of
+    # the numbering — so `landcover` averages class PROBABILITIES and takes the
+    # argmax instead.
+    reduce_period: Callable = None
+    # Categorical products only: ((value, label, hex), ...) in legend order. Non-empty
+    # marks the product as classified, which drives the swatch legend instead of a
+    # colour ramp and forbids interpolation (blending two class colours invents a
+    # class that does not exist).
+    classes: tuple = ()
     # Method-doc metadata: the bands used and the formula. Deliberately NOT drawn on
     # the frame any more — an analyst-persona review found the scaling coefficients
     # ("ST_B * 0.00341802 + 149.0 - 273.15") read as debug output and cost the frame
@@ -356,6 +367,75 @@ class Index:
     high_label: str = ""
 
 
+# --- Dynamic World (near-real-time 10 m land cover from Sentinel-2) ----------
+# Google/WRI, 2015-06-27 -> present. Every image carries a `label` band (the
+# argmax class) plus one probability band per class. It is already cloud-screened
+# at source — pixels Sentinel-2 could not see are simply masked — so the sensor
+# needs no cloud mask of its own.
+_DW_ID = "GOOGLE/DYNAMICWORLD/V1"
+_DW_CLASSES = (
+    (0, "Water", "#419BDF"),
+    (1, "Trees", "#397D49"),
+    (2, "Grass", "#88B053"),
+    (3, "Flooded vegetation", "#7A87C6"),
+    (4, "Crops", "#E49635"),
+    (5, "Shrub and scrub", "#DFC35A"),
+    (6, "Built", "#C4281B"),
+    (7, "Bare", "#A59B8F"),
+    (8, "Snow and ice", "#B39FE1"),
+)
+_DW_PROB_BANDS = ["water", "trees", "grass", "flooded_vegetation", "crops",
+                  "shrub_and_scrub", "built", "bare", "snow_and_ice"]
+
+
+def _dw_mask_clouds(image, ee_module=ee):
+    return image        # already cloud-screened at source
+
+
+def _dw_cloud_band(image, ee_module=ee):
+    # No label == Sentinel-2 saw nothing usable, which is exactly "cloud" here.
+    return image.select("label").mask().Not().rename("cloud")
+
+
+def _hex_to_rgb(hx):
+    hx = hx.lstrip("#")
+    return [int(hx[i:i + 2], 16) for i in (0, 2, 4)]
+
+
+def _dw_class_to_rgb(class_img, ee_module=ee):
+    """Paint a class-index image with the Dynamic World palette -> R/G/B bands.
+
+    `remap`, not a palette stretch: class values are labels, not magnitudes, so
+    every class must land on its exact colour with nothing interpolated between.
+    """
+    values = [v for v, _n, _h in _DW_CLASSES]
+    channels = list(zip(*[_hex_to_rgb(h) for _v, _n, h in _DW_CLASSES]))
+    bands = [class_img.remap(values, list(ch)).rename(name)
+             for ch, name in zip(channels, ("R", "G", "B"))]
+    return ee_module.Image.cat(bands).toUint8()
+
+
+def _dw_reduce_period(collection, ee_module=ee):
+    """One period's land cover: mean class probability, then argmax.
+
+    Averaging probabilities and taking the argmax is Dynamic World's own
+    recommended compositing recipe. It beats a mode of the labels because it uses
+    every scene's full confidence rather than only its winner, so a pixel that was
+    marginally "grass" in three passes and confidently "crops" in one resolves the
+    way the evidence points.
+    """
+    probs = collection.select(_DW_PROB_BANDS).mean()
+    top = probs.toArray().arrayArgmax().arrayGet([0])
+    return _dw_class_to_rgb(top, ee_module).set(
+        "system:time_start", collection.first().get("system:time_start"))
+
+
+def _dw_landcover(sensor, image, ee_module=ee):
+    """A single image's land cover, for the paths that select one acquisition."""
+    return _dw_class_to_rgb(image.select("label"), ee_module).set(
+        "system:time_start", image.get("system:time_start"))
+
+
 SENSORS = {
     "sentinel2": Sensor("sentinel2", _merged("COPERNICUS/S2_SR_HARMONIZED"),
                         "CLOUDY_PIXEL_PERCENTAGE",
@@ -365,6 +445,8 @@ SENSORS = {
                       _landsat_mask_clouds, _landsat_cloud_band, _landsat_reflectance),
     "modis": Sensor("modis", _merged("MODIS/061/MOD09A1"), None,
                     _modis_mask_clouds, _modis_cloud_band, _modis_reflectance),
+    "dynamicworld": Sensor("dynamicworld", _merged(_DW_ID), None,
+                           _dw_mask_clouds, _dw_cloud_band, _no_reflectance),
     "modis_lst": Sensor("modis_lst", _merged(_MOD11_TERRA), None,
                         _modis_lst_mask_clouds, _modis_lst_cloud_band, _no_reflectance),
 }
@@ -377,7 +459,8 @@ _REFL = frozenset({"sentinel2", "landsat", "modis"})
 THERMAL_INDICES = frozenset({"lst", "lst_smw", "lst_sharp", "lst_modis"})
 
 # Coarsest-relevant native ground sampling (metres) per sensor, with overrides.
-_SENSOR_NATIVE_M = {"sentinel2": 10, "landsat": 30, "modis": 500, "modis_lst": 1000}
+_SENSOR_NATIVE_M = {"sentinel2": 10, "landsat": 30, "modis": 500, "modis_lst": 1000,
+                    "dynamicworld": 10}   # Sentinel-2 derived, so Sentinel-2's grid
 _S2_20M_INDICES = frozenset({"ndmi", "ndre"})   # ndmi: 20 m SWIR; ndre: 20 m red edge (B5)
 
 
@@ -467,6 +550,15 @@ INDICES = {
                   formula="(NIR - RedEdge) / (NIR + RedEdge)",
                   display_name="Vegetation red-edge index (NDRE)",
                   low_label="bare/stressed", high_label="dense vegetation"),
+    # Categorical: composite=True because the pipeline is handed finished colour
+    # (the class palette applied server-side), never a value to stretch through a
+    # ramp. viz 0..255 is the byte range of that colour, not a data range.
+    "landcover": Index("landcover", frozenset({"dynamicworld"}),
+                       (0.0, 255.0, None), _dw_landcover,
+                       reduce_period=_dw_reduce_period, classes=_DW_CLASSES,
+                       composite=True,
+                       bands="Dynamic World label + 9 class probabilities",
+                       display_name="Land cover (Dynamic World)"),
     "rgb": Index("rgb", _REFL, (0.0, 0.3, None), _rgb,
                  bands="Red, Green, Blue", composite=True,
                  display_name="True colour"),

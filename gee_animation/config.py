@@ -355,6 +355,14 @@ class RunConfig:
             raise ConfigError(
                 f"unknown render.interpolate_mode {self.interpolate_mode!r}; "
                 f"supported: {sorted(INTERPOLATE_MODES)}")
+        if INDICES[self.index].classes and self.interpolate:
+            # Blending two class colours produces a colour no class owns — a
+            # viewer reads the in-between frames as a category that does not
+            # exist. Categorical products step; they do not fade.
+            raise ConfigError(
+                f"render.interpolate must be 0 for {self.index!r}: it is a "
+                f"classified product, and blending class colours would invent "
+                f"categories that do not exist")
         if self.interpolate_mode == "data" and INDICES[self.index].composite:
             raise ConfigError(
                 f"render.interpolate_mode: data needs a single-band index; "

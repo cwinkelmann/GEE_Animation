@@ -7,9 +7,10 @@ _REFL_INDICES = frozenset({"sentinel2", "landsat", "modis"})
 
 
 def test_registry_contents():
-    assert set(P.SENSORS) == {"sentinel2", "landsat", "modis", "modis_lst"}
+    assert set(P.SENSORS) == {"sentinel2", "landsat", "modis", "modis_lst",
+                              "dynamicworld"}
     assert set(P.INDICES) == {"ndvi", "lst", "lst_smw", "evi", "ndwi", "ndmi", "ndre",
-                              "rgb", "cir", "lst_sharp", "lst_modis"}
+                              "rgb", "cir", "lst_sharp", "lst_modis", "landcover"}
     assert P.INDICES["lst_modis"].sensors == frozenset({"modis_lst"})   # MODIS-only LST
     assert P.SENSORS["modis_lst"].scene_cloud_property is None          # no per-scene cloud
     assert "lst_modis" in P.THERMAL_INDICES
@@ -504,3 +505,71 @@ def test_every_index_has_a_plain_language_display_name():
     assert P.INDICES["ndvi"].display_name == "Vegetation greenness (NDVI)"
     assert P.INDICES["rgb"].display_name == "True colour"
     assert P.INDICES["lst_modis"].display_name == "Land surface temperature (MODIS)"
+
+
+def test_landcover_is_categorical_and_dynamicworld_only():
+    spec = P.INDICES["landcover"]
+    assert spec.sensors == frozenset({"dynamicworld"})
+    assert spec.composite            # arrives as finished colour, not a value to stretch
+    assert spec.classes and len(spec.classes) == 9
+    values = [v for v, _n, _h in spec.classes]
+    assert values == list(range(9))          # Dynamic World's own class numbering
+    assert P.native_scale_m("dynamicworld", "landcover") == 10   # Sentinel-2 grid
+    # it owns its period reduction: a median of class LABELS would be an artefact
+    # of the numbering, not a fact about the ground
+    assert callable(spec.reduce_period)
+    assert P.SENSORS["dynamicworld"].scene_cloud_property is None
+
+
+def test_dynamicworld_class_colours_are_remapped_not_interpolated():
+    # Every class must land on its exact palette colour; a ramp would invent
+    # in-between colours no class owns.
+    calls = {}
+    class FakeClassImg:
+        def remap(self, frm, to):
+            calls.setdefault("remaps", []).append((tuple(frm), tuple(to)))
+            return self
+        def rename(self, n): return f"band:{n}"
+    class FakeCat:
+        def toUint8(self): calls["uint8"] = True; return "RGB_IMAGE"
+    ee = types.SimpleNamespace(
+        Image=types.SimpleNamespace(cat=lambda bands: (calls.update(bands=bands)
+                                                       or FakeCat())))
+    out = P._dw_class_to_rgb(FakeClassImg(), ee_module=ee)
+    assert out == "RGB_IMAGE" and calls["uint8"]
+    assert calls["bands"] == ["band:R", "band:G", "band:B"]
+    # three remaps (one per channel), each over all nine class values
+    assert len(calls["remaps"]) == 3
+    for frm, to in calls["remaps"]:
+        assert frm == tuple(range(9)) and len(to) == 9
+    # the red channel of class 0 (Water #419BDF) is 0x41
+    assert calls["remaps"][0][1][0] == 0x41
+
+
+def test_dynamicworld_period_reduction_argmaxes_mean_probabilities():
+    # Dynamic World's own recipe: average the class probabilities over the period,
+    # then take the argmax — uses every pass's confidence, not just its winner.
+    steps = {}
+    class FakeArray:
+        def arrayArgmax(self): steps["argmax"] = True; return self
+        def arrayGet(self, idx): steps["get"] = idx; return "CLASS_IMG"
+    class FakeMean:
+        def toArray(self): steps["toArray"] = True; return FakeArray()
+    class FakeColl:
+        def select(self, bands): steps["bands"] = bands; return self
+        def mean(self): steps["mean"] = True; return FakeMean()
+        def first(self): return types.SimpleNamespace(get=lambda k: "TS")
+    painted = {}
+    def fake_paint(img, ee_module=None):
+        painted["img"] = img
+        return types.SimpleNamespace(set=lambda k, v: painted.setdefault("set", (k, v)))
+    orig = P._dw_class_to_rgb
+    P._dw_class_to_rgb = fake_paint
+    try:
+        P._dw_reduce_period(FakeColl(), ee_module=None)
+    finally:
+        P._dw_class_to_rgb = orig
+    assert steps["bands"] == P._DW_PROB_BANDS and steps["mean"]
+    assert steps["toArray"] and steps["argmax"] and steps["get"] == [0]
+    assert painted["img"] == "CLASS_IMG"
+    assert painted["set"] == ("system:time_start", "TS")

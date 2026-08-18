@@ -467,6 +467,60 @@ def _resolve_droppables(ticks, bounds, gap):
     return show
 
 
+def add_class_legend(rgb: np.ndarray, cfg, y_offset: int = 4,
+                     x_offset: int = 0, region_w: int | None = None) -> np.ndarray:
+    """Draw a swatch legend for a CATEGORICAL product (see products.Index.classes).
+
+    A colour ramp answers "how much"; a class map answers "what", so it needs one
+    labelled swatch per class rather than a gradient with ticks. Same panel, font
+    and placement rules as `add_colorbar` — including the imagery-relative origin,
+    since the legend is an overlay on the picture and the picture is inset by the
+    side letterbox.
+
+    Classes with no pixels in the frame are still listed: a legend that changed
+    length from frame to frame would flicker, and "this category is absent here"
+    is itself information.
+    """
+    meta = _index_meta(cfg)
+    classes = tuple(getattr(meta, "classes", ()) or ())
+    if not classes:
+        return rgb
+
+    img = Image.fromarray(rgb.astype(np.uint8), "RGB")
+    draw = ImageDraw.Draw(img, "RGBA")
+    _canvas_w, h = img.size
+    w = int(region_w) if region_w else _canvas_w
+    font, lw = _annot_scale(h)
+    x0 = x_offset + max(4, w // 200)
+    line_h = draw.textbbox((0, 0), "Ag", font=font)[3]
+    row_h = line_h + max(2, lw)
+    swatch = line_h                      # square, matching the text's cap height
+    gap = max(3, lw * 2)
+    pad = max(3, lw * 2)
+
+    heading = _index_display_name(cfg)
+    rows = [(name, hx) for _v, name, hx in classes] + [("no data", None)]
+    text_x = x0 + swatch + gap
+    widest = max(draw.textbbox((0, 0), name, font=font)[2] for name, _ in rows)
+    widest = max(widest, draw.textbbox((0, 0), heading, font=font)[2] - swatch - gap)
+
+    top = y_offset
+    bottom = top + line_h + max(2, lw) + row_h * len(rows)
+    draw.rectangle([x0 - pad, top - min(pad, 4), text_x + widest + pad, bottom + pad],
+                   fill=(0, 0, 0, 120))
+    draw.text((x0, top), heading, fill=(255, 255, 255, 255), font=font)
+
+    y = top + line_h + max(2, lw)
+    for name, hx in rows:
+        fill = NODATA_RGB if hx is None else tuple(
+            int(hx.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+        draw.rectangle([x0, y, x0 + swatch, y + swatch], fill=(*fill, 255),
+                       outline=(255, 255, 255, 160), width=1)
+        draw.text((text_x, y), name, fill=(255, 255, 255, 255), font=font)
+        y += row_h
+    return np.asarray(img)
+
+
 def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
                  x_offset: int = 0, region_w: int | None = None) -> np.ndarray:
     """Draw the index legend into the top-left of the imagery.
@@ -2117,7 +2171,13 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
             # `label` is the clean period key for an observed frame, None for a
             # generated one (see `_imagery_sequence`) — exactly `is_real`.
             rgb = annotate(rgb, _drawable(text), credit_text, is_real=(label is not None))
-            if not composite:                            # colorbar needs a palette
+            if _index_meta(cfg) and getattr(_index_meta(cfg), "classes", ()):
+                # Categorical: swatches, not a ramp. Composites normally get no
+                # legend at all, but a class map is unreadable without one.
+                rgb = add_class_legend(rgb, cfg, y_offset=top_h + 4,
+                                       x_offset=(canvas_w - imagery_w) // 2,
+                                       region_w=imagery_w)
+            elif not composite:                          # colorbar needs a palette
                 # Just inside the imagery — which is inset by the side bars added above,
                 # hence the explicit imagery origin/width (see `add_colorbar`).
                 rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4,

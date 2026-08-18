@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone
 import ee
 
 from .config import pool_span
+from .products import INDICES
 
 log = logging.getLogger(__name__)
 
@@ -182,6 +183,26 @@ def _fetch_scene_arrays(pooled, start: str, end: str, want_clouds: bool,
     return data["time"], data.get("region_cloud")
 
 
+def _has_reducer(cfg) -> bool:
+    """True when the configured index owns its own period reduction."""
+    spec = INDICES.get(getattr(cfg, "index", None))
+    return bool(spec and getattr(spec, "reduce_period", None))
+
+
+def _period_image(coll, cfg):
+    """One period's image from `coll` — the index's own reducer, or a median.
+
+    Every site that forms a period image goes through here. A median is the right
+    default for continuous data and meaningless for a categorical product, where
+    the numbers are labels: the median of {water=0, trees=1, built=6} is "trees",
+    an artefact of the numbering rather than a fact about the ground. An index may
+    therefore supply `reduce_period` (see products.Index) and own the reduction.
+    """
+    spec = INDICES.get(getattr(cfg, "index", None))
+    reducer = getattr(spec, "reduce_period", None) if spec else None
+    return reducer(coll) if reducer else coll.median()
+
+
 def _cloud_rank(clouds, i) -> float:
     """Sort key for the least-cloudy pick. A missing region_cloud_fraction (scene
     fully masked over the region, so reduceRegion came back empty) sorts last —
@@ -302,7 +323,8 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
                 # source stays None — this is genuine data for the period, and marking
                 # it borrowed would misreport it just as badly as hiding a borrow.
                 frames.append(Frame(label=label,
-                                    image=pooled.filterDate(p_start, p_end).median(),
+                                    image=_period_image(
+                                        pooled.filterDate(p_start, p_end), cfg),
                                     n_scenes=len(nominal), source=None))
                 continue
             if nominal:
@@ -318,12 +340,11 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
         if strategy == "median":
             # Quarters never wrap the year (Q4 = Oct–Dec), so a plain month range
             # mirrors the client-side `d.month in months` check exactly.
-            image = (pooled
-                     .filter(ee_module.Filter.calendarRange(
-                         months[0], months[-1], "month"))
-                     .filter(ee_module.Filter.calendarRange(
-                         first_day, last_day, "day_of_month"))
-                     .median())
+            image = _period_image(
+                pooled
+                .filter(ee_module.Filter.calendarRange(months[0], months[-1], "month"))
+                .filter(ee_module.Filter.calendarRange(
+                    first_day, last_day, "day_of_month")), cfg)
             source, n_scenes = f"{y0}–{y1}", len(candidates)
         else:
             best = min(candidates, key=lambda i: _cloud_rank(clouds, i))
@@ -333,7 +354,12 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
             # AOI spanning a tile boundary would come back part no-data from a single
             # granule. Mosaicking that one instant's tiles restores full coverage and
             # still averages nothing across time.
-            image = pooled.filterDate(millis[best], millis[best] + 1).mosaic()
+            chosen = pooled.filterDate(millis[best], millis[best] + 1)
+            # `.mosaic()`, not `.first()`: S2/Landsat scenes are per-tile, so an
+            # AOI spanning a tile boundary would come back part no-data from a
+            # single granule. A categorical index reduces its own way instead.
+            image = (_period_image(chosen, cfg)
+                     if _has_reducer(cfg) else chosen.mosaic())
             source, n_scenes = dates[best].year, 1
         # Mandatory provenance: the source is carried on the frame (not baked into
         # `label`, which stays a clean period key used as filename/DB key); `render`
@@ -371,7 +397,9 @@ def composite(collection, cfg) -> list[Frame]:
             if n > 0:
                 log.info("skipping %s: %d scene(s) below min_scenes=%d", label, n, min_scenes)
             continue
-        frames.append(Frame(label=label, image=collection.filterDate(p_start, p_end).median(),
+        frames.append(Frame(label=label,
+                            image=_period_image(
+                                collection.filterDate(p_start, p_end), cfg),
                             n_scenes=n))
     return frames
 
