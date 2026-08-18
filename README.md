@@ -239,6 +239,10 @@ fixed `viz` range (or per-index default) so colour is comparable across frames, 
 the month label and a shared index colorbar. Cloud/no-data pixels are rendered in
 a neutral grey rather than an index colour.
 
+**How each product is computed** — formulas, per-sensor cloud screening, native
+resolutions, viz defaults, the per-frame statistics table and what a re-render
+costs: [`docs/rendering-products.md`](docs/rendering-products.md).
+
 **Adding new sensors/indices:** register them in `gee_animation/products.py` (define a `Sensor` subclass and an `Index` function, then add both to the registry).
 
 ## Notes / limitations (v1)
