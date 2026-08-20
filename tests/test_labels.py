@@ -85,3 +85,14 @@ def test_generated_text_quarterly_shares_or_splits_the_year_like_months():
             == "between January–March and April–June 2022 · 36%")
     assert (generated_text("2022-Q4", "2023-Q1", 50)
             == "between October–December 2022 and January–March 2023 · 50%")
+
+
+def test_period_text_tolerates_debug_scene_decoration():
+    # debug.py labels a single scene "<date>_cloudNNpct" so the exported filename
+    # carries its cloud fraction; that decoration must not break the overlay text.
+    assert period_text("2016-06-08_cloud00pct") == "8 June 2016"
+    assert observed_text("2016-06-08_cloud42pct", 1, None) == "8 June 2016 · 1 pass"
+    # a genuinely malformed label still fails loudly rather than guessing
+    import pytest
+    with pytest.raises(ValueError):
+        period_text("not-a-date")

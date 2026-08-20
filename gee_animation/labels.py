@@ -29,7 +29,10 @@ import calendar
 def _parse(label: str) -> tuple[int, int | None, int | None, int | None]:
     """(year, month, day, quarter) from a period label. `day` is None for
     "YYYY-MM"; `month`/`day` are None and `quarter` is set for "YYYY-Qn"."""
-    parts = label.split("-")
+    # debug.py decorates a scene label with its in-AOI cloud fraction
+    # ("2016-06-08_cloud00pct") so the exported filename carries it. The period
+    # key is everything before that suffix; a malformed date still fails loudly.
+    parts = label.split("_", 1)[0].split("-")
     year = int(parts[0])
     if parts[1][:1] in ("Q", "q"):
         return year, None, None, int(parts[1][1:])
