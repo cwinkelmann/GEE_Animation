@@ -607,3 +607,56 @@ def test_pooled_least_cloudy_uses_the_index_reducer_instead_of_mosaic():
     finally:
         object.__setattr__(P.INDICES["landcover"], "reduce_period", orig)
     assert frames[0].image.tag == "CLASSIFIED"     # not "mosaic:A"
+
+
+def test_composite_splits_its_window_on_a_timeout_too():
+    # The non-pooled path had the same exposure the pooled one was fixed for: a
+    # single unsplit getInfo over years of an expensive index hangs the whole run
+    # before it writes anything. The happy path must stay ONE request.
+    import ee as _ee
+    import gee_animation.compositing as C
+    seen = []
+    class FakeColl:
+        def __init__(self, s=None, e=None): self.s, self.e = s, e
+        def filterDate(self, s, e): return FakeColl(s, e)
+        def aggregate_array(self, prop):
+            if self.s is None:                     # the top-level, unsplit attempt
+                raise _ee.EEException("Computation timed out.")
+            return (self.s, self.e)
+        def median(self): return "MEDIAN"
+    FULL = ("2018-01-01", "2026-08-01")
+    class FakeEE:
+        @staticmethod
+        def Dictionary(props):
+            s, e = props["time"]
+            seen.append((s, e))
+            def get_info():
+                if (s, e) == FULL:            # the whole span is too heavy...
+                    raise _ee.EEException("Computation timed out.")
+                return {"time": [1_500_000_000_000 if s == FULL[0]
+                                 else 1_700_000_000_000]}   # ...each half is fine
+            return types.SimpleNamespace(getInfo=get_info)
+    cfg = types.SimpleNamespace(start="2018-01-01", end="2026-08-01",
+                                cadence="monthly", index="lst_smw",
+                                pool_years=None, min_scenes=1)
+    C.composite(FakeColl(), cfg, ee_module=FakeEE)
+    assert seen[0] == FULL                    # whole span attempted, then halved
+    assert len(seen) == 3
+    mid = seen[1][1]
+    assert seen[1] == (FULL[0], mid) and seen[2] == (mid, FULL[1])
+
+
+def test_composite_stays_one_request_when_nothing_fails():
+    import gee_animation.compositing as C
+    calls = []
+    class FakeColl:
+        def aggregate_array(self, prop):
+            calls.append(prop)
+            return types.SimpleNamespace(getInfo=lambda: [1_500_000_000_000])
+        def filterDate(self, s, e): return self
+        def median(self): return "MEDIAN"
+    cfg = types.SimpleNamespace(start="2017-01-01", end="2017-12-01",
+                                cadence="monthly", index="ndvi",
+                                pool_years=None, min_scenes=1)
+    C.composite(FakeColl(), cfg)
+    assert calls == ["system:time_start"]           # no splitting, no extra trips

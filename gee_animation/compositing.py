@@ -368,7 +368,7 @@ def pooled_composite(collection, cfg, ee_module=ee) -> list[Frame]:
     return frames
 
 
-def composite(collection, cfg) -> list[Frame]:
+def composite(collection, cfg, ee_module=ee) -> list[Frame]:
     if getattr(cfg, "pool_years", None):
         # Cross-year "best month" mode — opt-in; see pooled_composite.
         return pooled_composite(collection, cfg)
@@ -381,7 +381,21 @@ def composite(collection, cfg) -> list[Frame]:
     # here calls into the `ee` API — bucketing is pure Python over the fetched millis.)
     cadence = getattr(cfg, "cadence", "monthly")
     periods = period_starts(cfg.start, cfg.end, cadence)
-    millis = collection.aggregate_array("system:time_start").getInfo()
+    # One request is right when it works, and it almost always does. But a long
+    # range of an expensive index (lst_smw's TOA/emissivity join, lst_sharp's
+    # regression) can exceed Earth Engine's request budget, and then the run hangs
+    # before writing anything — the pooled path learned this the hard way and the
+    # non-pooled path had the identical exposure. Fall back to the same
+    # halve-and-retry fetch, so the happy path stays a single round trip.
+    try:
+        millis = collection.aggregate_array("system:time_start").getInfo()
+    except Exception as exc:                      # noqa: BLE001 — re-raised below
+        if not _is_splittable_error(exc):
+            raise
+        log.info("scene timestamps for %s..%s exceeded Earth Engine's budget (%s); "
+                 "refetching in halves", cfg.start, cfg.end, exc)
+        millis, _ = _fetch_scene_arrays(collection, cfg.start, cfg.end,
+                                        want_clouds=False, ee_module=ee_module)
     counts: Counter = Counter()
     for t in millis:
         d = datetime.fromtimestamp(t / 1000, tz=timezone.utc).date().isoformat()
