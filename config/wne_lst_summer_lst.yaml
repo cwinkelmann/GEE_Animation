@@ -1,0 +1,55 @@
+# Summer-scaled companion to config/wne_cinema_lst_2018_2026.yaml.
+#
+# Same data, same frame, ONLY the colour scale differs. On the wide
+# -10..46 C ramp the real forest/field contrast (measured 28.2 C inside
+# the reserve vs 30.5 C outside, June 2016) is ~5% of the ramp and
+# disappears into the reds. At 15..45 C the reserve reads as a distinct
+# cool island. Winter months sit below the floor and render at it: that
+# is the trade, and why this set is a companion rather than a
+# replacement.
+name: wne_lst_summer_lst
+project: hnee-331218
+title: Grumsin Beech Forest
+subtitle: "Surface temperature on a summer scale (15-45 \xB0C)"
+aoi:
+  frame:
+    bbox:
+    - 13.7311
+    - 52.944
+    - 14.0623
+    - 53.028
+  region:
+    shapefile: docs/aoi/wne/wne.shp
+  region_max_cloud_percent: 20
+start: '2018-01-01'
+end: '2026-08-01'
+sensor: landsat
+index: lst
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+missions:
+- L8
+- L9
+pool_years:
+- 2018
+- 2026
+pool_strategy: gap_fill
+viz:
+  min: 15.0
+  max: 45.0
+render:
+  fps: 2
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 10
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: '16:9'
+  upscale: lanczos
+  region_line_width: 5
+  quality: 8
+  raw_frames: true
+  geotiffs: true
+metadata: true
