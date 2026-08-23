@@ -173,6 +173,11 @@ class RunConfig:
     # Minimum scenes per monthly median; months with fewer are skipped (default 1 =
     # keep all non-empty months, but every frame is annotated with its scene count).
     min_scenes: int = 1
+    # Admit Landsat 7 scenes after the 2003-05-31 scan-line-corrector failure.
+    # Default False: SLC-off scenes carry wedge no-data stripes that survive
+    # compositing and read as rendering artefacts. Set True only when L7 is the
+    # only available bridge (e.g. the 2012-2013 gap between L5 and L8).
+    allow_slc_off: bool = False
     # By default render is capped to the product's native resolution (no upsampling);
     # set True to allow a finer render (a warning still names the true native GSD).
     allow_upsample: bool = False
@@ -272,6 +277,7 @@ class RunConfig:
                 # (same trap _flag documents for gif/frames).
                 draw_region=_flag(raw, "draw_region", scope=""),
                 mask_clouds=_flag(raw, "mask_clouds", scope=""),
+                allow_slc_off=_flag(raw, "allow_slc_off", default=False, scope=""),
                 region_line_width=(int(render["region_line_width"])
                                    if render.get("region_line_width") is not None else None),
                 anomaly=anomaly,

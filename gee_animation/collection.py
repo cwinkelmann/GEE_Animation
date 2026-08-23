@@ -12,6 +12,10 @@ from .products import THERMAL_INDICES, get_product
 
 log = logging.getLogger(__name__)
 
+#: Landsat 7's scan-line corrector failed on 2003-05-31; scenes after this are
+#: SLC-off and striped. Epoch milliseconds for that date, UTC.
+SLC_OFF_MILLIS = 1054339200000   # 2003-05-31T00:00:00Z
+
 # Thermal indices default to L8/L9: L7 SLC-off gaps and the 60/120 m TM/ETM+ thermal
 # band stripe a few-scene median (see docs/REVIEW_AND_PLAN.md §1).
 _LANDSAT8_START = "2013-04-11"   # first Landsat 8 acquisitions
@@ -93,6 +97,15 @@ def build(cfg, frame_geom, region_geom, *, apply_cloud_filters: bool = True, ee_
     attach = getattr(sensor, "attach_aux", None)
     if attach is not None:
         coll = attach(coll, cfg.start, cfg.end, frame_geom, ee_module=ee_module)
+    # Landsat 7's scan-line corrector failed 2003-05-31; every later ETM+ scene
+    # carries wedge-shaped no-data stripes that survive compositing and read as
+    # rendering artefacts. Post-SLC-off L7 is therefore dropped by default —
+    # opt back in with `allow_slc_off: true` when the alternative is no data at
+    # all (L7 is the only bridge across the 2012-2013 gap between L5 and L8).
+    if cfg.sensor == "landsat" and not getattr(cfg, "allow_slc_off", False):
+        coll = coll.filter(ee_module.Filter.Or(
+            ee_module.Filter.neq("mission", "L7"),
+            ee_module.Filter.lt("system:time_start", SLC_OFF_MILLIS)))
     # Landsat mission selection (thermal defaults to L8/L9); applied to either path.
     missions = effective_missions(cfg)
     if missions is not None:
