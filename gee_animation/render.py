@@ -730,6 +730,13 @@ def _caveats(cfg) -> str:
     steps = int(getattr(cfg, "interpolate", 0) or 0)
     if steps:
         parts.append(f"{steps} generated frames between observations")
+    # Harmonic smoothing is the strongest claim on the frame and the least
+    # visible: nothing about a smooth, hole-free picture tells a viewer it was
+    # modelled rather than observed. It therefore goes LAST, where line 2's
+    # protected class keeps it whole even when the subtitle is squeezed out.
+    if getattr(cfg, "smooth", None) == "harmonic":
+        k = int(getattr(cfg, "harmonics", 2) or 2)
+        parts.append(f"modelled: harmonic fit, {k} harmonic{'s' if k != 1 else ''}")
     return " · ".join(parts)
 
 

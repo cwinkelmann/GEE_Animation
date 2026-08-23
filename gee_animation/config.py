@@ -173,6 +173,12 @@ class RunConfig:
     # Minimum scenes per monthly median; months with fewer are skipped (default 1 =
     # keep all non-empty months, but every frame is annotated with its scene count).
     min_scenes: int = 1
+    # Harmonic smoothing (from top-level `smooth` / `harmonics`). "harmonic" fits
+    # a seasonal model per pixel and evaluates it at each frame's date — smooth,
+    # hole-free, and entirely MODEL output rather than observation. See
+    # smoothing.py; validate() refuses to combine it with metadata: true.
+    smooth: str = None
+    harmonics: int = 2
     # Admit Landsat 7 scenes after the 2003-05-31 scan-line-corrector failure.
     # Default False: SLC-off scenes carry wedge no-data stripes that survive
     # compositing and read as rendering artefacts. Set True only when L7 is the
@@ -278,6 +284,8 @@ class RunConfig:
                 draw_region=_flag(raw, "draw_region", scope=""),
                 mask_clouds=_flag(raw, "mask_clouds", scope=""),
                 allow_slc_off=_flag(raw, "allow_slc_off", default=False, scope=""),
+                smooth=(str(raw["smooth"]) if raw.get("smooth") else None),
+                harmonics=int(raw.get("harmonics", 2) or 2),
                 region_line_width=(int(render["region_line_width"])
                                    if render.get("region_line_width") is not None else None),
                 anomaly=anomaly,
@@ -361,6 +369,31 @@ class RunConfig:
             raise ConfigError(
                 f"unknown render.interpolate_mode {self.interpolate_mode!r}; "
                 f"supported: {sorted(INTERPOLATE_MODES)}")
+        if self.smooth is not None:
+            if self.smooth != "harmonic":
+                raise ConfigError(
+                    f"unknown smooth {self.smooth!r}; the only mode is 'harmonic'")
+            spec = INDICES[self.index]
+            if spec.composite:
+                raise ConfigError(
+                    f"smooth: harmonic needs a single-band index; {self.index!r} is "
+                    f"a composite with no INDEX band to fit")
+            if spec.classes:
+                raise ConfigError(
+                    f"smooth: harmonic cannot fit {self.index!r}: its values are "
+                    f"class labels, and a seasonal curve through them is meaningless")
+            if self.metadata:
+                # Every frame would be a curve evaluated at a date, so the stats
+                # table would describe the model rather than the landscape.
+                raise ConfigError(
+                    "smooth: harmonic cannot be combined with metadata: true — a "
+                    "smoothed frame is model output, so its statistics would not "
+                    "measure anything observed. Run a second, unsmoothed config "
+                    "for the numbers.")
+            if not 1 <= self.harmonics <= 5:
+                raise ConfigError(
+                    f"harmonics must be between 1 and 5 (got {self.harmonics}); "
+                    f"beyond about 3 the fit starts following noise")
         if INDICES[self.index].classes and self.interpolate:
             # Blending two class colours produces a colour no class owns — a
             # viewer reads the in-between frames as a category that does not
