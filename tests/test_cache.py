@@ -159,6 +159,14 @@ def test_frame_label_is_part_of_the_key(tmp_path, urlopen_counter):
     # raw frames are a local png write of already-fetched pixels; backfilling
     # them for an archived run must reuse every cached thumbnail.
     ("raw_frames", True),
+    # interpolation blends arrays that are already fetched — EE is asked for one
+    # thumbnail per OBSERVED frame whether this is 0 or 50, so re-cutting a run
+    # for smoother playback must not refetch anything.
+    ("interpolate", 10),
+    ("interpolate_mode", "crossfade"),
+    # which outputs get written is decided after the pixels are in hand
+    ("gif", False),
+    ("frames", False),
 ])
 def test_client_side_change_still_hits_the_cache(tmp_path, urlopen_counter, field, value):
     _fetch_thumbnail(_FakeImage(), _cfg(tmp_path), "GEOM")

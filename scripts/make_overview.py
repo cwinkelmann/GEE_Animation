@@ -33,7 +33,9 @@ SECTIONS = [
     ("Summer-scaled temperature", "The same thermal data on a 15–45 °C ramp "
      "instead of −10…46 °C. On the wide ramp a real 2–3 °C forest/field "
      "difference is about 5% of the width and reads as uniform red; here the "
-     "reserve is an obvious cool island. Winter falls below the floor.",
+     "reserve is an obvious cool island. Winter falls below the floor. The first "
+     "three are the ones to show — gap-filled, so no month is missing; the "
+     "_nopool trio below them is the archive companion for plotting.",
      ["wne_lst_summer_lst", "wne_lst_summer_lst_smw", "wne_lst_summer_lst_sharp",
       "wne_lst_summer_lst_nopool", "wne_lst_summer_lst_smw_nopool",
       "wne_lst_summer_lst_sharp_nopool"]),
@@ -61,6 +63,12 @@ TITLES = {
 }
 
 NOTES = {
+    "wne_lst_summer_lst": "Primary. Gap-filled, so every month is present; "
+        "borrowed frames say so on-frame.",
+    "wne_lst_summer_lst_smw": "Primary. Mono-window retrieval — runs 1–3 K below "
+        "the USGS product, so don't mix figures between the two.",
+    "wne_lst_summer_lst_sharp": "Primary. Sharpened to 30 m; the extra detail "
+        "comes from NDVI structure, not a finer thermal measurement.",
     "wne_cinema_rgb_2018_2026": "Real clouds, not grey mask cutouts.",
     "wne_cinema_cir_2018_2026": "Near-infrared as red; real clouds.",
     "wne_cinema_lst_smw_max": "The whole Landsat archive, 1984 onward — 314 of "
@@ -70,12 +78,11 @@ NOTES = {
         "passes each, so winter composites are nearly hole-free.",
     "wne_landcover": "Categorical: nine classes, swatch legend, no interpolation "
         "(blending class colours would invent categories).",
-    "wne_lst_summer_lst_nopool": "No gap-filling — 69 of 103 months survive. Use "
-        "this one for plotting.",
-    "wne_lst_summer_lst_smw_nopool": "No gap-filling. Note the mono-window method "
-        "runs 1–3 K below the USGS product; don't mix figures.",
-    "wne_lst_summer_lst_sharp_nopool": "No gap-filling. Sharpened to 30 m — the "
-        "extra detail comes from NDVI structure, not a finer measurement.",
+    "wne_lst_summer_lst_nopool": "Archive companion: no gap-filling, so 69 of 103 "
+        "months survive. Every frame is real data for its period — plot from this, "
+        "show the pooled one.",
+    "wne_lst_summer_lst_smw_nopool": "Archive companion, no gap-filling.",
+    "wne_lst_summer_lst_sharp_nopool": "Archive companion, no gap-filling.",
 }
 
 
@@ -231,9 +238,11 @@ where one exists, the config that reproduces it exactly.</p>
 <div class="method"><ul>
 <li><strong>Filled dot = observed, hollow = generated.</strong> Frames between
 observations are interpolated for smooth playback and are never data.</li>
-<li><strong>Borrowed months say so.</strong> Gap-filled frames read
-&ldquo;image from &lt;year&gt;&rdquo;. Runs ending <code>_nopool</code> contain no
-borrowed frames — use those for plotting.</li>
+<li><strong>Borrowed months say so.</strong> The videos here are gap-filled so
+that no month is missing, and every borrowed frame states its source year
+on-frame (&ldquo;image from &lt;year&gt;&rdquo;) — the picture is smooth, the
+caption stays honest. Runs ending <code>_nopool</code> contain no borrowed
+frames and are the ones to compute from.</li>
 <li><strong>Grey is absence, not zero.</strong> Cloud, shadow and failed thermal
 retrievals are painted neutral grey and never filled in.</li>
 <li><strong>Colour scales are fixed per video</strong>, so a colour means the same

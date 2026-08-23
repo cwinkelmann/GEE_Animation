@@ -75,6 +75,15 @@ CLIENT_SIDE_FIELDS = frozenset({
     # key namespace (format: GEO_TIFF in the fetch params), so enabling exports
     # must not invalidate the png thumbs.
     "geotiffs",
+    # frame interpolation: generated frames are blended from arrays that are
+    # ALREADY fetched (render._imagery_sequence / interpolate.blend). Earth Engine
+    # is asked for exactly one thumbnail per observed frame whether interpolation
+    # is off or set to 50, so re-cutting a run for smoother playback must not
+    # refetch a single tile. Omitting these cost a full refetch per re-cut.
+    "interpolate", "interpolate_mode",
+    # which files get written (render.assemble_stream / _write_frames): the GIF
+    # and the per-frame PNGs are encoded from pixels already in hand.
+    "gif", "frames",
     # the cache controls themselves: where entries live and whether they are used
     # cannot change what EE computes.
     "cache", "cache_dir",
