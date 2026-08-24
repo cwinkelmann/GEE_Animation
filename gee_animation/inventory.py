@@ -87,37 +87,70 @@ def scene_inventory(cfg, frame_geom, region_geom, build=_build, ee_module=ee) ->
     # getInfo() resolves all of them. scene_cloud/mission are only requested when
     # the sensor actually carries that property (MODIS has no scene_cloud_property;
     # only landsat's collection() tags a "mission" property per scene).
+    #
+    # aggregate_array DROPS a scene whose property is null rather than returning a
+    # None element, so the arrays cannot be zipped positionally: a scene fully
+    # masked over the region (reduceRegion finds no valid pixel -> null fraction)
+    # shortens the fraction array and every later scene would inherit the NEXT
+    # scene's cloud cover. Each nullable column is therefore fetched together with
+    # the system:index of the scenes that actually carry it, and joined by id
+    # below. Still ONE getInfo(): the extra id arrays ride in the same Dictionary.
     props = {
         "time": coll.aggregate_array("system:time_start"),
-        "region_cloud": coll.aggregate_array("region_cloud_fraction"),
+        "id": coll.aggregate_array("system:index"),
     }
+    columns = [("region_cloud", "region_cloud_fraction")]
     if sensor.scene_cloud_property is not None:
-        props["scene_cloud"] = coll.aggregate_array(sensor.scene_cloud_property)
+        columns.append(("scene_cloud", sensor.scene_cloud_property))
     if sensor.name == "landsat":
-        props["mission"] = coll.aggregate_array("mission")
+        columns.append(("mission", "mission"))
+    for key, prop in columns:
+        present = coll.filter(ee_module.Filter.notNull([prop]))
+        props[key] = present.aggregate_array(prop)
+        props[f"{key}_id"] = present.aggregate_array("system:index")
     data = ee_module.Dictionary(props).getInfo()
 
     times = data["time"]
-    region_clouds = data["region_cloud"]
-    scene_clouds = data.get("scene_cloud")
-    missions = data.get("mission")
-
-    # Same guard as compositing.pooled_composite: aggregate_array silently returns []
-    # for a property no image in the collection carries, rather than erroring. Without
-    # this check a length mismatch would index scene_clouds[i]/region_clouds[i] out of
-    # range (IndexError) or, worse, silently attribute one scene's cloud value to
-    # another — the kind of wrong-data-in-a-stakeholder-report failure this module
-    # must never produce.
+    ids = data["id"]
     n = len(times)
-    for prop_name, arr in (
-        ("region_cloud_fraction", region_clouds),
-        (sensor.scene_cloud_property, scene_clouds),
-        ("mission", missions),
-    ):
-        if arr is not None and len(arr) != n:
+    if len(ids) != n:
+        raise RuntimeError(
+            f"scene inventory metadata is misaligned: {n} timestamps but "
+            f"{len(ids)} system:index values")
+    if len(set(ids)) != n:
+        raise RuntimeError(
+            "scene inventory cannot align per-scene properties: system:index is not "
+            f"unique across the {n} candidate scenes")
+
+    def _column(key, prop):
+        """One value per scene in `ids` order, None where the scene lacks `prop`."""
+        values = data.get(key)
+        if values is None:
+            return None
+        value_ids = data.get(f"{key}_id", [])
+        if len(values) != len(value_ids):
             raise RuntimeError(
-                f"scene inventory metadata is misaligned: {n} timestamps but "
-                f"{len(arr)} {prop_name} values")
+                f"scene inventory metadata is misaligned: {len(value_ids)} "
+                f"system:index but {len(values)} {prop} values")
+        # Same intent as the old length guard: index.compute derives a brand-new
+        # image and drops every property except system:time_start, so a dropped
+        # property yields an EMPTY column rather than a short one. Reporting that
+        # as "every scene unavailable" would be a silently wrong stakeholder
+        # report, so fail loudly and name the property.
+        if n and not values:
+            raise RuntimeError(
+                f"scene inventory: not one of the {n} candidate scenes carries "
+                f"{prop!r}. Either the property was dropped upstream (index.compute "
+                f"derives a new image and keeps only system:time_start) or every "
+                f"scene really is null for it. The two are indistinguishable from "
+                f"here, and reporting the whole inventory as {prop!r}-unavailable "
+                f"would be a silently wrong answer, so this fails instead.")
+        by_id = dict(zip(value_ids, values))
+        return [by_id.get(i) for i in ids]
+
+    region_clouds = _column("region_cloud", "region_cloud_fraction")
+    scene_clouds = _column("scene_cloud", sensor.scene_cloud_property)
+    missions = _column("mission", "mission")
 
     records: list[SceneRecord] = []
     for i, t in enumerate(times):
@@ -130,7 +163,7 @@ def scene_inventory(cfg, frame_geom, region_geom, build=_build, ee_module=ee) ->
         # Judge against the raw fraction (see _judge's docstring); round only for
         # the record's display column.
         region_cloud_pct = None if region_frac is None else round(region_frac * 100, 1)
-        mission = missions[i] if missions is not None else sensor.name
+        mission = (missions[i] or sensor.name) if missions is not None else sensor.name
         usable, reason = _judge(sensor, cfg, scene_cloud, region_frac)
         records.append(SceneRecord(
             period_label=label, date=iso, mission=mission,
