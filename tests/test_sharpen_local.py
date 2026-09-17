@@ -122,3 +122,17 @@ def test_apply_is_a_noop_unless_sharpen_is_local():
     cfg = types.SimpleNamespace(sharpen=None)
     frames = [Frame("2022-07", "IMG")]
     assert sharpen_local.apply(frames, cfg, "FRAME", "REGION") is frames
+
+
+def test_apply_sets_an_earth_engine_deadline_so_a_dead_network_cannot_hang_the_run(monkeypatch):
+    # 2026-09-17: a run sat for three hours on a dropped connection — the EE API
+    # call behind getDownloadURL has no timeout unless a deadline is set.
+    import ee
+    seen = []
+    monkeypatch.setattr(ee.data, "setDeadline", lambda ms: seen.append(ms))
+    cfg = types.SimpleNamespace(sharpen="local", frame_aoi={"bbox": [13.1, 52.5, 13.4, 52.6]},
+                                crs="EPSG:32633", workers=1, out_dir="/tmp", name="t")
+    # stop right after the deadline is set: an empty frame list has nothing to fetch
+    sharpen_local.apply([], cfg, types.SimpleNamespace(buffer=lambda m: types.SimpleNamespace(bounds=lambda: "B")),
+                        "REGION", ee_module=ee, fetch=lambda url: b"")
+    assert seen == [sharpen_local.EE_DEADLINE_MS]

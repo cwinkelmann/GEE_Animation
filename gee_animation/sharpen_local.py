@@ -33,6 +33,9 @@ log = logging.getLogger(__name__)
 FILL = -9999.0                      # export fill for masked pixels (a bare export writes 0)
 FACTOR = sharpen.COARSE_M // sharpen.FINE_M    # 100 m / 20 m = 5 fine cells per coarse cell
 N_TREES, N_SAMPLES_PER_FRAME, MIN_LEAF, BAG = 100, 5000, 5, 0.7
+#: Deadline for every Earth Engine API call made here (getDownloadURL and the
+#: lazy evaluations behind it). Without it a dropped network hangs the run forever.
+EE_DEADLINE_MS = 120_000
 
 
 def read_geotiff(data: bytes):
@@ -152,6 +155,8 @@ def apply(frames, cfg, frame_geom, region_geom, ee_module=ee, fetch=None):
     if getattr(cfg, "sharpen", None) != "local":
         return frames
     from . import render as R
+    if hasattr(getattr(ee_module, "data", None), "setDeadline"):
+        ee_module.data.setDeadline(EE_DEADLINE_MS)
     if fetch is None:
         fetch = lambda url: R._fetch_url(url, timeout=300)   # noqa: E731
     bounds = R._aoi_bounds(cfg.frame_aoi)
@@ -173,6 +178,8 @@ def apply(frames, cfg, frame_geom, region_geom, ee_module=ee, fetch=None):
         h = min(lst.shape[1], pred.shape[1]); w = min(lst.shape[2], pred.shape[2])
         return frame.label, (lst[0, :h, :w], pred[:, :h, :w]), (b, c, res)
 
+    if not frames:
+        return frames
     workers = max(1, int(getattr(cfg, "workers", 4) or 4))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         fetched = list(pool.map(inputs_for, frames))
