@@ -857,3 +857,11 @@ def test_render_pixel_grid_rejects_a_non_boolean(tmp_path, value):
         f"render: {{fps: 4, scale: 30, dimensions: 768, pixel_grid: {value}}}")
     with pytest.raises(ConfigError, match="render.pixel_grid must be true or false"):
         RunConfig.from_yaml(_write(tmp_path, body))
+
+
+def test_smooth_harmonic_refuses_lst_rf(tmp_path):
+    # The sharpened field is trained per month; fitting a seasonal curve through
+    # it is a second experiment, not this one.
+    body = _base("index: lst_rf\nsmooth: harmonic\n")
+    with pytest.raises(ConfigError, match="lst_rf"):
+        RunConfig.from_yaml(_write(tmp_path, body))

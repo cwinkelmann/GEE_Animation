@@ -79,6 +79,7 @@ B8, Landsat NIR = SR_B5 for OLI). Reflectance scaling is per sensor: Sentinel-2
 | `lst` | Landsat | 100 m | −10 … 40 | °C | cooler → warmer |
 | `lst_smw` | Landsat | 100 m | −10 … 40 | °C | cooler → warmer |
 | `lst_sharp` | Landsat | **30** m | −10 … 40 | °C | cooler → warmer |
+| `lst_rf` (experimental) | Landsat (+ Sentinel-2 predictors) | **20** m | −10 … 40 | °C | cooler → warmer |
 | `lst_modis` | MODIS (MOD11A1) | 1000 m | −10 … 40 | °C | cooler → warmer |
 | `landcover` | Dynamic World | 10 m | *(classes)* | — | 9 labelled swatches |
 

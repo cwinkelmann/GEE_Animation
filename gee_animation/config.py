@@ -380,6 +380,11 @@ class RunConfig:
                 raise ConfigError(
                     f"unknown smooth {self.smooth!r}; the only mode is 'harmonic'")
             spec = INDICES[self.index]
+            if self.index == "lst_rf":
+                raise ConfigError(
+                    "smooth: harmonic cannot be combined with lst_rf: the sharpened "
+                    "field is trained per period, and a seasonal curve through it is "
+                    "a separate experiment")
             if spec.composite:
                 raise ConfigError(
                     f"smooth: harmonic needs a single-band index; {self.index!r} is "

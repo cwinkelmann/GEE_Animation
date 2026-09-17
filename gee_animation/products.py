@@ -338,6 +338,10 @@ class Index:
     # the numbering — so `landcover` averages class PROBABILITIES and takes the
     # argmax instead.
     reduce_period: Callable = None
+    # Optional (collection, cfg) -> Image: like `reduce_period` but handed the run
+    # config — for a reduction that needs the AOI (lst_rf trains its forest on the
+    # frame). Preferred over `reduce_period` when both are set.
+    reduce_period_cfg: Callable = None
     # Categorical products only: ((value, label, hex), ...) in legend order. Non-empty
     # marks the product as classified, which drives the swatch legend instead of a
     # colour ramp and forbids interpolation (blending two class colours invents a
@@ -464,7 +468,7 @@ _REFL = frozenset({"sentinel2", "landsat", "modis"})
 
 # Thermal (LST) indices. The Landsat ones drive the L8/L9 mission default and the
 # 100 m native scale; lst_modis is a MODIS product (its own sensor + 1 km native).
-THERMAL_INDICES = frozenset({"lst", "lst_smw", "lst_sharp", "lst_modis"})
+THERMAL_INDICES = frozenset({"lst", "lst_smw", "lst_sharp", "lst_modis", "lst_rf"})
 
 # Coarsest-relevant native ground sampling (metres) per sensor, with overrides.
 _SENSOR_NATIVE_M = {"sentinel2": 10, "landsat": 30, "modis": 500, "modis_lst": 1000,
@@ -480,6 +484,8 @@ def native_scale_m(sensor: str, index: str) -> int:
     """
     if sensor == "landsat" and index == "lst_sharp":
         return 30    # sharpened to the fine NIRv (reflectance) grid
+    if sensor == "landsat" and index == "lst_rf":
+        return 20    # sharpened to the Sentinel-2 SWIR (B11) grid
     if sensor == "landsat" and index in THERMAL_INDICES:
         return 100
     if sensor == "sentinel2" and index in _S2_20M_INDICES:
@@ -603,6 +609,20 @@ INDICES["lst_smw"] = Index("lst_smw", frozenset({"landsat"}),
 
 # MODIS LST (MOD11A1 Terra daily, 1 km) — coarse but ~daily, so it fills the
 # cloud-locked months Landsat's 16-day revisit misses.
+# "lst_rf": random-forest thermal sharpening with Sentinel-2 predictors + DEM.
+# Per-image compute is the plain C2 L2 ST → °C (same as `lst`); the sharpening is
+# a per-PERIOD reduction (sharpen.lst_rf_period) because it trains on the month's
+# composite. Experimental — see docs/superpowers/plans/2026-09-17-lst-rf-sharpening.md.
+from . import sharpen  # noqa: E402  (imports INDEX_BAND/_s2_mask_clouds from us)
+INDICES["lst_rf"] = Index("lst_rf", frozenset({"landsat"}),
+                          (-10.0, 40.0, _LST_PALETTE), _lst,
+                          reduce_period_cfg=sharpen.lst_rf_period,
+                          bands="Thermal(100m) + S2 NDVI/NIRv/NDBI/MNDWI(20m) + DEM(30m)",
+                          formula="RF(LST100 ~ predictors) at 20m + coarse residual",
+                          units="°C",
+                          display_name="Land surface temperature (RF-sharpened)",
+                          low_label="cooler", high_label="warmer")
+
 INDICES["lst_modis"] = Index("lst_modis", frozenset({"modis_lst"}),
                              (-10.0, 40.0, _LST_PALETTE), _lst_modis,
                              bands="MOD11A1 LST_Day_1km (1 km, daily)",

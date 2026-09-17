@@ -1,0 +1,23 @@
+# Landsat "lst_rf" = random-forest sharpened LST over the WNE AOIs (EXPERIMENTAL).
+# Per month, a regression forest learns LST(100 m) ~ {NDVI, NIRv, NDBI, MNDWI, DEM}
+# from Sentinel-2 + Copernicus DEM, is applied on the 20 m Sentinel-2 SWIR grid, and
+# the coarse residual is added back so the field still aggregates to the observed
+# temperature. Honest resolution 20 m (B11 is a 20 m band), not 10 m.
+# Validation and gate: docs/superpowers/plans/2026-09-17-lst-rf-sharpening.md.
+name: wne_lst_rf
+project: hnee-331218
+
+aoi:
+  frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 20
+
+sensor: landsat
+index: lst_rf
+start: "2022-05-01"
+end: "2022-09-01"
+cadence: monthly
+max_cloud_percent: 60
+draw_region: true
+render: { fps: 3, scale: 20, dimensions: 768, crs: auto }   # crs auto -> square pixels
+viz: { min: 10, max: 40 }   # summer LST range (registry default -10..40 for full-year)

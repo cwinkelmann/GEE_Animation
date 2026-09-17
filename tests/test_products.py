@@ -10,7 +10,7 @@ def test_registry_contents():
     assert set(P.SENSORS) == {"sentinel2", "landsat", "modis", "modis_lst",
                               "dynamicworld"}
     assert set(P.INDICES) == {"ndvi", "lst", "lst_smw", "evi", "ndwi", "ndmi", "ndre",
-                              "rgb", "cir", "lst_sharp", "lst_modis", "landcover"}
+                              "rgb", "cir", "lst_sharp", "lst_modis", "landcover", "lst_rf"}
     assert P.INDICES["lst_modis"].sensors == frozenset({"modis_lst"})   # MODIS-only LST
     assert P.SENSORS["modis_lst"].scene_cloud_property is None          # no per-scene cloud
     assert "lst_modis" in P.THERMAL_INDICES
@@ -588,3 +588,13 @@ def test_dw_per_image_step_keeps_probabilities_for_the_period_reducer():
     assert out == "PROBS"
     assert seen["bands"] == P._DW_PROB_BANDS      # not painted to R/G/B here
     assert seen["set"] == ("system:time_start", "TS")
+
+
+def test_lst_rf_is_a_landsat_only_thermal_product_honest_at_20m():
+    assert P.INDICES["lst_rf"].sensors == frozenset({"landsat"})
+    assert "lst_rf" in P.THERMAL_INDICES
+    assert P.native_scale_m("landsat", "lst_rf") == 20     # S2 SWIR (B11) grid
+    assert P.INDICES["lst_rf"].reduce_period_cfg is not None
+    assert P.INDICES["lst_rf"].units == "°C"
+    with pytest.raises(ValueError):
+        P.get_product("sentinel2", "lst_rf")
