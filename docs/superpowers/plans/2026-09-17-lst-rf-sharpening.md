@@ -282,6 +282,48 @@ render the illustration and costs nothing if unused); the harmonic-smoothing
 refusal and the `reduce_period_cfg` seam are the only touches outside the new
 module.
 
+## Spike: train on our own hardware instead of in Earth Engine (2026-09-17)
+
+Question: can the per-month training and prediction leave Earth Engine, so EE
+only serves composites (cheap exports) and the forest runs locally? Throwaway
+probe: `docs/experiments/spike_local_rf_training.py`, one month (2024-07), the
+R12 frame buffered by 3 km (10.7 km square).
+
+| step | Earth Engine version | local version |
+|---|---|---|
+| inputs from EE | trains + predicts server-side: **78 s**, and 1 of 116 frames timed out in the full run | two GeoTIFF exports (LST 1.8 MB, five predictors 5.6 MB): **42 s**, no model compute |
+| training (100 trees, 5,000 cells) | inside the 78 s | **0.2 s** (scikit-learn, 8 cores) |
+| prediction on the 20 m grid (549×552) | inside the 78 s | **0.3 s** |
+| residual conservation | exact by construction | exact: max |agg(sharp) − LST₁₀₀| = 0.0000 K |
+| agreement, local vs EE | — | RMSE **0.70 K**, bias 0.00 K; two local seeds differ by 0.59 K, so the gap is forest randomness |
+| feature importance (local) | not exposed | ndbi 0.65 · mndwi 0.26 · dem 0.04 · ndvi 0.03 · nirv 0.03 |
+
+Figure: `docs/experiments/spike_local_vs_ee_2024-07.png`.
+
+One trap found: `getDownloadURL` GeoTIFFs carry masked pixels as **0**, not
+NaN, unless a nodata value is set. Untreated, the ~1 % cloud/QA holes pulled
+their 100 m block means down and produced −12.8 K artefacts; treating 0 as
+no-data (or exporting with an explicit `noData`) fixes it, and a real
+implementation must reuse `render._geotiff_params` which already handles this.
+
+**Recommendation: yes, move training and prediction local.** It removes the
+heaviest EE compute (the forest), removes the timeout failure mode, cuts EE time
+per month roughly in half, and makes models persistable trivially (joblib) and
+inspectable (feature importance, held-out scores). EE keeps doing what it is
+good at — cloud-masked composites over an archive. Design for the real thing:
+
+- `sharpen.local`: `fetch_inputs(month) -> (lst_20m, predictors_20m)` via the
+  existing cached GeoTIFF path, then `train(pooled months per calendar month)`,
+  `predict(month)`, residual, written as a GeoTIFF the renderer can ingest.
+- The renderer needs one new input path: a frame whose pixels come from a local
+  GeoTIFF rather than an EE thumbnail (the upsampling branch's
+  `scripts/upsample_render.py` already does this — reuse).
+- Per-calendar-month models across years, leave-one-year-out score per model,
+  models under `docs/models/` with joblib; ~1 day with tests.
+
+The delta render (`r12_focus_lst_rf_delta_10yr`) was relaunched in yearly chunks
+after the timeout; it still trains in EE — the local path is a follow-up.
+
 ## Open questions for Christian
 
 - **Q1 — branch base.** The worktree branches from committed HEAD, so it lacks
