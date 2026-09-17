@@ -167,6 +167,9 @@ def test_frame_label_is_part_of_the_key(tmp_path, urlopen_counter):
     # which outputs get written is decided after the pixels are in hand
     ("gif", False),
     ("frames", False),
+    # the pixel-grid overlay traces the fetched raster's own cell edges, drawn
+    # locally over pixels already in hand — a grid variant of a run is a cache hit
+    ("pixel_grid", True),
 ])
 def test_client_side_change_still_hits_the_cache(tmp_path, urlopen_counter, field, value):
     _fetch_thumbnail(_FakeImage(), _cfg(tmp_path), "GEOM")

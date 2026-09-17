@@ -193,7 +193,7 @@ computes:
 
 - **Free** — `fps`, `interpolate`, `title`, `subtitle`, `credit`, `palette`,
   `quality`, `preset`, `aspect`, `gif`, `frames`, `raw_frames`, `geotiffs`,
-  `region_line_width`, `workers`, `out_dir`
+  `region_line_width`, `pixel_grid`, `workers`, `out_dir`
 - **Refetches everything** — `viz`, `dimensions`, `crs`, `scale`, dates, either
   AOI, `mask_clouds`, cloud thresholds, `cadence`, pooling, `missions`
 

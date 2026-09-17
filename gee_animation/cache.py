@@ -71,6 +71,10 @@ CLIENT_SIDE_FIELDS = frozenset({
     # (render.raw_frames) — turning it on must not refetch a single thumbnail,
     # or backfilling raw frames for an archived run would re-download years.
     "raw_frames",
+    # pixel-grid overlay: a mesh on the fetched raster's own cell edges, drawn
+    # locally after the fetch (render._grid_mask) — the grid variant of a run must
+    # reuse every cached thumbnail.
+    "pixel_grid",
     # the geotiff flag itself is thumbnail-neutral: the tif download has its own
     # key namespace (format: GEO_TIFF in the fetch params), so enabling exports
     # must not invalidate the png thumbs.

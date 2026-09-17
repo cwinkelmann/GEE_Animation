@@ -3032,3 +3032,80 @@ def test_render_gives_a_classified_product_swatches_not_a_colorbar(tmp_path, mon
         return np.zeros((32, 32, 3)), np.ones((32, 32), bool)   # composite shape
     render([Frame("2022-06", object())], cfg, fetch=fetch, geometry=None)
     assert seen == ["classes"]            # never the ramp
+
+
+# --- pixel-grid overlay (render.pixel_grid) -----------------------------------------
+
+def test_grid_mask_marks_native_cell_edges():
+    # A 5x10 fetched raster shown at 50x100: a line on every native cell boundary,
+    # rounded to the output pixel, including the outer edges (clipped into range).
+    from gee_animation.render import _grid_mask
+    mask = _grid_mask((5, 10), (50, 100), line_px=1)
+    assert mask.shape == (50, 100) and mask.dtype == np.float32
+    cols = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 99}
+    rows = {0, 10, 20, 30, 40, 49}
+    for y in range(50):
+        for x in range(100):
+            want = 1.0 if (x in cols or y in rows) else 0.0
+            assert mask[y, x] == want, (y, x)
+
+
+def test_grid_mask_line_width_thickens_toward_the_right_and_down():
+    from gee_animation.render import _grid_mask
+    mask = _grid_mask((1, 2), (10, 20), line_px=2)
+    # the interior boundary at x=10 becomes columns 10 and 11; y has no interior edge
+    assert mask[5, 10] == 1.0 and mask[5, 11] == 1.0 and mask[5, 12] == 0.0 and mask[5, 9] == 0.0
+
+
+def test_composite_alpha_blends_only_mask_pixels_bit_exact():
+    from gee_animation.render import _composite_alpha
+    rng = np.random.default_rng(11)
+    rgb = rng.integers(0, 256, (30, 40, 3), dtype=np.uint8)
+    mask = np.zeros((30, 40), np.float32)
+    mask[7, :] = 1.0
+    out = _composite_alpha(rgb, mask, (255, 255, 255), 0.5)
+    assert out.dtype == np.uint8 and out is not rgb
+    untouched = np.ones((30, 40), bool); untouched[7, :] = False
+    assert np.array_equal(out[untouched], rgb[untouched])
+    want = (rgb[7].astype(np.float32) * 0.5 + 255.0 * 0.5).astype(np.uint8)
+    assert np.array_equal(out[7], want)
+
+
+def test_render_draws_pixel_grid_once_and_under_the_region_outline(tmp_path, monkeypatch):
+    # The grid mask depends only on the fetched and output sizes, so it is built once
+    # on the first frame; it is composited BEFORE the region outline so the amber
+    # outline stays on top where they cross.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.pixel_grid = True
+    cfg.preset = "240"
+    cfg.draw_region = True
+    cfg.region_aoi = {"bbox": [0.25, 0.25, 0.75, 0.75]}
+    built, order = [], []
+    real_grid_mask, real_alpha, real_region = r._grid_mask, r._composite_alpha, r._composite_region
+    monkeypatch.setattr(r, "_grid_mask", lambda native, out, **k: (
+        built.append((native, out)) or real_grid_mask(native, out, **k)))
+    monkeypatch.setattr(r, "_composite_alpha", lambda *a, **k: (
+        order.append("grid") or real_alpha(*a, **k)))
+    monkeypatch.setattr(r, "_composite_region", lambda *a, **k: (
+        order.append("region") or real_region(*a, **k)))
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
+
+    frames = [Frame("2022-01", object()), Frame("2022-02", object()), Frame("2022-03", object())]
+    render(frames, cfg, fetch=fake_fetch, geometry=None)
+    assert built == [((20, 20), (240, 240))]
+    assert order == ["grid", "region"] * 3
+
+
+def test_render_skips_pixel_grid_when_unset(tmp_path, monkeypatch):
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.preset = "240"
+    monkeypatch.setattr(r, "_grid_mask", lambda *a, **k: pytest.fail("grid must not be built"))
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
+
+    render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)

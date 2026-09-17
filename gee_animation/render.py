@@ -29,6 +29,9 @@ log = logging.getLogger(__name__)
 
 NODATA_RGB = (240, 240, 240)
 REGION_OUTLINE_RGB = (255, 235, 59)   # amber — high contrast over the index palette
+GRID_RGB = (255, 255, 255)            # pixel-grid mesh: white ...
+GRID_ALPHA = 0.35                     # ... at 35 % — reads on the dark and hot ends of
+                                      # a thermal palette, softens over the middle
 LETTERBOX_RGB = (0, 0, 0)
 
 # Screen-output presets (output long edge, px), aspect ratios, and upscale methods.
@@ -1383,6 +1386,40 @@ def draw_region(rgb: np.ndarray, bounds: tuple, rings: list,
     return _composite_region(rgb, *masks, color=color, casing=casing)
 
 
+def _grid_mask(native_hw: tuple, out_hw: tuple, line_px: int = 1) -> np.ndarray:
+    """Alpha mask (float32, 0/1, `out_hw`) with a line on every cell edge of the
+    fetched raster as it appears after upscaling to `out_hw`.
+
+    The fetch is capped at the product's native GSD (`_cap_dimensions`), so the
+    `native_hw` cells are the product's pixels — ~100 m for Landsat thermal. A mesh
+    anchored to those edges therefore never cuts through a rendered cell, which a
+    metre grid in the CRS (unknown offset) would. Edges are rounded to the output
+    pixel; the outer edges are clipped into range; lines thicken rightward/downward.
+    """
+    nh, nw = native_hw
+    h, w = out_hw
+    mask = np.zeros((h, w), np.float32)
+    lp = max(1, int(line_px))
+    for j in range(nw + 1):
+        x = min(int(round(j * w / nw)), w - 1)
+        mask[:, x:min(x + lp, w)] = 1.0
+    for i in range(nh + 1):
+        y = min(int(round(i * h / nh)), h - 1)
+        mask[y:min(y + lp, h), :] = 1.0
+    return mask
+
+
+def _composite_alpha(rgb: np.ndarray, mask: np.ndarray, color, alpha: float) -> np.ndarray:
+    """Blend `color` over `rgb` at `mask * alpha`, touching only masked pixels
+    (untouched pixels are bit-exact) — the single-colour cousin of `_composite_region`."""
+    out = rgb.copy() if rgb.dtype == np.uint8 else rgb.astype(np.float32).astype(np.uint8)
+    touched = mask > 0
+    a = (mask[touched] * float(alpha)).astype(np.float32)[:, None]
+    patch = rgb[touched].astype(np.float32)
+    out[touched] = (patch * (1 - a) + np.asarray(color, dtype=np.float32) * a).astype(np.uint8)
+    return out
+
+
 def _frame_span_m(bounds: tuple) -> float:
     """Larger ground dimension (metres) of the frame — EE fits it to `dimensions`."""
     minx, miny, maxx, maxy = bounds
@@ -2055,6 +2092,8 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     checked_subtitle = False   # the "will the subtitle fit?" warning fires at most once
     region_width = getattr(cfg, "region_line_width", None) or 2
     region_masks = None   # (casing_mask, core_mask); built once below, then reused
+    pixel_grid = bool(getattr(cfg, "pixel_grid", False))
+    grid_mask = None      # built once on the first frame (sizes never change)
     workers = max(1, int(getattr(cfg, "workers", DEFAULT_WORKERS) or DEFAULT_WORKERS))
     if getattr(cfg, "gif", None) is None:
         # `render.gif` unconfigured: on for a normal run (unchanged), but an
@@ -2081,7 +2120,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         a bounded lookahead; everything here stays strictly ordered and single-threaded,
         so output is identical to workers=1.
         """
-        nonlocal output, region_masks, checked_subtitle
+        nonlocal output, region_masks, checked_subtitle, grid_mask
         # Observed frames are written out in small batches rather than one at a time
         # (`_write_frames` encodes a batch across `workers` threads — a real ~2.8x, zlib
         # releases the GIL) or all at the end (which would retain every frame, the very
@@ -2107,6 +2146,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         for rgb, valid, text, label in _imagery_sequence(frames, cfg, fetch, geometry,
                                                          workers, composite):
             rgb = apply_nodata(rgb, valid)
+            native_hw = rgb.shape[:2]         # the fetched raster, pre-upscale
             # Screen output: smoothly upscale the native-resolution imagery, then draw
             # the overlays at the output size so text/lines stay crisp; letterbox last.
             if getattr(cfg, "preset", None):
@@ -2117,6 +2157,12 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
             # Georeferenced overlays go on first, while the array is still pure imagery:
             # draw_region maps lon/lat linearly across the *whole* array, so drawing it
             # once the label margins exist would slide the outline off its pixels.
+            if pixel_grid:
+                # Under the region outline (drawn next) so the outline stays on top.
+                if grid_mask is None:
+                    grid_mask = _grid_mask(native_hw, rgb.shape[:2],
+                                           line_px=max(1, round(rgb.shape[0] / 1080)))
+                rgb = _composite_alpha(rgb, grid_mask, GRID_RGB, GRID_ALPHA)
             if draw_overlay:
                 # The rings, bounds and frame size are identical every frame, so the
                 # (comparatively expensive) supersampled masks are built once here on

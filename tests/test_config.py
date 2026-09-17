@@ -832,3 +832,28 @@ def test_credit_rejects_non_string_values(tmp_path):
         RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\ncredit: false\n")))
     with pytest.raises(ConfigError, match="credit"):
         RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\ncredit: 0\n")))
+
+
+def test_render_pixel_grid_defaults_off(tmp_path):
+    # The overlay is opt-in: an existing config renders byte-identically.
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: lst\n")))
+    assert cfg.pixel_grid is False
+    cfg.validate()
+
+
+def test_render_pixel_grid_parses_true(tmp_path):
+    body = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, pixel_grid: true}")
+    assert RunConfig.from_yaml(_write(tmp_path, body)).pixel_grid is True
+
+
+@pytest.mark.parametrize("value", ['"true"', "100", "yes-please"])
+def test_render_pixel_grid_rejects_a_non_boolean(tmp_path, value):
+    # Same rule as the other render flags: a quoted string or a number is a typo,
+    # not a request (`pixel_grid: 100` would read as "100 m" and mean nothing).
+    body = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        f"render: {{fps: 4, scale: 30, dimensions: 768, pixel_grid: {value}}}")
+    with pytest.raises(ConfigError, match="render.pixel_grid must be true or false"):
+        RunConfig.from_yaml(_write(tmp_path, body))

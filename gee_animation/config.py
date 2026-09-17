@@ -28,7 +28,7 @@ class ConfigError(ValueError):
 
 
 #: Optional render flags that must be real YAML booleans (see _flag / validate).
-_RENDER_FLAGS = ("gif", "frames")
+_RENDER_FLAGS = ("gif", "frames", "pixel_grid")
 
 
 def _opt_int(render: dict, key: str):
@@ -119,6 +119,11 @@ class RunConfig:
     # region outline only — no header/legend/scale bar/credit/marker/letterbox.
     # For layouts the annotated frames can't serve (posters, GIS overlays, papers).
     raw_frames: bool = False
+    # Trace the fetched raster's own cell edges over the imagery (from
+    # render.pixel_grid). `_cap_dimensions` already fetches at the product's native
+    # GSD, so those cells ARE the product's pixels (~100 m for lst); the mesh is a
+    # local overlay on pixels already in hand — never sent to EE, a cache hit.
+    pixel_grid: bool = False
     # Also export each observed frame as a georeferenced GeoTIFF (`{name}_{label}.tif`,
     # from render.geotiffs): the composited float values themselves (index units, or
     # reflectance for rgb/cir) at native `scale` in the resolved CRS — for GIS use,
@@ -273,6 +278,7 @@ class RunConfig:
                 gif=_flag(render, "gif", default=None),
                 frames=_flag(render, "frames"),
                 raw_frames=_flag(render, "raw_frames", default=False),
+                pixel_grid=_flag(render, "pixel_grid", default=False),
                 geotiffs=_flag(render, "geotiffs", default=False),
                 out_dir=str(raw.get("out_dir", "out")),
                 title=(str(raw["title"]) if raw.get("title") else None),

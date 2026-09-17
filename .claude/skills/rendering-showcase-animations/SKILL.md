@@ -56,7 +56,7 @@ Engine computes. Re-render cost:
 
 - **Free** (pure cache hit): `fps`, `interpolate`, `title`, `subtitle`,
   `credit`, `palette`, `quality`, `preset`, `aspect`, `gif`, `frames`,
-  `raw_frames`, `geotiffs`, `region_line_width`, `workers`, `out_dir`
+  `raw_frames`, `geotiffs`, `region_line_width`, `pixel_grid`, `workers`, `out_dir`
 - **Full refetch**: `viz` min/max, `dimensions`, `crs`, `scale`, dates, either
   AOI, `mask_clouds`, cloud thresholds, `cadence`, pooling, `missions`
 
