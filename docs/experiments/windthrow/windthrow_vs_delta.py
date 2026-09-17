@@ -13,7 +13,8 @@ import numpy as np, geopandas as gpd, rasterio
 from rasterio.features import rasterize
 from scipy.stats import spearmanr
 
-R12 = "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel/Revier_12"
+import os
+R12 = next(p for p in ("/Volumes/2TB/winmol/training_data/WINDWURF_Tegel/Revier_12", os.path.expanduser("~/data/Winmol/training_data/WINDWURF_Tegel/Revier_12")) if os.path.isdir(p))
 STEMS = f"{R12}/predictions_cw_2026/R12_stems_tegel-unet_2026-08.gpkg"
 STREETS = f"{R12}/steet_mask.gpkg"
 WT_MIN_M = 20.0          # ≥ 20 m of predicted stem per 20 m cell (~4 stems) = "windthrow cell"

@@ -394,6 +394,32 @@ summers: Spearman ρ **+0.25 at 20 m** (was +0.10 with the pooled forests) and
 +0.30 at 100 m; top-10 % stem-density cells +1.22 K (20 m) / +0.99 K (100 m)
 above stem-free cells. Config: `config/r12_focus_lst_rf_delta_local_2025_2026.yaml`.
 
+### Heat islands vs detected fallen trees — object-level test (2026-09-17)
+
+`docs/experiments/windthrow/heat_islands.py`. Islands = connected patches ≥ 1 K
+above the footprint mean in the post-event summer mean (2025-07..2026-08, ≥ 3
+cells, footprint edge and streets excluded); "new" = not warm in the 2022–24
+summers. Windthrow clusters = ≥ 2 connected cells with ≥ 20 m predicted stem.
+
+| set | n | stem per cell | windthrow-dense share |
+|---|---|---|---|
+| footprint base rate (cells) | 10,485 | 3.3 m | 5 % |
+| all heat islands | 51 | 18.1 m | 39 % |
+| **new** islands (appeared after the storm) | 29 | **25.7 m** | **59 %** |
+| old islands (warm before too: paths, buildings) | 22 | 8.0 m | 14 % |
+
+Permutation null (500 random shifts of the stem map): new-island stem density
+0.7 ± 1.2 m vs observed 25.7 m, p < 0.002. From the other side: 78 windthrow
+clusters, mean post-event departure +1.12 K (pre-event 0.00 K), 56 % warmed
+by ≥ 1 K, 45 % sit inside a heat island. Cell-level Spearman between stem
+density and post−pre warming +0.24; windthrow-dense cells warmed +1.58 K,
+stem-free cells −0.11 K.
+
+Reading: the heat islands that appeared after the storm are the windthrow
+areas eight times more often than chance; about half of the predicted
+windthrow clusters produce a heat island, the other half (smaller or sparser
+throws, or gaps already closing by 2026) do not.
+
 ## Open questions for Christian
 
 - **Q1 — branch base.** The worktree branches from committed HEAD, so it lacks
