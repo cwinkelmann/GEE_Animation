@@ -890,3 +890,15 @@ def test_relative_rejects_unknown_modes_and_composites(tmp_path):
         RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nrelative: frame_mean\n")))
     with pytest.raises(ConfigError, match="relative"):
         RunConfig.from_yaml(_write(tmp_path, _base("index: rgb\nrelative: region_mean\n")))
+
+
+def test_sharpen_local_parses_and_is_lst_rf_only(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: lst_rf\nsharpen: local\n")))
+    assert cfg.sharpen == "local"
+    assert RunConfig.from_yaml(_write(tmp_path, _base("index: lst_rf\n"))).sharpen is None
+    with pytest.raises(ConfigError, match="sharpen"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nsharpen: local\n")))
+    with pytest.raises(ConfigError, match="sharpen"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: lst_rf\nsharpen: cloud\n")))
+    with pytest.raises(ConfigError, match="metadata"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: lst_rf\nsharpen: local\nmetadata: true\n")))

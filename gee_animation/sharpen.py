@@ -132,6 +132,10 @@ def lst_rf_period(coll, cfg, ee_module=ee):
     millis = coll.aggregate_array("system:time_start")
     start = ee_module.Date(millis.reduce(ee_module.Reducer.min())).advance(-S2_PAD_DAYS, "day")
     end = ee_module.Date(millis.reduce(ee_module.Reducer.max())).advance(S2_PAD_DAYS, "day")
+    if getattr(cfg, "sharpen", None) == "local":
+        # sharpen_local trains on this machine: hand it the plain composite plus
+        # the predictor window it should ask EE for (lazy millis, no round trip).
+        return lst.set({"s2_start": start.millis(), "s2_end": end.millis()})
     frame = parse_aoi(cfg.frame_aoi, ee_module)
     region = frame.buffer(TRAIN_BUFFER_M)
     predictors = s2_predictors(start, end, region, ee_module)

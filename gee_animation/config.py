@@ -194,6 +194,10 @@ class RunConfig:
     # region mean ("region_mean"). Both change the pixels, so both are in the cache key.
     region_only: bool = False
     relative: str = None
+    # lst_rf only: where the forest trains. None => in Earth Engine (products.
+    # sharpen); "local" => EE exports composites, scikit-learn does the rest
+    # (sharpen_local). In the cache key: the exported inputs are keyed by it.
+    sharpen: str = None
     # By default render is capped to the product's native resolution (no upsampling);
     # set True to allow a finer render (a warning still names the true native GSD).
     allow_upsample: bool = False
@@ -302,6 +306,7 @@ class RunConfig:
                 allow_slc_off=_flag(raw, "allow_slc_off", default=False, scope=""),
                 region_only=_flag(raw, "region_only", default=False, scope=""),
                 relative=(str(relative) if relative else None),
+                sharpen=(str(raw["sharpen"]) if raw.get("sharpen") else None),
                 smooth=(str(raw["smooth"]) if raw.get("smooth") else None),
                 harmonics=int(raw.get("harmonics", 2) or 2),
                 region_line_width=(int(render["region_line_width"])
@@ -441,6 +446,15 @@ class RunConfig:
             if not isinstance(value, bool):
                 raise ConfigError(
                     f"render.{flag} must be true or false (got {value!r})")
+        if self.sharpen is not None:
+            if self.sharpen != "local":
+                raise ConfigError(f"unknown sharpen {self.sharpen!r}; the only mode is 'local'")
+            if self.index != "lst_rf":
+                raise ConfigError("sharpen: local applies to index lst_rf only")
+            if self.metadata:
+                raise ConfigError(
+                    "sharpen: local cannot be combined with metadata: true — the frames "
+                    "no longer live in Earth Engine, where the stats are computed")
         if self.relative is not None:
             from .focus import RELATIVE_MODES
             if self.relative not in RELATIVE_MODES:

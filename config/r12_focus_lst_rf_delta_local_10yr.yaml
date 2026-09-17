@@ -1,0 +1,57 @@
+# Tegeler Forst, Revier 12: RF-sharpened surface temperature INSIDE the footprint,
+# each month expressed as its departure from that month's footprint mean (K).
+# Absolute temperature differs between years and seasons; the within-footprint
+# contrast (paths, clearings, buildings vs. closed canopy) is what this keeps
+# comparable across the whole 2017-2026 series. ±3 K fits the interior: the
+# canopy sits within about ±1.5 K of the mean, hot spots saturate (they are
+# outliers, and saturating them is the point).
+#
+# Same as r12_focus_lst_rf_delta_10yr but with the forest trained on this machine:
+# one model per calendar month across 2017-2026, leave-one-year-out scored, saved
+# under out/models/<name>/. EE only serves two GeoTIFFs per month.
+#
+# EXPERIMENTAL product lst_rf: the 20 m detail is Sentinel-2 texture with the
+# 100 m temperature painted on (docs/superpowers/plans/2026-09-17-lst-rf-sharpening.md).
+name: r12_focus_lst_rf_delta_local_10yr
+project: hnee-331218
+title: Tegeler Forst, Revier 12
+subtitle: "RF-sharpened · Δ vs footprint mean"
+aoi:
+  frame: { bbox: [13.2162, 52.5680, 13.2862, 52.6102] }   # footprint bounds + 0.4 km, 4.7 x 4.7 km
+  region: { geojson: docs/aoi/r12/r12_footprint.geojson }
+  region_max_cloud_percent: 20
+start: "2017-01-01"
+end: "2026-09-01"
+sensor: landsat
+index: lst_rf
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+missions: [L8, L9]
+metadata: false
+sharpen: local                 # EE exports composites; the forest trains here (sharpen_local)
+region_only: true              # mask outside the footprint (renders as no-data grey)
+relative: region_mean          # each frame = value − its own footprint mean, in K
+
+pool_years: [2017, 2026]
+pool_strategy: gap_fill
+
+viz:
+  min: -3.0
+  max: 3.0                    # K; symmetric so the ramp's centre is the footprint mean
+  palette: ['#2166ac', '#67a9cf', '#d1e5f0', '#f7f7f7', '#fddbc7', '#ef8a62', '#b2182b']
+
+render:
+  fps: 6
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 20
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: "match"               # canvas follows the near-square footprint extent
+  upscale: lanczos
+  region_line_width: 5
+  quality: 9
+  raw_frames: true
+  geotiffs: true                 # the delta field itself, per observed month

@@ -6,7 +6,7 @@ import sys
 import types
 from pathlib import Path
 
-from . import anomaly, smoothing, auth, aoi, collection, compositing, debug, focus, inventory, metadata, render
+from . import anomaly, smoothing, auth, aoi, collection, compositing, debug, focus, inventory, metadata, render, sharpen_local
 from .config import RunConfig, ConfigError
 
 DEFAULT_DEPS = types.SimpleNamespace(
@@ -16,6 +16,7 @@ DEFAULT_DEPS = types.SimpleNamespace(
     monthly_median=compositing.monthly_median,
     anomaly=anomaly.apply,
     smooth=smoothing.apply,
+    sharpen_local=sharpen_local.apply,
     focus=focus.apply,
     metadata=metadata.write_frame_metadata,
     render=render.render,
@@ -57,6 +58,9 @@ def run(config_path: str, deps=DEFAULT_DEPS, inventory: bool = False) -> list[Pa
     # runs after compositing (it needs the frame dates) and after anomaly (which
     # would otherwise score a model against a climatology).
     frames = deps.smooth(frames, coll, cfg)
+    # sharpen: local — EE exports the composites, the forest runs here; frames
+    # come back as LocalImages that render/focus/geotiffs handle without EE.
+    frames = deps.sharpen_local(frames, cfg, frame_geom, region_geom)
     # Region focus (mask outside / relative to the region mean) is the last
     # transform: it must see the final field, whatever produced it.
     frames = deps.focus(frames, cfg, region_geom)

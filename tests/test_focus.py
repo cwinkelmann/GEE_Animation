@@ -68,3 +68,16 @@ def test_relative_then_region_only_computes_the_mean_before_clipping():
     focus.apply([Frame("2022-07", p)], cfg, "REGION", ee_module=ee)
     names = _names(log)
     assert names.index("reduceRegion") < names.index("subtract") < names.index("clip")
+
+
+def test_focus_handles_local_images_without_earth_engine():
+    import numpy as np
+    from gee_animation.local_image import LocalImage
+    vals = np.ones((10, 10), "float32"); vals[:5] = 3.0
+    img = LocalImage(vals, (0, 0, 200, 200), "EPSG:32633", 20)
+    cfg = types.SimpleNamespace(region_only=True, relative="region_mean", scale=20,
+                                region_aoi={"rings_projected": [[(0, 100), (200, 100), (200, 200), (0, 200), (0, 100)]]})
+    out = focus.apply([Frame("2022-07", img)], cfg, region_geom=None,
+                      ee_module=types.SimpleNamespace())
+    v = out[0].image.values
+    assert v[0, 0] == 0.0 and np.isnan(v[9, 9])       # top half minus its mean 3.0; bottom clipped

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ee
 
+from .local_image import LocalImage, projected_region_rings
 from .products import INDEX_BAND
 
 RELATIVE_MODES = ("region_mean",)
@@ -34,6 +35,15 @@ def apply(frames, cfg, region_geom, ee_module=ee):
     out = []
     for frame in frames:
         image = frame.image
+        if isinstance(image, LocalImage):
+            # the field is on this machine: mask and mean with the projected rings
+            rings = projected_region_rings(cfg.region_aoi, image.crs)
+            if relative == "region_mean":
+                image = image.subtract(image.region_mean(rings))
+            if region_only:
+                image = image.clip(rings)
+            out.append(frame._replace(image=image))
+            continue
         if relative == "region_mean":
             mean = image.select(INDEX_BAND).reduceRegion(
                 ee_module.Reducer.mean(), geometry=region_geom, scale=scale,

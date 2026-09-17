@@ -22,6 +22,7 @@ from PIL import Image, ImageDraw, ImageFont
 from . import cache, interpolate, labels
 from .aoi import _load_geojson_geometry, _read_shapefile_geometry
 from .imaging import colorize
+from .local_image import LocalImage
 from .products import INDICES, native_scale_m
 
 log = logging.getLogger(__name__)
@@ -255,6 +256,15 @@ def _export_geotiffs(frames, cfg, geometry) -> list:
     failed: list[str] = []
 
     def one(frame):
+        if isinstance(frame.image, LocalImage):
+            import rasterio
+            li = frame.image
+            path = out_dir / f"{cfg.name}_{frame.label}.tif"
+            with rasterio.open(path, "w", driver="GTiff", height=li.values.shape[0],
+                               width=li.values.shape[1], count=1, dtype="float32",
+                               crs=li.crs, transform=li.transform, nodata=np.nan) as dst:
+                dst.write(li.values.astype("float32")[None])
+            return path
         with cache.frame_identity(getattr(frame, "label", None),
                                   getattr(frame, "source", None)):
             key = cache.thumb_key(cfg, params, composite)
@@ -367,6 +377,9 @@ def _fetch_thumbnail(image, cfg, geometry):
     to a fresh fetch. Anything wrong with a cached entry — unreadable file,
     truncated PNG — is downgraded to a miss; the cache can never break a run.
     """
+    if isinstance(image, LocalImage):
+        # the field was produced on this machine (sharpen: local): no EE, no cache
+        return image.thumbnail(int(getattr(cfg, "dimensions", 0) or 1024))
     composite = _is_composite(cfg)
     params = _thumb_params(cfg, geometry)
     key = cache.thumb_key(cfg, params, composite)

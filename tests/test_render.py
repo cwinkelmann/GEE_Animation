@@ -3119,3 +3119,28 @@ def test_colorbar_units_are_kelvin_deltas_for_a_relative_run():
     assert _colorbar_units(types.SimpleNamespace(**{**base, "relative": "region_mean"})) == "K"
     assert _index_display_name(types.SimpleNamespace(**{**base, "relative": "region_mean"})) \
         == "Land surface temperature − region mean"
+
+
+def test_fetch_thumbnail_serves_a_local_image_without_earth_engine(tmp_path, monkeypatch):
+    from gee_animation.local_image import LocalImage
+    from gee_animation.render import _fetch_thumbnail
+    import gee_animation.render as r
+    monkeypatch.setattr(r.cache, "load", lambda *a, **k: pytest.fail("cache must not be touched"))
+    cfg = _cfg(tmp_path); cfg.dimensions = 30
+    vals = np.full((10, 20), 7.0, "float32"); vals[0, 0] = np.nan
+    arr, valid = _fetch_thumbnail(LocalImage(vals, (0, 0, 400, 200), "EPSG:32633", 20), cfg, None)
+    assert arr.shape == (15, 30) and arr[7, 15] == pytest.approx(7.0) and not valid[0, 0]
+
+
+def test_export_geotiffs_writes_a_local_image_directly(tmp_path):
+    from gee_animation.local_image import LocalImage
+    from gee_animation.render import _export_geotiffs
+    import rasterio
+    cfg = _cfg(tmp_path); cfg.crs = "EPSG:32633"
+    vals = np.full((10, 20), 7.0, "float32")
+    paths = _export_geotiffs([Frame("2022-07", LocalImage(vals, (0, 0, 400, 200), "EPSG:32633", 20))],
+                             cfg, None)
+    assert len(paths) == 1 and paths[0].name == "anim_2022-07.tif"
+    with rasterio.open(paths[0]) as ds:
+        assert ds.count == 1 and ds.res == (20.0, 20.0) and ds.read(1)[5, 5] == 7.0
+        assert ds.bounds.left == 0 and ds.bounds.top == 200
