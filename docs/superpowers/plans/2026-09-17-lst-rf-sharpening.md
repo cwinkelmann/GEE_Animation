@@ -326,6 +326,43 @@ good at — cloud-masked composites over an archive. Design for the real thing:
 with "the local one is awesome and good enough". The EE-trained delta render was
 stopped in favour of `config/r12_focus_lst_rf_delta_local_10yr.yaml`.
 
+## Windthrow test (2026-09-17) — the thermal profile does show where the trees fell
+
+Question (Christian): "my assumption would be that we can see where most trees
+fell by the thermal profile". Data: the tegel-unet stem predictions
+(`predictions_cw_2026/R12_stems_tegel-unet_2026-08.gpkg`, 8,323 stems from the
+2025 flight) rasterised to metres of stem per 20 m cell; the local lst_rf delta
+run (`r12_focus_lst_rf_delta_local_10yr`, 107 observed/gap-filled months); streets
+excluded via `steet_mask.gpkg`. Scripts and outputs: `docs/experiments/windthrow/`.
+
+**Time series** (windthrow cells with ≥ 20 m stem, n = 620, minus stem-free
+canopy, n = 9,110): within ±0.3 K for every month from 2017-01 to 2025-06, then
++1.36 K (2025-07), +1.75 (2025-08), +1.13 (2025-09), +1.50 (2026-04), +1.99
+(2026-05), +0.65 to +1.11 (2026-06 to 08). Every post-event month is a real
+observation, not a donor; the step is in the month the stems appear in the
+imagery. Pre-event summers with real observations (2018, 2019, 2022, 2023, 2024)
+sit at −0.3 to +0.3 K, so the signal is not the model "expecting" gaps to be
+warm — those cells were canopy then and looked like canopy.
+
+**Maps, post-event summers only (2025-07 → 2026-08):**
+
+| scale | Spearman ρ | top-10 % stem density vs stem-free |
+|---|---|---|
+| 20 m sharpened | +0.10 | +0.77 K vs −0.05 K → **+0.83 K** |
+| 100 m = observed Landsat | **+0.32** | +0.71 K vs −0.29 K → **+1.00 K** |
+
+The 100 m row is measured temperature, independent of the forest. The dense
+windthrow band across the north-centre of the footprint and the diagonal line
+of throws read as warm patches; the hottest cells remain the western buildings
+and the eastern edge, which are not windthrow — so the profile finds the dense
+clusters, not every stem.
+
+Caveats: gap-filled winter months repeat donor frames (identical values across
+years in the CSV are the same imagery); 2021-05 (+1.41 K) is a mostly-masked
+frame with 65 cells and should be ignored; the leave-one-year-out RMSE of the
+monthly forests is 1.7–5.2 K (`lst_rf_local_models_loyo.csv`), i.e. the
+absolute 20 m field is not accurate — only its within-cell contrast is used here.
+
 ## Open questions for Christian
 
 - **Q1 — branch base.** The worktree branches from committed HEAD, so it lacks
