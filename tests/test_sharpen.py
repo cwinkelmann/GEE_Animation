@@ -38,7 +38,7 @@ def _fake_ee(log):
 
     ee = types.SimpleNamespace(
         Image=p, ImageCollection=image_collection, Number=p, Date=p, List=p,
-        Filter=p, Reducer=p, Projection=p, Geometry=p,
+        Filter=p, Reducer=p, Projection=p, Geometry=p, Join=p,
         Classifier=types.SimpleNamespace(smileRandomForest=classifier_rf))
     return ee, p
 
@@ -57,6 +57,8 @@ def test_s2_predictors_reads_s2_sr_and_the_dem_and_names_every_band():
     out = sharpen.s2_predictors("2022-06-01", "2022-07-01", p, ee_module=ee)
     ids = [a[0] for a, k in _calls(log, "ImageCollection")]
     assert sharpen.S2_ID in ids and sharpen.DEM_ID in ids
+    # the SCL/s2cloudless mask needs the probability band the sensor normally joins
+    assert "COPERNICUS/S2_CLOUD_PROBABILITY" in ids
     renamed = {a[0] for a, k in _calls(log, "rename")}
     assert set(sharpen.PREDICTORS) <= renamed
     assert out is p
@@ -72,9 +74,15 @@ def test_rf_sharpen_trains_a_regression_forest_on_lst_and_adds_the_coarse_residu
     assert ("REGRESSION",) in [a for a, k in _calls(log, "setOutputMode")]
     trained = _calls(log, "train")
     assert trained and trained[0][0][1] == "lst" and trained[0][0][2] == list(sharpen.PREDICTORS)
-    # the fine prediction AND the coarse prediction are classified (two classify calls),
-    # the coarse residual is formed (subtract) and added back (add)
-    assert len(_calls(log, "classify")) == 2
+    # ONE classify (the fine prediction); the residual is taken against that
+    # prediction AGGREGATED to the coarse grid (a reduceResolution after classify),
+    # not against a second classify at coarse predictors — a forest is nonlinear,
+    # so only the aggregated form keeps the sharpened cell means equal to the
+    # observed LST. Then subtract (residual) and add (back).
+    assert len(_calls(log, "classify")) == 1
+    names = [n for n, a, k in log]
+    assert names.index("classify") < names.index("subtract")
+    assert "reduceResolution" in names[names.index("classify"):names.index("subtract")]
     names = [n for n, a, k in log]
     assert names.index("subtract") < names.index("add")
     # aggregated to the coarse grid with a mean, at the requested scales

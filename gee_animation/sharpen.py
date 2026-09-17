@@ -19,10 +19,10 @@ import math
 
 import ee
 
-from .products import INDEX_BAND, _s2_mask_clouds
+from .products import INDEX_BAND, _s2_attach_cloud_prob, _s2_mask_clouds
 
 S2_ID = "COPERNICUS/S2_SR_HARMONIZED"
-DEM_ID = "COPERNICUS/DEM/GLO30"
+DEM_ID = "COPERNICUS/DEM/GLO30_2024_1"   # GLO30 without the suffix is deprecated
 PREDICTORS = ("ndvi", "nirv", "ndbi", "mndwi", "dem")
 #: Sentinel-2 scene-level cloud cap for the predictor composite.
 S2_MAX_CLOUD = 70
@@ -51,8 +51,11 @@ def s2_predictors(start, end, geom, ee_module=ee):
     """Sentinel-2 SR median over [start, end) → ndvi, nirv, ndbi, mndwi (+ dem)."""
     coll = (ee_module.ImageCollection(S2_ID)
             .filterDate(start, end).filterBounds(geom)
-            .filter(ee_module.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", S2_MAX_CLOUD))
-            .map(lambda img: _s2_mask_clouds(img, ee_module)))
+            .filter(ee_module.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", S2_MAX_CLOUD)))
+    # the sensor's mask reads SCL AND the s2cloudless `cloud_prob` band, which
+    # collection.build normally joins via Sensor.attach_aux — do the same here
+    coll = _s2_attach_cloud_prob(coll, start, end, geom, ee_module=ee_module)
+    coll = coll.map(lambda img: _s2_mask_clouds(img, ee_module))
     med = coll.select(["B3", "B4", "B8", "B11"]).median().multiply(0.0001)
     ndvi = med.normalizedDifference(["B8", "B4"]).rename("ndvi")
     nirv = ndvi.multiply(med.select("B8")).rename("nirv")
@@ -84,8 +87,13 @@ def rf_sharpen(lst_coarse, predictors, *, proj, coarse_m, fine_m, region,
              .setOutputMode("REGRESSION")
              .train(train, "lst", list(PREDICTORS)))
     fit_f = pred_f.classify(model).rename("lst")
-    fit_c = pred_c.classify(model).rename("lst")
-    residual_c = lst_c.subtract(fit_c)          # observed − modelled, on the coarse grid
+    # Residual against the FINE prediction aggregated to the coarse grid — not a
+    # second prediction at coarse predictors. A forest is nonlinear, so
+    # mean(f(x_fine)) != f(mean(x)); only this form makes the sharpened field
+    # aggregate back to the observed coarse LST exactly (the TsHARP guarantee).
+    fit_f_c = (fit_f.reduceResolution(ee_module.Reducer.mean(), maxPixels=4096)
+               .reproject(proj.atScale(coarse_m)))
+    residual_c = lst_c.subtract(fit_f_c)        # observed − modelled, on the coarse grid
     sharp = fit_f.add(residual_c)               # fine fit + coarse residual (nearest)
     return sharp.rename(INDEX_BAND).toFloat()
 

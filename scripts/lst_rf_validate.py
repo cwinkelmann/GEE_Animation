@@ -99,7 +99,7 @@ def main() -> int:
                      .rename("ic").reduceRegion(ee.Reducer.percentile([99]), geometry=frame,
                                                 scale=FINE_M, crs=proj, bestEffort=True,
                                                 maxPixels=int(1e9)))
-            combined = combined.combine(intra.rename(["ic_p99"], [f"{name}_p99_intracell"]))
+            combined = combined.combine(intra.rename(["ic"], [f"{name}_p99_intracell"]))  # one percentile keeps the band name
         vals = combined.getInfo()
         for name in METHODS:
             rows.append({

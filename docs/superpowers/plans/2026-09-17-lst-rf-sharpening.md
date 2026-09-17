@@ -181,6 +181,107 @@ fine_m=100`. Lives in `scripts/`, integration-only (needs EE); no unit test.
    so the 20 m cells are visible) — the render that answers "does it look
    better than the 100 m blocks".
 
+## Results
+
+### Pass 1 — as first implemented (residual against a second coarse prediction)
+
+`out/lst_rf_validate_v1_coarse_residual.csv`, 2026-09-17 13:16–13:47. Frame-wide
+RMSE (K) of the recovered 100 m field against the real 100 m LST:
+
+| month | scenes | nearest | linear (TsHARP) | rf |
+|---|---|---|---|---|
+| 2018-05 | 2 | **1.308** | 1.610 | 1.434 |
+| 2018-08 | 1 | **1.219** | 1.592 | 1.991 |
+| 2019-10 | 1 | **0.493** | 0.582 | 0.686 |
+| 2020-03 | 1 | **0.700** | 0.711 | 0.875 |
+| 2022-06 | 1 | **1.577** | 1.826 | 1.635 |
+| 2023-09 | 2 | **0.876** | 1.059 | 0.958 |
+| 2025-02 | 1 | **0.667** | 0.705 | 0.848 |
+| 2026-07 | 1 | **1.295** | 1.477 | 1.432 |
+
+**Gate: FAIL** — rf beats linear by ≥ 0.2 K in 0/8 months, and is worse than
+*no sharpening* in 8/8. So is TsHARP. Doing nothing wins every month.
+
+A defect found while this ran, fixed before pass 2: the rf residual was taken
+against a second forest prediction at the coarse predictors, `f(mean x)`. A
+forest is nonlinear, so `mean f(x_fine) ≠ f(mean x)` and the sharpened field did
+not aggregate back to the observed cell means — the conservation the plan
+promised. Pass 2 takes the residual against the fine prediction aggregated to
+the coarse grid (`sharpen.rf_sharpen`, test
+`test_rf_sharpen_trains_a_regression_forest_on_lst_and_adds_the_coarse_residual`).
+The linear method is unaffected (exact for a linear fit).
+
+### Pass 2 — mean-conserving residual
+
+`out/lst_rf_validate_v2_conserving_residual.csv`, 2026-09-17 13:48–14:17.
+Same months, same inputs; only the rf residual changed.
+
+| month | scenes | nearest | linear (TsHARP) | rf |
+|---|---|---|---|---|
+| 2018-05 | 2 | **1.308** | 1.610 | 1.318 |
+| 2018-08 | 1 | **1.219** | 1.592 | 1.727 |
+| 2019-10 | 1 | **0.493** | 0.582 | 0.619 |
+| 2020-03 | 1 | **0.700** | 0.711 | 0.763 |
+| 2022-06 | 1 | 1.577 | 1.826 | **1.478** |
+| 2023-09 | 2 | 0.876 | 1.059 | **0.872** |
+| 2025-02 | 1 | **0.667** | 0.705 | 0.762 |
+| 2026-07 | 1 | 1.295 | 1.477 | **1.238** |
+
+**Gate: FAIL** — rf beats linear by ≥ 0.2 K in 3/8 months (need 6) and is
+worse than nearest in 5/8 (need 0). The conserving residual was worth up to
+0.26 K (2018-08: 1.99 → 1.73) and turned three summer months into wins over
+doing nothing, but the pre-registered bar is not met. TsHARP loses to nearest
+in every month in both passes.
+
+### Why sharpening cannot win this test here — measured
+
+Pearson r between the 100 m LST field and each predictor at 100 m and 300 m,
+and the LST standard deviation at both scales, over the frame:
+
+| month | sd(LST)@100 | sd(LST)@300 | ndbi | nirv | ndvi | mndwi |
+|---|---|---|---|---|---|---|
+| 2018-08 | 5.79 K | 5.87 K | 0.74 | −0.57 | −0.46 | 0.02 |
+| 2019-10 | 1.60 K | 1.53 K | 0.65 | −0.56 | −0.70 | 0.46 |
+| 2022-06 | 5.16 K | 4.92 K | 0.68 | −0.33 | −0.28 | −0.19 |
+
+(correlations at 100 m; at 300 m they are within ±0.07 of these.)
+
+Two facts decide the outcome:
+
+1. **There is almost no sub-300 m thermal variance to recover.** sd(LST) is
+   the same at 100 m and 300 m. The USGS C2 L2 ST field over Berlin is smooth
+   below ~300 m — TIRS is 100 m native and the product is resampled — so the
+   floor (nearest) is already within 0.5–1.6 K, and any detail a sharpener adds
+   is scored against a field that does not contain it.
+2. **The predictors carry the coarse structure, not the fine.** Their
+   correlation with LST barely changes between 100 m and 300 m, so a model fit
+   at 300 m has nothing extra to say at 100 m. NDBI (built-up) is the best
+   single predictor by a wide margin; NIRv — TsHARP's predictor — is weak in
+   summer, which is why the forest beat the linear method even while both lost
+   to doing nothing.
+
+The same reasoning applies one step down: the production ratio (100 m → 20 m)
+has **no independent truth at all**, and the 20 m detail an `lst_rf` frame
+shows is the predictors' texture with the coarse temperature painted on. It may
+look better than 100 m blocks; this experiment cannot show that it *is* better,
+and the test that could was failed at the only ratio where it can be run.
+
+### Verdict
+
+**Negative result, recorded.** `lst_rf` stays on this branch as an
+experimental product (registry entry, tests, example config, validation
+script) and is not merged into a showcase. One illustration frame
+(`out/r12_zoom_lst_rf_2024-07_2024-07.png`, July 2024, zoomed R12 frame) shows
+what the sharpened field looks like next to the 100 m blocks of
+`r12_zoom_lst_pretty_10yr_grid`. If a genuinely finer thermal truth ever exists
+for this site (an airborne TIR flight, or ECOSTRESS at 70 m), rerun
+`scripts/lst_rf_validate.py` against it before believing any 20 m frame.
+
+Steps 3–5 of the plan were executed ahead of the gate (the wiring is needed to
+render the illustration and costs nothing if unused); the harmonic-smoothing
+refusal and the `reduce_period_cfg` seam are the only touches outside the new
+module.
+
 ## Open questions for Christian
 
 - **Q1 — branch base.** The worktree branches from committed HEAD, so it lacks
