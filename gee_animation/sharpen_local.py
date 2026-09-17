@@ -4,14 +4,14 @@ Earth Engine's part shrinks to two cached GeoTIFF exports per frame — the
 Landsat LST composite and the Sentinel-2 predictor stack, both on the 20 m grid
 over the frame buffered by TRAIN_BUFFER_M. Everything the spike timed at
 sub-second runs here in numpy / scikit-learn: 100 m aggregation, one forest per
-CALENDAR MONTH trained across all years of that month (leave-one-year-out
-scored), prediction on the 20 m grid, and the conserving residual. Models are
-persisted with joblib under <out_dir>/models/<name>/.
+FRAME (scored out-of-bag on its own coarse cells), prediction on the 20 m grid,
+and the conserving residual. Models are persisted with joblib under
+<out_dir>/models/<name>/.
 
-Why per calendar month: the index→temperature relation flips with season (a
-July built-up pixel is the hottest thing in the frame; in January it is not),
-and pooling the years of one month gives a consistent mapping across the
-series — which is what makes years comparable in a delta view.
+Why per frame and not per calendar month across years (the first design): the
+index→temperature relation does not transfer between dates — pooling ten Julys
+tripled the 20 m noise and scored 2–5 K leave-one-year-out. See
+train_frame_models.
 """
 from __future__ import annotations
 
@@ -81,7 +81,8 @@ def fit_forest(pairs, factor: int = FACTOR, n_samples: int = N_SAMPLES_PER_FRAME
         xs.append(X); ys.append(y)
     X, y = np.concatenate(xs), np.concatenate(ys)
     model = RandomForestRegressor(n_estimators=N_TREES, min_samples_leaf=MIN_LEAF,
-                                  max_samples=BAG, n_jobs=-1, random_state=seed)
+                                  max_samples=BAG, n_jobs=-1, random_state=seed,
+                                  oob_score=True)
     model.fit(X, y)
     return model
 
@@ -105,37 +106,36 @@ def sharpen_frame(lst: np.ndarray, pred: np.ndarray, model, factor: int = FACTOR
     return out
 
 
-def _month_key(label: str) -> str:
-    parts = label.split("-")
-    return parts[1][:2] if len(parts) > 1 else label
+def train_frame_models(inputs: dict, factor: int = FACTOR,
+                       n_samples: int = N_SAMPLES_PER_FRAME, seed: int = 1):
+    """{label: (lst, pred)} → ({label: model}, [score rows]): ONE forest per frame,
+    scored out-of-bag on that frame's own coarse cells.
 
-
-def train_monthly_models(inputs: dict, factor: int = FACTOR,
-                         n_samples: int = N_SAMPLES_PER_FRAME, seed: int = 1):
-    """{label: (lst, pred)} → ({month: model}, [score rows]). One forest per calendar
-    month across its frames; leave-one-frame-out RMSE on the held-out frame's
-    coarse cells when there is more than one frame (one frame ≈ one year)."""
-    by_month: dict[str, list] = {}
-    for label, pair in inputs.items():
-        by_month.setdefault(_month_key(label), []).append((label, pair))
+    Why not one model per calendar month across years (the first design): pooling
+    ten Julys tripled the 20 m noise (high-frequency sd 1.79 K vs 0.60 K on
+    2024-07, fields correlating at only 0.41) and leave-one-year-out errors were
+    2–5 K. The index→temperature relation does not transfer between dates — every
+    pass has its own sun, wind and soil moisture — so each frame gets its own fit.
+    """
     models, scores = {}, []
-    for month, items in sorted(by_month.items()):
-        pairs = [pair for _, pair in items]
-        models[month] = fit_forest(pairs, factor, n_samples, seed)
-        n_cells = sum(len(_coarse_samples(l, p, factor)[1]) for l, p in pairs)
-        loyo = None
-        if len(pairs) > 1:
-            errs = []
-            for i, (lst, pred) in enumerate(pairs):
-                m = fit_forest(pairs[:i] + pairs[i + 1:], factor, n_samples, seed)
-                X, y = _coarse_samples(lst, pred, factor)
-                if len(y):
-                    errs.append(float(np.sqrt(np.mean((m.predict(X) - y) ** 2))))
-            loyo = float(np.mean(errs)) if errs else None
-        scores.append({"month": month, "n_frames": len(pairs), "n_cells": int(n_cells),
-                       "loyo_rmse": loyo})
-        log.info("lst_rf local: month %s — %d frame(s), %d cells, LOYO RMSE %s",
-                 month, len(pairs), n_cells, f"{loyo:.2f} K" if loyo else "n/a")
+    for label in sorted(inputs):
+        lst, pred = inputs[label]
+        model = fit_forest([(lst, pred)], factor, n_samples, seed)
+        X, y = _coarse_samples(lst, pred, factor)
+        oob_r2 = float(getattr(model, "oob_score_", float("nan")))
+        oob_pred = getattr(model, "oob_prediction_", None)
+        n_fit = len(model.oob_prediction_) if oob_pred is not None else 0
+        # oob_prediction_ lines up with the (possibly subsampled) training rows;
+        # RMSE from it is on the fitted subset, which is what the OOB score is too.
+        y_fit = y if n_fit == len(y) else None
+        oob_rmse = (float(np.sqrt(np.nanmean((oob_pred - y_fit) ** 2)))
+                    if y_fit is not None and n_fit else float("nan"))
+        if not np.isfinite(oob_rmse):
+            oob_rmse = float(np.sqrt(max(0.0, (1 - oob_r2)) * np.var(y))) if len(y) else float("nan")
+        models[label] = model
+        scores.append({"label": label, "n_cells": int(len(y)), "oob_r2": oob_r2, "oob_rmse": oob_rmse})
+        log.info("lst_rf local: %s — %d cells, OOB R² %.2f, OOB RMSE %.2f K",
+                 label, len(y), oob_r2, oob_rmse)
     return models, scores
 
 
@@ -185,16 +185,16 @@ def apply(frames, cfg, frame_geom, region_geom, ee_module=ee, fetch=None):
         fetched = list(pool.map(inputs_for, frames))
     inputs = {label: pair for label, pair, _ in fetched}
     geo = {label: meta for label, _, meta in fetched}
-    models, scores = train_monthly_models(inputs)
+    models, scores = train_frame_models(inputs)
 
     out_dir = Path(getattr(cfg, "out_dir", "out"))
     mdir = out_dir / "models" / cfg.name
     mdir.mkdir(parents=True, exist_ok=True)
     import joblib
-    for month, model in models.items():
-        joblib.dump(model, mdir / f"{month}.joblib")
+    for label, model in models.items():
+        joblib.dump(model, mdir / f"{label}.joblib")
     with (out_dir / f"{cfg.name}_models.csv").open("w", newline="") as fh:
-        wtr = csv.DictWriter(fh, fieldnames=["month", "n_frames", "n_cells", "loyo_rmse"])
+        wtr = csv.DictWriter(fh, fieldnames=["label", "n_cells", "oob_r2", "oob_rmse"])
         wtr.writeheader(); wtr.writerows(scores)
     log.info("lst_rf local: %d model(s) written to %s", len(models), mdir)
 
@@ -202,7 +202,7 @@ def apply(frames, cfg, frame_geom, region_geom, ee_module=ee, fetch=None):
     for frame in frames:
         lst, pred = inputs[frame.label]
         (b, c, res) = geo[frame.label]
-        sharp = sharpen_frame(lst, pred, models[_month_key(frame.label)])
+        sharp = sharpen_frame(lst, pred, models[frame.label])
         local = LocalImage(sharp, b, c, res).crop(pbounds)
         out.append(frame._replace(image=local))
     return out

@@ -74,16 +74,17 @@ def test_sharpen_frame_leaves_cells_without_lst_masked():
     assert np.all(np.isnan(sharp[:5, :5])) and np.isfinite(sharp[10, 10])
 
 
-def test_models_are_trained_per_calendar_month_across_years_with_loyo_scores():
-    inputs = {"2018-07": _synthetic(1), "2019-07": _synthetic(2), "2020-07": _synthetic(3),
-              "2019-01": _synthetic(4)}
-    models, scores = sharpen_local.train_monthly_models(inputs, factor=5, n_samples=200, seed=1)
-    assert set(models) == {"07", "01"}
-    assert {s["month"] for s in scores} == {"07", "01"}
-    july = next(s for s in scores if s["month"] == "07")
-    assert july["n_frames"] == 3 and july["loyo_rmse"] > 0     # 3 folds, one per year
-    jan = next(s for s in scores if s["month"] == "01")
-    assert jan["n_frames"] == 1 and jan["loyo_rmse"] is None   # nothing to hold out
+def test_models_are_trained_per_frame_with_an_out_of_bag_score():
+    # 2026-09-17: pooling the years of a calendar month tripled the 20 m noise
+    # (1.79 K vs 0.60 K high-frequency sd on 2024-07) and the LOYO errors were
+    # 2-5 K — the index->temperature relation does not transfer between years.
+    # One forest per frame, scored out-of-bag on its own coarse cells.
+    inputs = {"2018-07": _synthetic(1), "2019-07": _synthetic(2), "2019-01": _synthetic(4)}
+    models, scores = sharpen_local.train_frame_models(inputs, factor=5, n_samples=200, seed=1)
+    assert set(models) == set(inputs)
+    assert [s["label"] for s in scores] == ["2018-07", "2019-01", "2019-07"]
+    for s in scores:
+        assert s["n_cells"] > 0 and -1.0 <= s["oob_r2"] <= 1.0 and s["oob_rmse"] > 0
 
 
 # --- LocalImage -------------------------------------------------------------------

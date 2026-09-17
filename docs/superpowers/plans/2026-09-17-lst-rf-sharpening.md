@@ -363,6 +363,37 @@ frame with 65 cells and should be ignored; the leave-one-year-out RMSE of the
 monthly forests is 1.7–5.2 K (`lst_rf_local_models_loyo.csv`), i.e. the
 absolute 20 m field is not accurate — only its within-cell contrast is used here.
 
+## Noise fix (2026-09-17 evening): one forest per frame, not per calendar month
+
+Christian, on the finished ten-year delta animation: "looks like some overfitted
+noise, in the end not even the street is visible". Measured on 2024-07, the same
+month two ways:
+
+| forest | sd of field | high-frequency noise (field − 3×3 median) |
+|---|---|---|
+| pooled July 2017–2026 (the run) | 2.21 K | **1.79 K** |
+| trained on that month alone (the trial) | 1.30 K | **0.60 K** |
+
+The two fields correlate at only 0.41; every summer of the pooled run sits at
+1.6–1.8 K noise; the predictors' own speckle is 7–35 % of their variance, so
+they are not the source. Root cause: the index→temperature relation does not
+transfer between dates (the LOYO 2–5 K said so already), and a forest fitted
+across ten Julys answers each 20 m pixel with a compromise that flips between
+leaves. Fix: `sharpen_local.train_frame_models` — one forest per frame, scored
+out-of-bag (R² 0.60–0.87 on 2025–2026 frames). On May 2025–Aug 2026 the
+high-frequency noise falls from 1.84 K to 0.65 K (ratio 0.38) and the warm
+patches become coherent blobs on the windthrow clusters.
+
+### Focused analysis, May 2025 – August 2026 (per-frame forests)
+
+Windthrow cells minus stem-free canopy: −0.12 K (2025-05, pre-event), then
++1.60 (07), +2.29 (08), +0.91 (09), −0.14 (11), +0.11 (2026-02), +0.66 (03),
++1.58 (04), +2.00 (05), +2.26 (06), +1.62 (07), +1.91 (08). Note 2025-06 has no
+Landsat pass and is a donor copy of 2026-06 (identical values). Maps, post-event
+summers: Spearman ρ **+0.25 at 20 m** (was +0.10 with the pooled forests) and
++0.30 at 100 m; top-10 % stem-density cells +1.22 K (20 m) / +0.99 K (100 m)
+above stem-free cells. Config: `config/r12_focus_lst_rf_delta_local_2025_2026.yaml`.
+
 ## Open questions for Christian
 
 - **Q1 — branch base.** The worktree branches from committed HEAD, so it lacks
