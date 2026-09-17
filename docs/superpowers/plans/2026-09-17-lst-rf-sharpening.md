@@ -420,6 +420,26 @@ areas eight times more often than chance; about half of the predicted
 windthrow clusters produce a heat island, the other half (smaller or sparser
 throws, or gaps already closing by 2026) do not.
 
+### Could pre-storm warmth predict where trees fall? — no (2026-09-17)
+
+`docs/experiments/windthrow/pre_storm.py`, 26 observed pre-storm summer months
+(2017–2025-05) vs 8 post-storm months, per-frame forests, edge (< 40 m) and
+streets excluded. Future windthrow-dense cells (n = 531) vs stem-free (n = 7,678):
+
+| | windthrow cells | stem-free | difference | AUC as a predictor |
+|---|---|---|---|---|
+| pre-storm Δ | −0.02 K | −0.07 K | **+0.04 K** (p = 7e-8, but tiny) | **0.56** |
+| post-storm Δ | +1.67 K | −0.20 K | +1.87 K | 0.83 |
+| post − pre warming | | | | 0.84 |
+| distance to stand edge alone | | | | 0.57 |
+
+Windthrow-dense rate by pre-storm warmth quintile: 4.3, 4.1, 4.6, 5.2, 7.2 % —
+a 1.7× enrichment in the warmest fifth, about what edge distance alone gives
+(cells 40–200 m from the edge are +0.5 K warmer and have the highest windthrow
+rate). The thermal signal is a consequence of the throws, not a precursor;
+whatever weak pre-signal exists is the edge/thin-stand exposure that the
+temperature and the storm both respond to.
+
 ## Open questions for Christian
 
 - **Q1 — branch base.** The worktree branches from committed HEAD, so it lacks
