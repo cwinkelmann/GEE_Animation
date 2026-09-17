@@ -14,7 +14,8 @@ from rasterio.features import rasterize
 from scipy.stats import spearmanr
 
 import os
-R12 = next(p for p in ("/Volumes/2TB/winmol/training_data/WINDWURF_Tegel/Revier_12", os.path.expanduser("~/data/Winmol/training_data/WINDWURF_Tegel/Revier_12")) if os.path.isdir(p))
+R12 = next(p for p in ("/Volumes/storage/Datasets/Winmol/training_data/WINDWURF_Tegel/Revier_12",   # NAS, the reliable one
+                       "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel/Revier_12", os.path.expanduser("~/data/Winmol/training_data/WINDWURF_Tegel/Revier_12")) if os.path.isdir(p))
 STEMS = f"{R12}/predictions_cw_2026/R12_stems_tegel-unet_2026-08.gpkg"
 STREETS = f"{R12}/steet_mask.gpkg"
 WT_MIN_M = 20.0          # ≥ 20 m of predicted stem per 20 m cell (~4 stems) = "windthrow cell"
