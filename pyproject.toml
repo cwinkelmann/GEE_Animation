@@ -23,6 +23,7 @@ dev = ["pytest>=7.4"]
 notebook = ["jupyter>=1.0", "ipykernel>=6.0", "nbformat>=5.9", "matplotlib>=3.5"]
 shapefile = ["geopandas>=0.14"]
 gui = ["gradio>=4"]
+ml = ["rasterio>=1.3", "scikit-learn>=1.4", "joblib>=1.3"]   # sharpen: local (lst_rf on this machine)
 
 [project.scripts]
 gee-animation = "gee_animation.cli:main"

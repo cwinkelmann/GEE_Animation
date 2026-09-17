@@ -321,8 +321,10 @@ good at — cloud-masked composites over an archive. Design for the real thing:
 - Per-calendar-month models across years, leave-one-year-out score per model,
   models under `docs/models/` with joblib; ~1 day with tests.
 
-The delta render (`r12_focus_lst_rf_delta_10yr`) was relaunched in yearly chunks
-after the timeout; it still trains in EE — the local path is a follow-up.
+**Implemented** the same day as `sharpen: local` (`gee_animation/sharpen_local.py`,
+`gee_animation/local_image.py`; branches in render/focus/geotiff export): approved
+with "the local one is awesome and good enough". The EE-trained delta render was
+stopped in favour of `config/r12_focus_lst_rf_delta_local_10yr.yaml`.
 
 ## Open questions for Christian
 
