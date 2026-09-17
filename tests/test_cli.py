@@ -34,11 +34,14 @@ def test_run_orchestrates_pipeline(tmp_path):
         # harmonic smoothing runs after anomaly; pass-through unless a test
         # configures it, so the pipeline order stays observable in `calls`
         smooth=lambda frames, coll, cfg: (calls.append(("smooth", frames)) or frames),
+        # region_only / relative run last, on the final field, with the REGION geometry
+        focus=lambda frames, cfg, region: (calls.append(("focus", frames, region)) or frames),
         render=lambda frames, cfg, geometry=None: (calls.append(("render", frames, geometry)) or [tmp_path / "t.gif"]),
     )
     out = run(str(cfg_path), deps=deps)
     assert [c[0] for c in calls] == ["init", "parse", "parse", "build",
-                                     "monthly_median", "anomaly", "smooth", "render"]
+                                     "monthly_median", "anomaly", "smooth", "focus", "render"]
+    assert ("focus", ["f1", "f2"], "REGION") in calls
     assert ("build", "FRAME", "REGION") in calls
     assert ("render", ["f1", "f2"], "FRAME") in calls
     assert out == [tmp_path / "t.gif"]
@@ -173,5 +176,6 @@ def test_run_refuses_inventory_with_pool_years(tmp_path):
     deps.build = lambda cfg, f, r: "COLL"
     deps.anomaly = lambda frames, cfg, f, r, build: frames
     deps.smooth = lambda frames, coll, cfg: frames
+    deps.focus = lambda frames, cfg, region: frames
     deps.render = lambda frames, cfg, geometry=None: [tmp_path / "t.gif"]
     assert run(str(cfg_path), deps=deps) == [tmp_path / "t.gif"]

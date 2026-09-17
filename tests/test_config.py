@@ -865,3 +865,28 @@ def test_smooth_harmonic_refuses_lst_rf(tmp_path):
     body = _base("index: lst_rf\nsmooth: harmonic\n")
     with pytest.raises(ConfigError, match="lst_rf"):
         RunConfig.from_yaml(_write(tmp_path, body))
+
+
+def test_region_only_defaults_off_and_parses_a_boolean(tmp_path):
+    assert RunConfig.from_yaml(_write(tmp_path, _base("index: lst\n"))).region_only is False
+    assert RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nregion_only: true\n"))).region_only is True
+    with pytest.raises(ConfigError, match="region_only must be true or false"):
+        RunConfig.from_yaml(_write(tmp_path, _base('index: lst\nregion_only: "true"\n')))
+
+
+def test_relative_region_mean_parses_and_defaults_to_a_symmetric_diverging_viz(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nrelative: region_mean\n")))
+    assert cfg.relative == "region_mean"
+    assert (cfg.viz_min, cfg.viz_max) == (-4.0, 4.0)
+    assert cfg.palette[0].lower() != cfg.palette[-1].lower()     # diverging ends differ
+    # an explicit viz still wins
+    cfg2 = RunConfig.from_yaml(_write(tmp_path, _base(
+        "index: lst\nrelative: region_mean\nviz: {min: -2, max: 2}\n")))
+    assert (cfg2.viz_min, cfg2.viz_max) == (-2.0, 2.0)
+
+
+def test_relative_rejects_unknown_modes_and_composites(tmp_path):
+    with pytest.raises(ConfigError, match="relative"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nrelative: frame_mean\n")))
+    with pytest.raises(ConfigError, match="relative"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: rgb\nrelative: region_mean\n")))

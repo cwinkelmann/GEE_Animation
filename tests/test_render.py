@@ -3109,3 +3109,13 @@ def test_render_skips_pixel_grid_when_unset(tmp_path, monkeypatch):
         return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
 
     render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+
+
+def test_colorbar_units_are_kelvin_deltas_for_a_relative_run():
+    from gee_animation.render import _colorbar_units, _index_display_name
+    base = dict(index="lst", anomaly=None, relative=None)
+    assert _colorbar_units(types.SimpleNamespace(**base)) == "°C"
+    assert _colorbar_units(types.SimpleNamespace(**{**base, "anomaly": "climatology"})) == "σ"
+    assert _colorbar_units(types.SimpleNamespace(**{**base, "relative": "region_mean"})) == "K"
+    assert _index_display_name(types.SimpleNamespace(**{**base, "relative": "region_mean"})) \
+        == "Land surface temperature − region mean"

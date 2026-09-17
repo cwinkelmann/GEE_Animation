@@ -6,7 +6,7 @@ import sys
 import types
 from pathlib import Path
 
-from . import anomaly, smoothing, auth, aoi, collection, compositing, debug, inventory, metadata, render
+from . import anomaly, smoothing, auth, aoi, collection, compositing, debug, focus, inventory, metadata, render
 from .config import RunConfig, ConfigError
 
 DEFAULT_DEPS = types.SimpleNamespace(
@@ -16,6 +16,7 @@ DEFAULT_DEPS = types.SimpleNamespace(
     monthly_median=compositing.monthly_median,
     anomaly=anomaly.apply,
     smooth=smoothing.apply,
+    focus=focus.apply,
     metadata=metadata.write_frame_metadata,
     render=render.render,
     debug=debug.export_month_scenes,
@@ -56,6 +57,9 @@ def run(config_path: str, deps=DEFAULT_DEPS, inventory: bool = False) -> list[Pa
     # runs after compositing (it needs the frame dates) and after anomaly (which
     # would otherwise score a model against a climatology).
     frames = deps.smooth(frames, coll, cfg)
+    # Region focus (mask outside / relative to the region mean) is the last
+    # transform: it must see the final field, whatever produced it.
+    frames = deps.focus(frames, cfg, region_geom)
     if getattr(cfg, "metadata", False):
         # frame_geom defines the "outside" comparison area (frame minus region)
         deps.metadata(frames, cfg, region_geom, frame_geom=frame_geom)

@@ -189,6 +189,11 @@ class RunConfig:
     # compositing and read as rendering artefacts. Set True only when L7 is the
     # only available bridge (e.g. the 2012-2013 gap between L5 and L8).
     allow_slc_off: bool = False
+    # Focus on the region (from top-level `region_only` / `relative`, see focus.py):
+    # mask imagery outside `aoi.region`; express each frame as value − its own
+    # region mean ("region_mean"). Both change the pixels, so both are in the cache key.
+    region_only: bool = False
+    relative: str = None
     # By default render is capped to the product's native resolution (no upsampling);
     # set True to allow a finer render (a warning still names the true native GSD).
     allow_upsample: bool = False
@@ -230,9 +235,14 @@ class RunConfig:
             viz = dict(raw.get("viz") or {})
             spec = INDICES.get(index)
             anomaly = raw.get("anomaly")
+            relative = raw.get("relative")
             if anomaly and not raw.get("viz"):        # diverging default (subsumes P0-5)
                 from .anomaly import ANOMALY_VIZ
                 d_min, d_max, d_pal = ANOMALY_VIZ.get(anomaly, (-3.0, 3.0, ["#000000", "#ffffff"]))
+            elif relative and not raw.get("viz"):
+                # a departure from the region mean: symmetric, diverging, ±4 units
+                from .anomaly import _DIVERGING
+                d_min, d_max, d_pal = -4.0, 4.0, list(_DIVERGING)
             else:
                 d_min, d_max, d_pal = spec.default_viz if spec else (0.0, 1.0, ["#000000", "#ffffff"])
             # Unlike title/subtitle, an explicit "" must survive as "" (not collapse
@@ -290,6 +300,8 @@ class RunConfig:
                 draw_region=_flag(raw, "draw_region", scope=""),
                 mask_clouds=_flag(raw, "mask_clouds", scope=""),
                 allow_slc_off=_flag(raw, "allow_slc_off", default=False, scope=""),
+                region_only=_flag(raw, "region_only", default=False, scope=""),
+                relative=(str(relative) if relative else None),
                 smooth=(str(raw["smooth"]) if raw.get("smooth") else None),
                 harmonics=int(raw.get("harmonics", 2) or 2),
                 region_line_width=(int(render["region_line_width"])
@@ -429,6 +441,16 @@ class RunConfig:
             if not isinstance(value, bool):
                 raise ConfigError(
                     f"render.{flag} must be true or false (got {value!r})")
+        if self.relative is not None:
+            from .focus import RELATIVE_MODES
+            if self.relative not in RELATIVE_MODES:
+                raise ConfigError(
+                    f"unknown relative {self.relative!r}; use one of {sorted(RELATIVE_MODES)}")
+            spec = INDICES.get(self.index)
+            if spec is not None and (spec.composite or spec.classes):
+                raise ConfigError(
+                    f"relative: {self.relative} needs a single-band continuous index; "
+                    f"{self.index!r} has no INDEX band to take a mean of")
         if self.anomaly is not None:
             from .products import THERMAL_INDICES
             if self.cadence != "monthly":

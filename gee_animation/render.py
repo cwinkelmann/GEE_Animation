@@ -563,7 +563,7 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
     # Units: the index's own (e.g. "°C" for a thermal index); a climatology anomaly
     # renders z-scores instead, so its unit overrides whatever the index carries.
     meta = _index_meta(cfg)
-    units = "σ" if getattr(cfg, "anomaly", None) == "climatology" else (meta.units if meta else "")
+    units = _colorbar_units(cfg)
     ticks = _colorbar_ticks(vmin, vmax, units)
 
     def _x(v: float) -> float:
@@ -673,6 +673,19 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
     return np.asarray(img)
 
 
+def _colorbar_units(cfg) -> str:
+    """The unit drawn on the colorbar's max tick: the index's own (e.g. "°C"), "σ"
+    for a climatology anomaly (z-scores), "K" for a `relative` run (a temperature
+    difference is kelvin, whatever the absolute scale) — else the index unit."""
+    if getattr(cfg, "anomaly", None) == "climatology":
+        return "σ"
+    meta = _index_meta(cfg)
+    units = meta.units if meta else ""
+    if getattr(cfg, "relative", None):
+        return "K" if units == "°C" else units
+    return units
+
+
 def _index_display_name(cfg) -> str:
     """Plain-language name of the product being shown ("Vegetation greenness (NDVI)").
 
@@ -681,7 +694,12 @@ def _index_display_name(cfg) -> str:
     """
     meta = _index_meta(cfg)
     name = getattr(meta, "display_name", "") if meta else ""
-    return name or str(getattr(cfg, "index", "") or "").upper()
+    name = name or str(getattr(cfg, "index", "") or "").upper()
+    if getattr(cfg, "relative", None) == "region_mean":
+        # a departure from the region mean is a different quantity: say so
+        # wherever the product is named (legend heading, header fallback)
+        name = f"{name} − region mean"
+    return name
 
 
 def _line2_prefix(cfg) -> str:
