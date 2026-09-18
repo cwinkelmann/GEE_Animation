@@ -461,3 +461,202 @@ def test_composite_without_pool_years_is_unchanged():
     frames = composite(coll, cfg)
     assert [(f.label, f.n_scenes) for f in frames] == [("2022-01", 2), ("2022-02", 1)]
     assert all("←" not in f.label for f in frames)
+
+
+def test_period_starts_quarterly_labels_and_spans():
+    assert period_starts("2022-01-01", "2023-01-01", "quarterly") == [
+        ("2022-Q1", "2022-01-01", "2022-04-01"),
+        ("2022-Q2", "2022-04-01", "2022-07-01"),
+        ("2022-Q3", "2022-07-01", "2022-10-01"),
+        ("2022-Q4", "2022-10-01", "2023-01-01"),
+    ]
+    # a start inside a quarter floors to that quarter, mirroring how a monthly run
+    # starting on the 15th composites the whole month
+    assert period_starts("2022-02-15", "2022-05-01", "quarterly") == [
+        ("2022-Q1", "2022-01-01", "2022-04-01"),
+        ("2022-Q2", "2022-04-01", "2022-07-01"),
+    ]
+
+
+def test_calendar_key_handles_multi_month_quarters():
+    from gee_animation.compositing import _calendar_key
+    # regression: single-month shapes keep their exact day windows
+    assert _calendar_key("2022-05-01", "2022-06-01") == ((5,), 1, 31)     # monthly
+    assert _calendar_key("2022-05-01", "2022-05-16") == ((5,), 1, 15)     # semimonthly
+    assert _calendar_key("2022-05-16", "2022-06-01") == ((5,), 16, 31)
+    # a quarter lists all three of its months; Q4's end date crosses New Year
+    assert _calendar_key("2022-01-01", "2022-04-01") == ((1, 2, 3), 1, 31)
+    assert _calendar_key("2022-10-01", "2023-01-01") == ((10, 11, 12), 1, 31)
+
+
+def test_gap_fill_quarterly_sees_every_month_of_the_quarter():
+    # The old single-month calendar key would have matched only January here and
+    # silently skipped the quarter (or under-counted it). Scenes in months 2 and 3
+    # of Q1 must both count toward the nominal year...
+    coll = PooledCollection([("2022-02-10", 0.2, "FEB"), ("2022-03-05", 0.3, "MAR")])
+    cfg = _pool_cfg(start="2022-01-01", end="2022-04-01", cadence="quarterly",
+                    pool_strategy="gap_fill", min_scenes=2)
+    frames = _pooled(coll, cfg)
+    assert len(frames) == 1
+    assert frames[0].label == "2022-Q1"
+    assert frames[0].n_scenes == 2 and frames[0].source is None
+    assert frames[0].image.tag == "median:2022-02-10,2022-03-05"
+    # ...and a borrow must consider donor scenes from ANY month of the quarter.
+    coll = PooledCollection([("2021-03-15", 0.1, "MAR21")])
+    cfg = _pool_cfg(start="2022-01-01", end="2022-04-01", cadence="quarterly",
+                    pool_strategy="gap_fill", pool_years=[2021, 2022])
+    frames = _pooled(coll, cfg)
+    assert len(frames) == 1
+    assert frames[0].label == "2022-Q1" and frames[0].source == 2021
+    assert frames[0].image.tag == "mosaic:MAR21"
+
+
+def test_fetch_scene_arrays_splits_the_window_on_a_timeout():
+    # A 9-year lst_sharp pool answered "Computation timed out" on the single
+    # batched getInfo and killed the whole run. The window must halve and retry,
+    # keeping each sub-window's timestamps paired with its own cloud values.
+    import ee as _ee
+    from gee_animation.compositing import _fetch_scene_arrays
+    seen = []
+    class FakeColl:
+        def __init__(self, s="2018-01-01", e="2027-01-01"): self.s, self.e = s, e
+        def filterDate(self, s, e): return FakeColl(s, e)
+        def aggregate_array(self, prop): return (self.s, self.e, prop)
+    class FakeEE:
+        @staticmethod
+        def Dictionary(props):
+            s, e, _ = props["time"]
+            seen.append((s, e))
+            def get_info():
+                # the full span is too heavy; each half evaluates fine
+                if (s, e) == ("2018-01-01", "2027-01-01"):
+                    raise _ee.EEException("Computation timed out.")
+                base = 1 if s == "2018-01-01" else 10
+                out = {"time": [base, base + 1]}
+                if "region_cloud" in props:
+                    out["region_cloud"] = [base / 100, (base + 1) / 100]
+                return out
+            return types.SimpleNamespace(getInfo=get_info)
+    millis, clouds = _fetch_scene_arrays(FakeColl(), "2018-01-01", "2027-01-01",
+                                         want_clouds=True, ee_module=FakeEE)
+    assert seen[0] == ("2018-01-01", "2027-01-01")          # tried whole span first
+    assert len(seen) == 3                                     # then both halves
+    assert millis == [1, 2, 10, 11]                           # concatenated in order
+    assert clouds == [0.01, 0.02, 0.1, 0.11]                  # stays aligned 1:1
+    assert len(millis) == len(clouds)
+
+
+def test_fetch_scene_arrays_does_not_split_on_unrelated_errors():
+    # A bad band name must surface at once, not be retried over 64 sub-windows.
+    import ee as _ee
+    from gee_animation.compositing import _fetch_scene_arrays
+    calls = []
+    class FakeColl:
+        def filterDate(self, s, e): return self
+        def aggregate_array(self, prop): return prop
+    class FakeEE:
+        @staticmethod
+        def Dictionary(props):
+            calls.append(1)
+            def boom(): raise _ee.EEException("Image.select: no band named 'INDEX'")
+            return types.SimpleNamespace(getInfo=boom)
+    with pytest.raises(_ee.EEException, match="no band named"):
+        _fetch_scene_arrays(FakeColl(), "2018-01-01", "2027-01-01",
+                            want_clouds=False, ee_module=FakeEE)
+    assert len(calls) == 1
+
+
+def test_period_image_uses_the_index_reducer_when_it_has_one():
+    # A median of class LABELS is an artefact of the numbering ({water=0, trees=1,
+    # built=6} -> "trees"), so a categorical index owns its own reduction. Every
+    # site that forms a period image must honour that hook.
+    from gee_animation.compositing import _period_image, _has_reducer
+    class FakeColl:
+        def median(self): return "MEDIAN"
+    cfg = types.SimpleNamespace(index="ndvi")
+    assert _period_image(FakeColl(), cfg) == "MEDIAN"     # continuous -> median
+    assert not _has_reducer(cfg)
+    cfg = types.SimpleNamespace(index="landcover")
+    assert _has_reducer(cfg)
+    called = {}
+    import gee_animation.products as P
+    orig = P.INDICES["landcover"].reduce_period
+    def _fake_reduce(coll):
+        called["coll"] = coll
+        return "CLASSIFIED"
+    object.__setattr__(P.INDICES["landcover"], "reduce_period", _fake_reduce)
+    try:
+        assert _period_image(FakeColl(), cfg) == "CLASSIFIED"
+    finally:
+        object.__setattr__(P.INDICES["landcover"], "reduce_period", orig)
+    assert "coll" in called
+
+
+def test_pooled_least_cloudy_uses_the_index_reducer_instead_of_mosaic():
+    # The one non-median site: least_cloudy mosaics a single instant's tiles. A
+    # categorical index must still reduce its own way there, or the frame would be
+    # raw probability bands rather than painted classes.
+    import gee_animation.products as P
+    coll = PooledCollection([("2021-05-14", 0.10, "A"), ("2022-05-11", 0.80, "B")])
+    cfg = _pool_cfg(index="landcover")
+    orig = P.INDICES["landcover"].reduce_period
+    object.__setattr__(P.INDICES["landcover"], "reduce_period",
+                       lambda c: FakeImage("CLASSIFIED"))
+    try:
+        frames = _pooled(coll, cfg)
+    finally:
+        object.__setattr__(P.INDICES["landcover"], "reduce_period", orig)
+    assert frames[0].image.tag == "CLASSIFIED"     # not "mosaic:A"
+
+
+def test_composite_splits_its_window_on_a_timeout_too():
+    # The non-pooled path had the same exposure the pooled one was fixed for: a
+    # single unsplit getInfo over years of an expensive index hangs the whole run
+    # before it writes anything. The happy path must stay ONE request.
+    import ee as _ee
+    import gee_animation.compositing as C
+    seen = []
+    class FakeColl:
+        def __init__(self, s=None, e=None): self.s, self.e = s, e
+        def filterDate(self, s, e): return FakeColl(s, e)
+        def aggregate_array(self, prop):
+            if self.s is None:                     # the top-level, unsplit attempt
+                raise _ee.EEException("Computation timed out.")
+            return (self.s, self.e)
+        def median(self): return "MEDIAN"
+    FULL = ("2018-01-01", "2026-08-01")
+    class FakeEE:
+        @staticmethod
+        def Dictionary(props):
+            s, e = props["time"]
+            seen.append((s, e))
+            def get_info():
+                if (s, e) == FULL:            # the whole span is too heavy...
+                    raise _ee.EEException("Computation timed out.")
+                return {"time": [1_500_000_000_000 if s == FULL[0]
+                                 else 1_700_000_000_000]}   # ...each half is fine
+            return types.SimpleNamespace(getInfo=get_info)
+    cfg = types.SimpleNamespace(start="2018-01-01", end="2026-08-01",
+                                cadence="monthly", index="lst_smw",
+                                pool_years=None, min_scenes=1)
+    C.composite(FakeColl(), cfg, ee_module=FakeEE)
+    assert seen[0] == FULL                    # whole span attempted, then halved
+    assert len(seen) == 3
+    mid = seen[1][1]
+    assert seen[1] == (FULL[0], mid) and seen[2] == (mid, FULL[1])
+
+
+def test_composite_stays_one_request_when_nothing_fails():
+    import gee_animation.compositing as C
+    calls = []
+    class FakeColl:
+        def aggregate_array(self, prop):
+            calls.append(prop)
+            return types.SimpleNamespace(getInfo=lambda: [1_500_000_000_000])
+        def filterDate(self, s, e): return self
+        def median(self): return "MEDIAN"
+    cfg = types.SimpleNamespace(start="2017-01-01", end="2017-12-01",
+                                cadence="monthly", index="ndvi",
+                                pool_years=None, min_scenes=1)
+    C.composite(FakeColl(), cfg)
+    assert calls == ["system:time_start"]           # no splitting, no extra trips

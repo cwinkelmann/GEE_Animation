@@ -1,0 +1,48 @@
+# Tegeler Forst, Revier 12 (Berlin): NDVI over the last ten years of the
+# Sentinel-2 archive, in the showcase look of wne_cinema_ndvi_2018_2026.
+#
+# Subject: the drone-orthomosaic footprint R12_footprint.gpkg (515 ha, one
+# polygon). The original has 58,617 vertices; docs/aoi/r12/r12_footprint.geojson
+# is the same outline simplified to 5 m (140 vertices, area change < 0.05 %),
+# because the region polygon is sent to Earth Engine with every request.
+#
+# Dates: 2017-01 .. 2026-09. S2_SR_HARMONIZED over this footprint reaches back
+# to 2015-08 but is too sparse before 2017 to be worth the frames (Sep 2016 has
+# 2 usable scenes, Oct-Dec 2016 none). Any cloud-locked month is gap-filled
+# from another year and labelled with its source year.
+#
+# Frame: region bbox padded 1.5 km, reshaped to 2.373 (two-line header) so the
+# 16:9 canvas fills without pillarboxing -- 16.3 x 6.9 km on the ground.
+name: r12_cinema_ndvi_10yr
+project: hnee-331218
+title: Tegeler Forst, Revier 12
+subtitle: Berlin, Germany
+aoi:
+  frame: { bbox: [13.1307, 52.5580, 13.3717, 52.6202] }   # 16.3 x 6.9 km, aspect 2.373
+  region: { geojson: docs/aoi/r12/r12_footprint.geojson }
+  region_max_cloud_percent: 20
+start: "2017-01-01"
+end: "2026-09-01"
+sensor: sentinel2
+index: ndvi
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+
+pool_years: [2017, 2026]
+pool_strategy: gap_fill
+
+render:
+  fps: 2
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 10
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: "16:9"
+  upscale: lanczos
+  region_line_width: 5
+  quality: 8
+  raw_frames: true               # map-only image per observed month
+  geotiffs: true                 # georeferenced float export per observed month

@@ -7,9 +7,10 @@ _REFL_INDICES = frozenset({"sentinel2", "landsat", "modis"})
 
 
 def test_registry_contents():
-    assert set(P.SENSORS) == {"sentinel2", "landsat", "modis", "modis_lst"}
-    assert set(P.INDICES) == {"ndvi", "lst", "lst_smw", "evi", "ndwi", "ndmi",
-                              "rgb", "cir", "lst_sharp", "lst_modis"}
+    assert set(P.SENSORS) == {"sentinel2", "landsat", "modis", "modis_lst",
+                              "dynamicworld"}
+    assert set(P.INDICES) == {"ndvi", "lst", "lst_smw", "evi", "ndwi", "ndmi", "ndre",
+                              "rgb", "cir", "lst_sharp", "lst_modis", "landcover"}
     assert P.INDICES["lst_modis"].sensors == frozenset({"modis_lst"})   # MODIS-only LST
     assert P.SENSORS["modis_lst"].scene_cloud_property is None          # no per-scene cloud
     assert "lst_modis" in P.THERMAL_INDICES
@@ -100,6 +101,78 @@ def test_ndmi_is_nir_swir1_normalized_difference():
     out = P.INDICES["ndmi"].compute(sensor, img, ee_module=None)
     assert rec["nd"] == ("nir", "swir1")                   # moisture index
     assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
+
+
+def test_ndre_is_sentinel2_only_at_its_native_20m_red_edge_scale():
+    assert P.INDICES["ndre"].sensors == frozenset({"sentinel2"})
+    assert P.native_scale_m("sentinel2", "ndre") == 20   # 20 m red edge (B5)
+    with pytest.raises(ValueError, match="not available"):
+        P.get_product("landsat", "ndre")   # no red-edge band on Landsat/MODIS
+    with pytest.raises(ValueError, match="not available"):
+        P.get_product("modis", "ndre")
+
+
+def test_ndre_is_nir_rededge_normalized_difference_from_raw_b5():
+    rec = {}
+
+    class FakeResult:
+        def set(self, k, v):
+            rec["set"] = (k, v)
+            return "ndre_band"
+
+    class FakeCombo:
+        def normalizedDifference(self, bands):
+            rec["nd"] = tuple(bands)
+            return self
+
+        def rename(self, n):
+            rec["rename"] = n
+            return FakeResult()
+
+    class FakeNir:
+        def rename(self, n):
+            rec["nir_rename"] = n
+            return self
+
+        def addBands(self, other):
+            rec["added"] = other
+            return FakeCombo()
+
+    class FakeRedEdge:
+        def rename(self, n):
+            rec["re_rename"] = n
+            return "red_edge_band"
+
+    class FakeB5:
+        def multiply(self, v):
+            rec["b5_multiply"] = v
+            return FakeRedEdge()
+
+    class FakeRefl:
+        def select(self, b):
+            rec["refl_select"] = b
+            return FakeNir()
+
+    class FakeSensor:
+        def reflectance(self, image, ee_module=None):
+            rec["refl"] = True
+            return FakeRefl()
+
+    class FakeImg:
+        def select(self, b):
+            rec["img_select"] = b
+            return FakeB5()
+
+        def get(self, k):
+            return "TS"
+
+    out = P.INDICES["ndre"].compute(FakeSensor(), FakeImg(), ee_module=None)
+    assert rec["refl"] and rec["refl_select"] == "nir"
+    assert rec["img_select"] == "B5" and rec["b5_multiply"] == 0.0001   # same scale as _s2_reflectance
+    assert rec["nir_rename"] == "nir" and rec["re_rename"] == "red_edge"
+    assert rec["nd"] == ("nir", "red_edge")
+    assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
+    assert out == "ndre_band"
 
 
 def test_lst_sharp_uses_distrad_fit_reduceresolution_and_residual():
@@ -232,13 +305,13 @@ def test_landsat_collection_harmonizes_l4_to_l9():
         "LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2"]
     dst_sets = {s[2] for s in selects}
     # every mission is renamed to the SAME canonical band set
-    assert dst_sets == {("blue", "green", "red", "nir", "swir1", "swir2", "thermal", "QA_PIXEL")}
+    assert dst_sets == {("blue", "green", "red", "nir", "swir1", "swir2", "thermal", "st_qa", "QA_PIXEL")}
     by_id = {s[0]: s[1] for s in selects}
     # TM/ETM+ thermal is ST_B6, red=SR_B3, nir=SR_B4; OLI thermal is ST_B10, red=SR_B4, nir=SR_B5
     assert by_id["LANDSAT/LT05/C02/T1_L2"] == (
-        "SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "ST_B6", "QA_PIXEL")
+        "SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "ST_B6", "ST_QA", "QA_PIXEL")
     assert by_id["LANDSAT/LC08/C02/T1_L2"] == (
-        "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "ST_B10", "QA_PIXEL")
+        "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "ST_B10", "ST_QA", "QA_PIXEL")
 
 
 def test_s2_and_modis_collection_merge():
@@ -296,75 +369,222 @@ def test_ndvi_uses_scaled_reflectance_and_keeps_time():
 
 
 def test_lst_applies_scale_offset_kelvin_to_celsius_and_keeps_time():
-    rec = {}
+    rec = {"selects": []}
     class FakeResult:
         def set(self, k, v): rec["set"] = (k, v); return "lst_band"
+    class FakeStQa:
+        def multiply(self, v): rec["qa_scale"] = v; return self
+        def lte(self, v): rec["qa_max"] = v; return "qa_ok"
     class FakeBand:
         def multiply(self, v): rec["multiply"] = v; return self
         def add(self, v): rec["add"] = v; return self
         def subtract(self, v): rec["subtract"] = v; return self
+        def updateMask(self, m): rec["masked_with"] = m; return self
         def rename(self, n): rec["rename"] = n; return FakeResult()
     class FakeImg:
-        def select(self, b): rec["select"] = b; return FakeBand()
+        def select(self, b):
+            rec["selects"].append(b)
+            return FakeStQa() if b == "st_qa" else FakeBand()
         def get(self, k): rec["get"] = k; return "TS"
     out = P.INDICES["lst"].compute(object(), FakeImg(), ee_module=None)
-    assert rec["select"] == "thermal"   # canonical harmonized thermal band (ST_B6/ST_B10)
+    assert "thermal" in rec["selects"] and "st_qa" in rec["selects"]
     assert rec["multiply"] == 0.00341802 and rec["add"] == 149.0 and rec["subtract"] == 273.15
+    # ST_QA gate: scale 0.01 K, pixels above ST_QA_MAX_K masked before the rename
+    assert rec["qa_scale"] == 0.01 and rec["qa_max"] == P.ST_QA_MAX_K
+    assert rec["masked_with"] == "qa_ok"
     assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
     assert out == "lst_band"
 
 
-def test_landsat_mask_and_cloud_band_use_qa_bits():
-    rec = {}
-    class FakeQA:
-        def bitwiseAnd(self, bits): rec["bits"] = bits; return self
-        def eq(self, v): rec["eq"] = v; return "clearmask"
-        def neq(self, v): rec["neq"] = v; return self
-        def rename(self, n): rec["rename"] = n; return "cloudband"
-    class FakeImg:
-        def select(self, b): rec["select"] = b; return FakeQA()
-        def updateMask(self, m): rec["masked_with"] = m; return "masked"
-    expected_bits = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5)
-    assert P.SENSORS["landsat"].mask_clouds(FakeImg()) == "masked"
-    assert rec["bits"] == expected_bits and rec["eq"] == 0 and rec["masked_with"] == "clearmask"
-    rec.clear()
-    assert P.SENSORS["landsat"].cloud_band(FakeImg()) == "cloudband"
-    assert rec["bits"] == expected_bits and rec["neq"] == 0 and rec["rename"] == "cloud"
+def test_landsat_mask_and_cloud_band_use_qa_bits_and_confidence():
+    def run(fn):
+        rec = {"bitand": [], "shifts": [], "and": 0, "or": 0}
+        class FakeQA:
+            def bitwiseAnd(self, bits): rec["bitand"].append(bits); return self
+            def eq(self, v): rec["eq"] = v; return self
+            def neq(self, v): rec["neq"] = v; return self
+            def rightShift(self, sft): rec["shifts"].append(sft); return self
+            def lte(self, v): rec["lte"] = v; return self
+            def gte(self, v): rec["gte"] = v; return self
+            def And(self, other): rec["and"] += 1; return self
+            def Or(self, other): rec["or"] += 1; return self
+            def rename(self, n): rec["rename"] = n; return "cloudband"
+        class FakeImg:
+            def select(self, b): rec["select"] = b; return FakeQA()
+            def updateMask(self, m): rec["masked"] = True; return "masked"
+        rec["out"] = fn(FakeImg())
+        return rec
+    flag_bits = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5)
+    rec = run(P.SENSORS["landsat"].mask_clouds)
+    assert rec["out"] == "masked" and rec["bitand"][0] == flag_bits and rec["eq"] == 0
+    # medium+ confidence cloud/shadow/cirrus also masked (bit pairs 8-9/10-11/14-15)
+    assert rec["shifts"] == [8, 10, 14] and rec["lte"] == 1 and rec["and"] == 3
+    rec = run(P.SENSORS["landsat"].cloud_band)
+    assert rec["out"] == "cloudband" and rec["bitand"][0] == flag_bits and rec["neq"] == 0
+    assert rec["shifts"] == [8, 10, 14] and rec["gte"] == 2 and rec["or"] == 3
+    assert rec["rename"] == "cloud"
 
 
-def test_s2_mask_and_cloud_band_use_scl_classes():
-    rec = {"neq": [], "and_count": 0}
-
-    class FakeMask:
-        def And(self, other):
-            rec["and_count"] += 1
-            return self
-
-    class FakeSCL:
-        def neq(self, cls):
-            rec["neq"].append(cls)
-            return ("neq", cls)
-        def remap(self, frm, to, default):
-            rec["remap"] = (frm, to, default)
-            return self
-        def rename(self, n):
-            rec["rename"] = n
-            return "cloudband"
-
-    class FakeImg:
-        def select(self, b):
-            rec["select"] = b
-            return FakeSCL()
-        def updateMask(self, m):
-            rec["masked"] = True
-            return "masked"
-
-    ee = types.SimpleNamespace(Image=types.SimpleNamespace(constant=lambda v: FakeMask()))
+def test_s2_mask_and_cloud_band_use_scl_and_s2cloudless():
+    def fresh():
+        rec = {"neq": [], "and_count": 0, "selects": []}
+        class FakeProb:
+            def lte(self, v): rec["lte"] = v; return "prob_ok"
+            def gt(self, v): rec["gt"] = v; return "prob_bad"
+        class FakeMask:
+            def And(self, other):
+                rec["and_count"] += 1; rec["last_and"] = other; return self
+        class FakeSCL:
+            def neq(self, cls): rec["neq"].append(cls); return ("neq", cls)
+            def remap(self, frm, to, default): rec["remap"] = (frm, to, default); return self
+            def Or(self, other): rec["or_with"] = other; return self
+            def rename(self, n): rec["rename"] = n; return "cloudband"
+        class FakeImg:
+            def select(self, b):
+                rec["selects"].append(b)
+                return FakeProb() if b == "cloud_prob" else FakeSCL()
+            def updateMask(self, m): rec["masked"] = True; return "masked"
+        ee = types.SimpleNamespace(
+            Image=types.SimpleNamespace(constant=lambda v: FakeMask()))
+        return rec, FakeImg, ee
+    rec, FakeImg, ee = fresh()
     assert P.SENSORS["sentinel2"].mask_clouds(FakeImg(), ee_module=ee) == "masked"
-    assert rec["select"] == "SCL"
-    assert rec["neq"] == [3, 8, 9, 10, 11] and rec["and_count"] == 5 and rec["masked"] is True
+    assert rec["neq"] == [3, 8, 9, 10, 11]         # SCL shadow/cloud/cirrus/snow classes
+    # 5 SCL classes + the s2cloudless probability screen = 6 ANDs, the last being
+    # the probability<=threshold mask — the screen SCL alone lacks.
+    assert rec["and_count"] == 6
+    assert rec["lte"] == P.S2_CLOUD_PROB_MAX and rec["last_and"] == "prob_ok"
+    rec, FakeImg, _ee = fresh()
+    assert P.SENSORS["sentinel2"].cloud_band(FakeImg(), ee_module=None) == "cloudband"
+    assert rec["remap"] == ([3, 8, 9, 10, 11], [1, 1, 1, 1, 1], 0)
+    assert rec["gt"] == P.S2_CLOUD_PROB_MAX and rec["or_with"] == "prob_bad"
+    assert rec["rename"] == "cloud"
 
-    rec.clear()
-    cb = P.SENSORS["sentinel2"].cloud_band(FakeImg())
-    assert rec["remap"][0] == [3, 8, 9, 10, 11] and rec["remap"][2] == 0
-    assert rec["rename"] == "cloud" and cb == "cloudband"
+
+def test_s2_attach_cloud_prob_joins_and_adds_the_band():
+    rec = {}
+    class FakeProbColl:
+        def filterDate(self, s_, e_): rec["prob_dates"] = (s_, e_); return self
+        def filterBounds(self, g): rec["prob_bounds"] = g; return self
+    class FakeJoined:
+        def map(self, fn): rec["mapped"] = fn("granule"); return "joined_coll"
+    class FakeBand:
+        def select(self, b): rec["band_select"] = b; return self
+        def rename(self, n): rec["band_rename"] = n; return "cloud_prob_band"
+    class FakeGranule:
+        def get(self, k): rec["got"] = k; return "prob_img_ref"
+        def addBands(self, b): rec["added"] = b; return "granule_with_band"
+    def image(x):
+        return FakeGranule() if x == "granule" else FakeBand()
+    ee = types.SimpleNamespace(
+        ImageCollection=lambda arg: (FakeProbColl()
+                                     if arg == "COPERNICUS/S2_CLOUD_PROBABILITY"
+                                     else FakeJoined()),
+        Image=image,
+        Join=types.SimpleNamespace(saveFirst=lambda key: types.SimpleNamespace(
+            apply=lambda a, b, f: rec.update(join=(key, f)) or "joined_raw")),
+        Filter=types.SimpleNamespace(equals=lambda **kw: ("equals", kw)))
+    out = P._s2_attach_cloud_prob("PRIMARY", "2022-01-01", "2023-01-01", "GEOM",
+                                  ee_module=ee)
+    assert out == "joined_coll"
+    assert rec["prob_dates"] == ("2022-01-01", "2023-01-01")
+    assert rec["prob_bounds"] == "GEOM"
+    key, filt = rec["join"]
+    assert key == "cloud_prob_img"
+    assert filt == ("equals", {"leftField": "system:index", "rightField": "system:index"})
+    # the map really attaches the probability band to each granule
+    assert rec["got"] == "cloud_prob_img" and rec["band_select"] == "probability"
+    assert rec["band_rename"] == "cloud_prob" and rec["mapped"] == "granule_with_band"
+def test_every_index_has_a_plain_language_display_name():
+    # The frame header names the product in words a non-specialist reads; an index
+    # added later without one would silently fall back to a bare acronym.
+    import gee_animation.products as P
+    for name, idx in P.INDICES.items():
+        assert idx.display_name, f"{name} has no display_name"
+        assert idx.display_name[0].isupper(), f"{name}: {idx.display_name!r}"
+    assert P.INDICES["ndvi"].display_name == "Vegetation greenness (NDVI)"
+    assert P.INDICES["rgb"].display_name == "True colour"
+    assert P.INDICES["lst_modis"].display_name == "Land surface temperature (MODIS)"
+
+
+def test_landcover_is_categorical_and_dynamicworld_only():
+    spec = P.INDICES["landcover"]
+    assert spec.sensors == frozenset({"dynamicworld"})
+    assert spec.composite            # arrives as finished colour, not a value to stretch
+    assert spec.classes and len(spec.classes) == 9
+    values = [v for v, _n, _h in spec.classes]
+    assert values == list(range(9))          # Dynamic World's own class numbering
+    assert P.native_scale_m("dynamicworld", "landcover") == 10   # Sentinel-2 grid
+    # it owns its period reduction: a median of class LABELS would be an artefact
+    # of the numbering, not a fact about the ground
+    assert callable(spec.reduce_period)
+    assert P.SENSORS["dynamicworld"].scene_cloud_property is None
+
+
+def test_dynamicworld_class_colours_are_remapped_not_interpolated():
+    # Every class must land on its exact palette colour; a ramp would invent
+    # in-between colours no class owns.
+    calls = {}
+    class FakeClassImg:
+        def remap(self, frm, to):
+            calls.setdefault("remaps", []).append((tuple(frm), tuple(to)))
+            return self
+        def rename(self, n): return f"band:{n}"
+    class FakeCat:
+        def toUint8(self): calls["uint8"] = True; return "RGB_IMAGE"
+    ee = types.SimpleNamespace(
+        Image=types.SimpleNamespace(cat=lambda bands: (calls.update(bands=bands)
+                                                       or FakeCat())))
+    out = P._dw_class_to_rgb(FakeClassImg(), ee_module=ee)
+    assert out == "RGB_IMAGE" and calls["uint8"]
+    assert calls["bands"] == ["band:R", "band:G", "band:B"]
+    # three remaps (one per channel), each over all nine class values
+    assert len(calls["remaps"]) == 3
+    for frm, to in calls["remaps"]:
+        assert frm == tuple(range(9)) and len(to) == 9
+    # the red channel of class 0 (Water #419BDF) is 0x41
+    assert calls["remaps"][0][1][0] == 0x41
+
+
+def test_dynamicworld_period_reduction_argmaxes_mean_probabilities():
+    # Dynamic World's own recipe: average the class probabilities over the period,
+    # then take the argmax — uses every pass's confidence, not just its winner.
+    steps = {}
+    class FakeArray:
+        def arrayArgmax(self): steps["argmax"] = True; return self
+        def arrayGet(self, idx): steps["get"] = idx; return "CLASS_IMG"
+    class FakeMean:
+        def toArray(self): steps["toArray"] = True; return FakeArray()
+    class FakeColl:
+        def select(self, bands): steps["bands"] = bands; return self
+        def mean(self): steps["mean"] = True; return FakeMean()
+        def first(self): return types.SimpleNamespace(get=lambda k: "TS")
+    painted = {}
+    def fake_paint(img, ee_module=None):
+        painted["img"] = img
+        return types.SimpleNamespace(set=lambda k, v: painted.setdefault("set", (k, v)))
+    orig = P._dw_class_to_rgb
+    P._dw_class_to_rgb = fake_paint
+    try:
+        P._dw_reduce_period(FakeColl(), ee_module=None)
+    finally:
+        P._dw_class_to_rgb = orig
+    assert steps["bands"] == P._DW_PROB_BANDS and steps["mean"]
+    assert steps["toArray"] and steps["argmax"] and steps["get"] == [0]
+    assert painted["img"] == "CLASS_IMG"
+    assert painted["set"] == ("system:time_start", "TS")
+
+
+def test_dw_per_image_step_keeps_probabilities_for_the_period_reducer():
+    # Regression from a live run: painting classes per image left reduce_period
+    # holding [R,G,B] and asking for band 'water' -> "did not match any bands".
+    # The per-image step must pass the probabilities through untouched.
+    seen = {}
+    class FakeImg:
+        def select(self, bands): seen["bands"] = bands; return self
+        def set(self, k, v): seen["set"] = (k, v); return "PROBS"
+        def get(self, k): return "TS"
+    out = P.INDICES["landcover"].compute(None, FakeImg(), ee_module=None)
+    assert out == "PROBS"
+    assert seen["bands"] == P._DW_PROB_BANDS      # not painted to R/G/B here
+    assert seen["set"] == ("system:time_start", "TS")

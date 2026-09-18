@@ -6,7 +6,7 @@ import sys
 import types
 from pathlib import Path
 
-from . import anomaly, auth, aoi, collection, compositing, debug, inventory, metadata, render
+from . import anomaly, smoothing, auth, aoi, collection, compositing, debug, inventory, metadata, render
 from .config import RunConfig, ConfigError
 
 DEFAULT_DEPS = types.SimpleNamespace(
@@ -15,6 +15,7 @@ DEFAULT_DEPS = types.SimpleNamespace(
     build=collection.build,
     monthly_median=compositing.monthly_median,
     anomaly=anomaly.apply,
+    smooth=smoothing.apply,
     metadata=metadata.write_frame_metadata,
     render=render.render,
     debug=debug.export_month_scenes,
@@ -51,8 +52,13 @@ def run(config_path: str, deps=DEFAULT_DEPS, inventory: bool = False) -> list[Pa
             "No images found for the given AOI/date range/cloud filter."
         )
     frames = deps.anomaly(frames, cfg, frame_geom, region_geom, deps.build)
+    # Harmonic smoothing replaces each frame's imagery with a fitted curve, so it
+    # runs after compositing (it needs the frame dates) and after anomaly (which
+    # would otherwise score a model against a climatology).
+    frames = deps.smooth(frames, coll, cfg)
     if getattr(cfg, "metadata", False):
-        deps.metadata(frames, cfg, region_geom)   # <out_dir>/metadata.db
+        # frame_geom defines the "outside" comparison area (frame minus region)
+        deps.metadata(frames, cfg, region_geom, frame_geom=frame_geom)
     return deps.render(frames, cfg, geometry=frame_geom)
 
 

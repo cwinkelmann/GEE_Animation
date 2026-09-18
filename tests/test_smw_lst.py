@@ -157,6 +157,8 @@ def test_build_uses_index_build_collection_hook(monkeypatch):
     monkeypatch.setattr(C, "get_product", lambda s, i: (FakeSensor(), fake_index))
     ee = types.SimpleNamespace(Filter=types.SimpleNamespace(
         lte=lambda n, v: ("lte", n, v), lt=lambda n, v: ("lt", n, v),
+        # build drops post-2003 Landsat 7 by default (SLC-off stripes)
+        Or=lambda a, b: ("Or", a, b), neq=lambda p, v: ("neq", p, v),
         inList=lambda p, v: ("inList", p, v)))
     cfg = types.SimpleNamespace(sensor="landsat", index="lst_smw", missions=None,
                                 start="2022-05-01", end="2022-09-01",

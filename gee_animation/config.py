@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 # semimonthly splits at the 1st/16th; 10day splits at the 1st/11th/21st (see
 # compositing._SPLIT_DAYS — bins stay aligned to calendar months).
-SUPPORTED_CADENCES = {"monthly", "semimonthly", "10day"}
+SUPPORTED_CADENCES = {"monthly", "semimonthly", "10day", "quarterly"}
 
 # Cross-year "best month" pooling (see compositing.pooled_composite).
 POOL_STRATEGIES = {"least_cloudy", "median", "gap_fill"}
@@ -28,10 +28,33 @@ class ConfigError(ValueError):
 
 
 #: Optional render flags that must be real YAML booleans (see _flag / validate).
-_RENDER_FLAGS = ("gif", "frames")
+_RENDER_FLAGS = ("gif", "frames", "pixel_grid")
 
 
-def _flag(render: dict, key: str, default=True):
+def _opt_int(render: dict, key: str):
+    """A `render.<key>` integer, or None when the key is absent/null.
+
+    `int()` on a YAML string raises a bare `ValueError`, which `from_yaml`'s `except
+    KeyError` does not catch — so a typo'd ``quality: abc`` escaped as an unhandled
+    exception and `cli.main` printed a traceback instead of the one-line config error
+    every other bad key gets. The message names both the key and the offending value,
+    because "invalid literal for int()" on its own does not tell you *which* of a
+    config's numbers is wrong.
+    """
+    value = render.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        # YAML `quality: true` would int() to 1 — the *worst* quality — with no
+        # diagnostic; a bool here is always a config mistake, never a number.
+        raise ConfigError(f"render.{key} must be a whole number, got {value!r}")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"render.{key} must be a whole number, got {value!r}") from exc
+
+
+def _flag(render: dict, key: str, default=True, *, scope: str = "render."):
     """A `render.<key>` boolean, or `default` when the key is absent.
 
     Deliberately not `bool(...)`: YAML turns a *quoted* ``gif: "false"`` into a
@@ -47,7 +70,7 @@ def _flag(render: dict, key: str, default=True):
         return default
     value = render[key]
     if not isinstance(value, bool):
-        raise ConfigError(f"render.{key} must be true or false (got {value!r})")
+        raise ConfigError(f"{scope}{key} must be true or false (got {value!r})")
     return value
 
 
@@ -91,6 +114,38 @@ class RunConfig:
     # frames). Only an explicit True/False here can override that.
     gif: bool | None = None
     frames: bool = True
+    # Also write each observed frame as a RAW map image (`{name}_raw_{label}.png`,
+    # from render.raw_frames): the colorized composite + no-data grey + upscale +
+    # region outline only — no header/legend/scale bar/credit/marker/letterbox.
+    # For layouts the annotated frames can't serve (posters, GIS overlays, papers).
+    raw_frames: bool = False
+    # Trace the fetched raster's own cell edges over the imagery (from
+    # render.pixel_grid). `_cap_dimensions` already fetches at the product's native
+    # GSD, so those cells ARE the product's pixels (~100 m for lst); the mesh is a
+    # local overlay on pixels already in hand — never sent to EE, a cache hit.
+    pixel_grid: bool = False
+    # Also export each observed frame as a georeferenced GeoTIFF (`{name}_{label}.tif`,
+    # from render.geotiffs): the composited float values themselves (index units, or
+    # reflectance for rgb/cir) at native `scale` in the resolved CRS — for GIS use,
+    # not for viewing. Downloads are disk-cached like thumbnails.
+    geotiffs: bool = False
+    # Frame header text (from top-level `title` / `subtitle`). `title` is the header's
+    # large first line — what and where this animation is; it defaults to the index's
+    # plain-language `products.Index.display_name` when unset, so a frame always says
+    # what it shows. `subtitle` is the smaller second line, which it shares with the
+    # provenance caveats (pooling / interpolation) — those always win the space (see
+    # render._fit_header_line2). Purely client-side: neither reaches Earth Engine, so
+    # both are in cache.CLIENT_SIDE_FIELDS and retitling a run is a cache hit.
+    title: str = None
+    subtitle: str = None
+    # Attribution line drawn bottom-right (from top-level `credit`). None (default,
+    # no key in YAML) => auto by sensor (see render._default_credit) — this is what
+    # makes the Copernicus "Contains modified Copernicus Sentinel data <year>"
+    # notice appear with zero configuration, since the licence requires it on
+    # published sentinel2 products. A non-empty string overrides verbatim. An
+    # *explicit* "" omits the line entirely — a conscious choice, not the default —
+    # and validate() warns about it for sentinel2 so that omission is deliberate.
+    credit: str = None
     # Anomaly rendering (from top-level `anomaly` / `baseline_years`). "climatology"
     # => per-pixel z-score vs baseline monthly climatology; "reference" => LST minus
     # ERA5 air temp (thermal only). None => raw values.
@@ -102,6 +157,13 @@ class RunConfig:
     # only — every frame is labelled with its source year. None => off (default).
     pool_years: list = None
     pool_strategy: str = "least_cloudy"
+    # Per-pixel cloud masking (from top-level `mask_clouds`). True (default) masks
+    # cloud/shadow pixels via the sensor's QA layer so they render neutral grey —
+    # required for palette indices, where a colorized cloud would read as a real
+    # low value (e.g. bare soil on NDVI). False keeps clouds in the imagery and is
+    # only allowed for composites (rgb/cir), where real white clouds look natural
+    # and nothing is painted over. Scene-level cloud filters are unaffected.
+    mask_clouds: bool = True
     # Write per-frame AOI cloud fraction to <out_dir>/metadata.db (a reduceRegion per
     # frame, so opt-in).
     metadata: bool = False
@@ -116,6 +178,17 @@ class RunConfig:
     # Minimum scenes per monthly median; months with fewer are skipped (default 1 =
     # keep all non-empty months, but every frame is annotated with its scene count).
     min_scenes: int = 1
+    # Harmonic smoothing (from top-level `smooth` / `harmonics`). "harmonic" fits
+    # a seasonal model per pixel and evaluates it at each frame's date — smooth,
+    # hole-free, and entirely MODEL output rather than observation. See
+    # smoothing.py; validate() refuses to combine it with metadata: true.
+    smooth: str = None
+    harmonics: int = 2
+    # Admit Landsat 7 scenes after the 2003-05-31 scan-line-corrector failure.
+    # Default False: SLC-off scenes carry wedge no-data stripes that survive
+    # compositing and read as rendering artefacts. Set True only when L7 is the
+    # only available bridge (e.g. the 2012-2013 gap between L5 and L8).
+    allow_slc_off: bool = False
     # By default render is capped to the product's native resolution (no upsampling);
     # set True to allow a finer render (a warning still names the true native GSD).
     allow_upsample: bool = False
@@ -137,6 +210,14 @@ class RunConfig:
     # composites, which arrive from EE already coloured.
     interpolate: int = 0
     interpolate_mode: str = "auto"
+    # MP4 encode quality (from render.quality), 1 (smallest/worst) .. 10
+    # (largest/best), passed straight through to imageio's ffmpeg writer. None
+    # (default) => imageio's own default (currently 5) — the writer call is
+    # unchanged from before this knob existed, so an existing config's output is
+    # bit-for-bit the same. Untuned MP4s measured ~1 MB/frame in the audience
+    # review; this is the deliberate trade-off knob for publishing (see
+    # docs/publishing-animations.md's format-picker table).
+    quality: int = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RunConfig":
@@ -154,6 +235,21 @@ class RunConfig:
                 d_min, d_max, d_pal = ANOMALY_VIZ.get(anomaly, (-3.0, 3.0, ["#000000", "#ffffff"]))
             else:
                 d_min, d_max, d_pal = spec.default_viz if spec else (0.0, 1.0, ["#000000", "#ffffff"])
+            # Unlike title/subtitle, an explicit "" must survive as "" (not collapse
+            # to None): "" is a distinct, deliberate "no credit line" choice that
+            # render._default_credit and validate() both need to tell apart from
+            # "not configured, pick the sensor default".
+            if ("credit" in raw and raw["credit"] is not None
+                    and not isinstance(raw["credit"], str)):
+                # `credit: false` is falsy-but-not-"" and would silently collapse to
+                # None — i.e. the automatic Copernicus line the user was trying to
+                # turn OFF. Only the exact "" opts out; make the near-miss loud.
+                raise ConfigError(
+                    f"credit must be a string (got {raw['credit']!r}); use "
+                    "credit: \"\" to omit the attribution line, or remove the key "
+                    "for the automatic sensor credit")
+            credit = (str(raw["credit"]) if raw.get("credit")
+                     else ("" if "credit" in raw and raw["credit"] == "" else None))
             cfg = cls(
                 name=str(raw["name"]),
                 project=str(raw["project"]),
@@ -181,15 +277,28 @@ class RunConfig:
                 upscale=str(render.get("upscale", "lanczos")),
                 gif=_flag(render, "gif", default=None),
                 frames=_flag(render, "frames"),
+                raw_frames=_flag(render, "raw_frames", default=False),
+                pixel_grid=_flag(render, "pixel_grid", default=False),
+                geotiffs=_flag(render, "geotiffs", default=False),
                 out_dir=str(raw.get("out_dir", "out")),
-                draw_region=bool(raw.get("draw_region", True)),
+                title=(str(raw["title"]) if raw.get("title") else None),
+                subtitle=(str(raw["subtitle"]) if raw.get("subtitle") else None),
+                credit=credit,
+                # Strict bools, not bool(...): a quoted "false" is a non-empty string
+                # and truthy-coercing it would silently invert the user's intent
+                # (same trap _flag documents for gif/frames).
+                draw_region=_flag(raw, "draw_region", scope=""),
+                mask_clouds=_flag(raw, "mask_clouds", scope=""),
+                allow_slc_off=_flag(raw, "allow_slc_off", default=False, scope=""),
+                smooth=(str(raw["smooth"]) if raw.get("smooth") else None),
+                harmonics=int(raw.get("harmonics", 2) or 2),
                 region_line_width=(int(render["region_line_width"])
                                    if render.get("region_line_width") is not None else None),
                 anomaly=anomaly,
                 baseline_years=raw.get("baseline_years"),
                 pool_years=raw.get("pool_years"),
                 pool_strategy=str(raw.get("pool_strategy") or "least_cloudy"),
-                metadata=bool(raw.get("metadata", False)),
+                metadata=_flag(raw, "metadata", default=False, scope=""),
                 missions=raw.get("missions"),
                 min_scenes=int(raw.get("min_scenes", 1)),
                 allow_upsample=bool(raw.get("allow_upsample", False)),
@@ -199,6 +308,7 @@ class RunConfig:
                 cache_dir=(str(render["cache_dir"]) if render.get("cache_dir") else None),
                 interpolate=int(render.get("interpolate", 0) or 0),
                 interpolate_mode=str(render.get("interpolate_mode") or "auto"),
+                quality=_opt_int(render, "quality"),
             )
         except KeyError as exc:
             raise ConfigError(f"missing required config key: {exc}") from exc
@@ -210,11 +320,33 @@ class RunConfig:
             get_product(self.sensor, self.index)
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
+        if not self.mask_clouds and not INDICES[self.index].composite:
+            # A palette index colorizes every unmasked pixel through the ramp, so a
+            # cloud left in the data renders as a plausible-looking real value
+            # (bright cloud ~ low NDVI ~ bare soil). Composites show clouds as what
+            # they are — white clouds — so only they may opt out of masking.
+            raise ConfigError(
+                f"mask_clouds: false is only supported for composite indices "
+                f"(rgb/cir); {self.index!r} colorizes pixels through a palette, so "
+                f"unmasked clouds would render as false data values")
+        if self.credit == "" and self.sensor == "sentinel2":
+            # An explicit empty credit suppresses the frame's only attribution line.
+            # For sentinel2 that line is not decoration: the Copernicus licence
+            # requires "Contains modified Copernicus Sentinel data <year>" on
+            # published products, so omitting it must be a conscious choice, flagged
+            # here, not a silent default.
+            log.warning(
+                "credit: \"\" omits the attribution line; the Copernicus licence "
+                "requires \"Contains modified Copernicus Sentinel data <year>\" on "
+                "published Sentinel-2 products — make sure that notice appears "
+                "elsewhere if you suppress it here")
         if self.cadence not in SUPPORTED_CADENCES:
             raise ConfigError(
                 f"unsupported cadence {self.cadence!r}; supported: {sorted(SUPPORTED_CADENCES)}"
             )
-        if self.cadence != "monthly" and self.sensor == "landsat":
+        if self.cadence in ("semimonthly", "10day") and self.sensor == "landsat":
+            # Sub-monthly only: quarterly bins are *wider* than monthly, so the
+            # 16-day repeat is a reason to prefer quarterly, not a warning case.
             log.warning(
                 "cadence %r with sensor 'landsat': Landsat's 16-day repeat leaves most "
                 "%s bins empty", self.cadence, self.cadence)
@@ -243,10 +375,46 @@ class RunConfig:
             raise ConfigError(
                 f"unknown render.interpolate_mode {self.interpolate_mode!r}; "
                 f"supported: {sorted(INTERPOLATE_MODES)}")
+        if self.smooth is not None:
+            if self.smooth != "harmonic":
+                raise ConfigError(
+                    f"unknown smooth {self.smooth!r}; the only mode is 'harmonic'")
+            spec = INDICES[self.index]
+            if spec.composite:
+                raise ConfigError(
+                    f"smooth: harmonic needs a single-band index; {self.index!r} is "
+                    f"a composite with no INDEX band to fit")
+            if spec.classes:
+                raise ConfigError(
+                    f"smooth: harmonic cannot fit {self.index!r}: its values are "
+                    f"class labels, and a seasonal curve through them is meaningless")
+            if self.metadata:
+                # Every frame would be a curve evaluated at a date, so the stats
+                # table would describe the model rather than the landscape.
+                raise ConfigError(
+                    "smooth: harmonic cannot be combined with metadata: true — a "
+                    "smoothed frame is model output, so its statistics would not "
+                    "measure anything observed. Run a second, unsmoothed config "
+                    "for the numbers.")
+            if not 1 <= self.harmonics <= 5:
+                raise ConfigError(
+                    f"harmonics must be between 1 and 5 (got {self.harmonics}); "
+                    f"beyond about 3 the fit starts following noise")
+        if INDICES[self.index].classes and self.interpolate:
+            # Blending two class colours produces a colour no class owns — a
+            # viewer reads the in-between frames as a category that does not
+            # exist. Categorical products step; they do not fade.
+            raise ConfigError(
+                f"render.interpolate must be 0 for {self.index!r}: it is a "
+                f"classified product, and blending class colours would invent "
+                f"categories that do not exist")
         if self.interpolate_mode == "data" and INDICES[self.index].composite:
             raise ConfigError(
                 f"render.interpolate_mode: data needs a single-band index; "
                 f"{self.index!r} is a composite — use crossfade (or auto)")
+        if self.quality is not None and not 1 <= self.quality <= 10:
+            raise ConfigError(
+                f"render.quality must be between 1 and 10 (got {self.quality!r})")
         # Also checked here (not only in from_yaml) because the GUI and api.animate
         # build RunConfig directly and validate() is their only gate.
         for flag in _RENDER_FLAGS:
@@ -256,6 +424,11 @@ class RunConfig:
             if not isinstance(value, bool):
                 raise ConfigError(
                     f"render.{flag} must be true or false (got {value!r})")
+        if self.pixel_grid and not self.preset:
+            raise ConfigError(
+                "render.pixel_grid needs render.preset: without an upscale the output "
+                "equals the fetched raster, every pixel is a cell edge and the mesh "
+                "degenerates into a flat wash")
         if self.anomaly is not None:
             from .products import THERMAL_INDICES
             if self.cadence != "monthly":
@@ -263,7 +436,7 @@ class RunConfig:
                 # sub-monthly slice would silently produce inflated z-scores.
                 raise ConfigError(
                     f"anomaly requires cadence: monthly (got {self.cadence!r}); "
-                    "sub-monthly composites cannot be scored against a monthly climatology")
+                    "only monthly composites can be scored against a monthly climatology")
             if self.anomaly not in ("climatology", "reference"):
                 raise ConfigError(
                     f"unknown anomaly {self.anomaly!r}; use 'climatology' or 'reference'")

@@ -31,6 +31,11 @@ gee-animation-gui = "gee_animation.gui:main"
 [tool.setuptools.packages.find]
 include = ["gee_animation*"]
 
+[tool.setuptools.package-data]
+# Bundled DejaVu Sans (+ licence) so annotate/draw_info_bar can render "←"/"–"/"°"
+# without depending on matplotlib (an optional extra) at runtime — see render._font.
+gee_animation = ["fonts/*"]
+
 [tool.pytest.ini_options]
 markers = [
     "integration: hits live Google Earth Engine; skipped without credentials",

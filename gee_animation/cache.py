@@ -36,7 +36,11 @@ log = logging.getLogger(__name__)
 
 #: Bumped whenever the *stored representation* changes (e.g. if we ever store a
 #: decoded array instead of PNG bytes), so old entries can never be misread.
-CACHE_VERSION = 1
+# v2: cloud masking upgraded server-side (s2cloudless join for Sentinel-2,
+# QA confidence bits + ST_QA gate for Landsat) — code changes are invisible to
+# the config-derived key, so the version bump is what invalidates every thumb
+# fetched under the old masks.
+CACHE_VERSION = 2
 
 #: Env var overriding the cache location (see `cache_dir`).
 ENV_CACHE_DIR = "GEE_ANIMATION_CACHE_DIR"
@@ -54,6 +58,36 @@ CLIENT_SIDE_FIELDS = frozenset({
     "name", "out_dir", "fps", "preset", "aspect", "upscale",
     "region_line_width", "draw_region", "metadata", "workers",
     "palette", "debug_month", "allow_upsample",
+    # MP4 encode quality: a ffmpeg writer setting, applied after the pixels are
+    # already decided — never sent to EE and never changes what is fetched.
+    "quality",
+    # header text: drawn locally into the label margins (render._header_text), never
+    # sent to EE — retitling a run must not recompute every frame.
+    "title", "subtitle",
+    # attribution line: drawn locally into the bottom bar (render._default_credit),
+    # never sent to EE — changing/overriding the credit must not recompute frames.
+    "credit",
+    # raw map frames: an extra LOCAL png write of already-fetched pixels
+    # (render.raw_frames) — turning it on must not refetch a single thumbnail,
+    # or backfilling raw frames for an archived run would re-download years.
+    "raw_frames",
+    # pixel-grid overlay: a mesh on the fetched raster's own cell edges, drawn
+    # locally after the fetch (render._grid_mask) — the grid variant of a run must
+    # reuse every cached thumbnail.
+    "pixel_grid",
+    # the geotiff flag itself is thumbnail-neutral: the tif download has its own
+    # key namespace (format: GEO_TIFF in the fetch params), so enabling exports
+    # must not invalidate the png thumbs.
+    "geotiffs",
+    # frame interpolation: generated frames are blended from arrays that are
+    # ALREADY fetched (render._imagery_sequence / interpolate.blend). Earth Engine
+    # is asked for exactly one thumbnail per observed frame whether interpolation
+    # is off or set to 50, so re-cutting a run for smoother playback must not
+    # refetch a single tile. Omitting these cost a full refetch per re-cut.
+    "interpolate", "interpolate_mode",
+    # which files get written (render.assemble_stream / _write_frames): the GIF
+    # and the per-frame PNGs are encoded from pixels already in hand.
+    "gif", "frames",
     # the cache controls themselves: where entries live and whether they are used
     # cannot change what EE computes.
     "cache", "cache_dir",

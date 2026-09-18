@@ -102,7 +102,7 @@ def test_run_animation_builds_config_and_threads_geometry(tmp_path):
     assert cfg.frame_aoi == {"bbox": [0.0, 0.0, 2.0, 2.0]}     # from frame_bbox(region, buffer)
     assert cfg.region_aoi == {"geojson": str(aoi)}
     assert captured["buffer"] == 1500.0
-    assert cfg.viz_min == -1.0 and cfg.viz_max == 1.0          # NDVI default viz (definitional -1..1)
+    assert cfg.viz_min == -0.2 and cfg.viz_max == 1.0          # NDVI default viz (CVD-safe, water-blue)
     assert cfg.scale == 30 and cfg.region_max_cloud_percent == 15
     assert mp4.endswith("o.mp4") and gif.endswith("o.gif")
     # per-frame PNGs are offered for download, bundled into a single zip
@@ -316,6 +316,181 @@ def test_status_is_cadence_neutral(tmp_path):
     assert "month" not in status                        # no monthly-specific wording
 
 
+# --- audience-communication parity: title/subtitle/credit/quality --------------
+
+def test_title_blank_is_none_nonblank_is_verbatim(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, title="  ")
+    assert captured["cfg"].title is None
+    captured2 = {}
+    _run(tmp_path, captured2, title="Białowieża Forest NDVI 2022")
+    assert captured2["cfg"].title == "Białowieża Forest NDVI 2022"
+
+
+def test_subtitle_blank_is_none_nonblank_is_verbatim(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, subtitle="")
+    assert captured["cfg"].subtitle is None
+    captured2 = {}
+    _run(tmp_path, captured2,
+         subtitle="UNESCO World Heritage site, Brandenburg, Germany")
+    assert captured2["cfg"].subtitle == "UNESCO World Heritage site, Brandenburg, Germany"
+
+
+def test_credit_default_is_none_automatic_attribution(tmp_path):
+    captured = {}
+    _run(tmp_path, captured)
+    assert captured["cfg"].credit is None
+
+
+def test_credit_custom_text_reaches_the_config(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, credit="Data: HNEE Forest Research")
+    assert captured["cfg"].credit == "Data: HNEE Forest Research"
+
+
+def test_omit_credit_checkbox_sets_empty_string(tmp_path):
+    # The conscious opt-out — distinct from an untouched, merely-empty textbox.
+    captured = {}
+    _run(tmp_path, captured, omit_credit=True)
+    assert captured["cfg"].credit == ""
+
+
+def test_omit_credit_with_text_is_a_friendly_error_not_a_crash(tmp_path):
+    with pytest.raises(ValueError, match="contradictory"):
+        _run(tmp_path, {}, omit_credit=True, credit="Custom credit")
+
+
+def test_quality_default_is_none(tmp_path):
+    captured = {}
+    _run(tmp_path, captured)
+    assert captured["cfg"].quality is None
+
+
+def test_quality_default_string_maps_to_none(tmp_path):
+    # what the dropdown's untouched "default" choice actually submits.
+    captured = {}
+    _run(tmp_path, captured, quality="default")
+    assert captured["cfg"].quality is None
+
+
+def test_quality_value_reaches_the_config(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, quality="7")
+    assert captured["cfg"].quality == 7
+
+
+def test_sentinel2_omit_credit_warning_reaches_the_status(tmp_path):
+    # config.validate() only log.warning()s this; the GUI must surface it, same as
+    # the existing landsat-submonthly-cadence warning.
+    *_, status, _ = _run(tmp_path, {}, sensor="sentinel2", omit_credit=True)
+    assert "Copernicus licence" in status
+
+
+def test_non_sentinel2_omit_credit_has_no_licence_warning(tmp_path):
+    *_, status, _ = _run(tmp_path, {}, sensor="landsat", index="lst",
+                         omit_credit=True)
+    assert "Copernicus" not in status
+
+
+def test_inventory_threads_presentation_fields_through_shared_prepare(tmp_path):
+    # run_inventory shares _prepare with run_animation rather than forking it, so
+    # the new fields reach the inventory's RunConfig too — harmlessly, since the CSV
+    # writer never reads them.
+    captured = {}
+    aoi = _write_geojson(tmp_path)
+    csv_path, _status = gui.run_inventory(
+        aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        title="My Title", subtitle="My Subtitle", credit="Custom credit",
+        quality="8", deps=_fake_deps(tmp_path, captured))
+    assert Path(csv_path).exists()
+    cfg = captured["inventory_cfg"]
+    assert cfg.title == "My Title" and cfg.subtitle == "My Subtitle"
+    assert cfg.credit == "Custom credit" and cfg.quality == 8
+
+
+def test_build_app_input_counts_match_handler_arity():
+    """Minimum arity pin: for both `_go` and `_inventory`, the number of positional
+    handler parameters without a default (i.e. bound by Gradio's `.click(fn, inputs,
+    outputs)`) must equal the number of components in the wired `inputs` list —
+    catching an inserted/removed control that was not mirrored in the handler
+    signature."""
+    pytest.importorskip("gradio")
+    import inspect
+    app = gui.build_app()
+    checked = []
+    for block_fn in app.fns.values():
+        name = getattr(block_fn.fn, "__name__", None)
+        if name not in ("_go", "_inventory"):
+            continue
+        sig = inspect.signature(block_fn.fn)
+        bound = [p for p in sig.parameters.values()
+                if p.default is inspect.Parameter.empty]
+        assert len(bound) == len(block_fn.inputs), (
+            f"{name}: {len(bound)} params without a default vs "
+            f"{len(block_fn.inputs)} wired inputs")
+        checked.append(name)
+    assert sorted(checked) == ["_go", "_inventory"]
+
+
+def test_build_app_input_order_matches_handler_param_order():
+    """Stronger than the count check above: pins that wired input N binds to the
+    Nth positional parameter, for BOTH callbacks, by matching each bound
+    component's Gradio label to the parameter name it should land in. A control
+    inserted in the wrong slot silently binds the wrong value to the wrong
+    parameter, and no other test catches it — the functional tests above call the
+    handlers with keyword args, bypassing Gradio's positional binding entirely."""
+    pytest.importorskip("gradio")
+    import inspect
+    expected = [
+        ("aoi_file", "AOI"), ("buffer_m", "buffer"), ("sensor", "Sensor"),
+        ("index", "Index"), ("start", "Start"), ("end", "End"),
+        ("cadence", "Cadence"), ("region_cloud", "cloud % over the region"),
+        ("fps", "Frames per second"), ("dims", "Fetch size"),
+        ("preset", "Output size"), ("aspect", "Aspect ratio"),
+        ("quality", "MP4 quality"), ("write_gif", "write a GIF"),
+        ("title", "Title"), ("subtitle", "Subtitle"),
+        ("credit", "Credit"), ("omit_credit", "Omit the data credit line"),
+        ("pool_start", "Pool from year"), ("pool_end", "Pool to year"),
+        ("pool_strategy", "Pooling strategy"), ("project", "Earth Engine project"),
+        ("show_clouds", "Show real clouds"),
+        ("crs_choice", "Projection (CRS)"), ("crs_custom", "Custom EPSG code"),
+        ("interpolate", "Generated frames between observations"),
+        ("interpolate_mode", "Interpolation mode"),
+        ("min_scenes", "Minimum satellite passes per frame"),
+        ("raw_frames", "Also save raw map images"),
+        ("geotiffs", "Also export GeoTIFFs"),
+        ("write_metadata", "Record per-frame statistics"),
+        ("fit_frame", "Fit the frame to the output shape"),
+        ("viz_min", "Colour scale min"), ("viz_max", "Colour scale max"),
+        ("missions", "Landsat missions"),
+    ]
+    app = gui.build_app()
+    checked = []
+    for block_fn in app.fns.values():
+        name = getattr(block_fn.fn, "__name__", None)
+        if name not in ("_go", "_inventory"):
+            continue
+        sig = inspect.signature(block_fn.fn)
+        params = [p.name for p in sig.parameters.values()
+                 if p.default is inspect.Parameter.empty]
+        labels = [getattr(c, "label", "") or "" for c in block_fn.inputs]
+        assert len(params) == len(expected), (
+            f"{name}: control count drifted from the pinned list ({len(params)} "
+            f"vs {len(expected)}) — update `expected` alongside `inputs`")
+        for (param_name, label_fragment), actual_param, actual_label in zip(
+                expected, params, labels):
+            assert actual_param == param_name, (
+                f"{name}: expected param {param_name!r} at this slot, got "
+                f"{actual_param!r}")
+            assert label_fragment in actual_label, (
+                f"{name}: param {actual_param!r} is bound to a component labelled "
+                f"{actual_label!r}, expected one labelled like {label_fragment!r}")
+        checked.append(name)
+    assert sorted(checked) == ["_go", "_inventory"]
+
+
 def test_build_app_constructs():
     pytest.importorskip("gradio")
     app = gui.build_app()
@@ -400,7 +575,8 @@ def test_load_previous_run_enriches_status_from_metadata(tmp_path):
     d = tmp_path / "run"
     _make_run(d, "a", ["2022-01", "2022-02"])
     metadata.write_db(d / "metadata.db", {"name": "a", "sensor": "landsat", "index": "lst"},
-                      [("2022-01", 3, 0.1, 20.0), ("2022-02", 4, 0.0, 24.0)])
+                      [("2022-01", 3, 0.1, 20.0, None, None, None, None, None),
+                       ("2022-02", 4, 0.0, 24.0, None, None, None, None, None)])
     *_, status = gui.load_previous_run(str(d / "a.mp4"))
     assert "2 months 2022-01→2022-02 in metadata" in status
     assert "mean value 22.0" in status and "range 20.0…24.0" in status   # over aoi_mean
@@ -447,3 +623,161 @@ def test_run_animation_write_gif_false_threads_through_to_the_config(tmp_path):
     # the gallery/ZIP are built from the PNGs, which are never switched off in the GUI
     assert len(frame_pngs) == 2 and zip_path is not None
     assert captured["cfg"].frames is True
+
+
+def test_show_clouds_inverts_to_mask_clouds_for_composites(tmp_path):
+    aoi = _write_geojson(tmp_path)
+    captured = {}
+    gui.run_animation(aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2",
+                      index="rgb", start="2022-05-01", end="2022-07-01",
+                      out_dir=str(tmp_path), show_clouds=True,
+                      deps=_fake_deps(tmp_path, captured))
+    assert captured["cfg"].mask_clouds is False
+    # default (checkbox off) keeps masking on
+    captured = {}
+    gui.run_animation(aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2",
+                      index="rgb", start="2022-05-01", end="2022-07-01",
+                      out_dir=str(tmp_path), deps=_fake_deps(tmp_path, captured))
+    assert captured["cfg"].mask_clouds is True
+
+
+def test_show_clouds_rejected_for_palette_indices(tmp_path):
+    # config.validate owns the rule (composites only); the GUI surfaces the same
+    # error instead of silently rendering colorized clouds as fake NDVI values.
+    aoi = _write_geojson(tmp_path)
+    with pytest.raises(ValueError, match="composite"):
+        gui.run_animation(aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2",
+                          index="ndvi", start="2022-05-01", end="2022-07-01",
+                          out_dir=str(tmp_path), show_clouds=True,
+                          deps=_fake_deps(tmp_path, {}))
+
+
+def test_run_frames_matches_every_period_label_format(tmp_path):
+    # Reloading a previous run must see quarterly ("2022-Q3") and sub-monthly
+    # ("2022-05-16") stems, not only monthly — a quarterly run used to reload as
+    # "0 frame(s)" with an empty gallery.
+    run = tmp_path / "run"
+    run.mkdir()
+    for stem in ("2022-05", "2022-05-16", "2022-Q3"):
+        (run / f"vid_{stem}.png").write_bytes(b"png")
+    (run / "vid_notaperiod.png").write_bytes(b"png")     # still excluded
+    (run / "vid_2022-Q7.png").write_bytes(b"png")        # no such quarter
+    names = [p.name for p in gui._run_frames(run, "vid")]
+    # set-compare: a real run never mixes cadences, so cross-format sort order
+    # ("-" < "." lexicographically) is irrelevant here
+    assert sorted(names) == sorted(
+        ["vid_2022-05.png", "vid_2022-05-16.png", "vid_2022-Q3.png"])
+
+
+def test_crs_value_maps_every_dropdown_choice():
+    # "auto" is the default and the whole point of the projection fix: UTM, square
+    # pixels. Labelled choices carry their explanation after the code.
+    assert gui._crs_value(gui.CRS_AUTO, None) == "auto"
+    assert gui._crs_value(gui.CRS_4326, None) == "EPSG:4326"
+    assert gui._crs_value("EPSG:3035 (ETRS89 / LAEA Europe)", None) == "EPSG:3035"
+    assert gui._crs_value("custom…", "EPSG:25833") == "EPSG:25833"
+    # custom selected but left blank must fail loudly, not silently fall back
+    with pytest.raises(ValueError, match="custom"):
+        gui._crs_value("custom…", "   ")
+
+
+def test_new_render_controls_reach_the_config(tmp_path):
+    aoi = _write_geojson(tmp_path)
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        crs_choice="custom…", crs_custom="EPSG:25833", interpolate=10,
+        interpolate_mode="crossfade", min_scenes=3, raw_frames=True, geotiffs=True,
+        deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.crs == "EPSG:25833"
+    assert cfg.interpolate == 10 and cfg.interpolate_mode == "crossfade"
+    assert cfg.min_scenes == 3
+    assert cfg.raw_frames is True and cfg.geotiffs is True
+
+
+def test_render_controls_defaults_are_the_safe_ones(tmp_path):
+    aoi = _write_geojson(tmp_path)
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.crs == "auto"                    # the projection fix is the default
+    assert cfg.interpolate == 0                 # no invented frames unless asked
+    assert cfg.min_scenes == 1
+    assert cfg.raw_frames is False and cfg.geotiffs is False
+
+
+def test_viz_override_and_partial_override(tmp_path):
+    # Blank boxes inherit the index default; either bound alone still overrides —
+    # the showcase configs pin tighter ranges than the registry defaults because
+    # -1..1 wastes half the ramp on a normalized-difference index.
+    aoi = _write_geojson(tmp_path)
+    captured = {}
+    _run(tmp_path, captured, index="ndmi", viz_min=-0.5, viz_max=0.8)
+    assert (captured["cfg"].viz_min, captured["cfg"].viz_max) == (-0.5, 0.8)
+    captured = {}
+    _run(tmp_path, captured, index="ndmi", viz_max=0.8)      # min left blank
+    assert (captured["cfg"].viz_min, captured["cfg"].viz_max) == (-1.0, 0.8)
+    captured = {}
+    _run(tmp_path, captured, index="ndmi")                    # both blank
+    assert (captured["cfg"].viz_min, captured["cfg"].viz_max) == (-1.0, 1.0)
+
+
+def test_viz_override_rejects_an_inverted_range(tmp_path):
+    with pytest.raises(ValueError, match="below"):
+        _run(tmp_path, {}, index="ndvi", viz_min=1.0, viz_max=0.0)
+
+
+def test_missions_and_metadata_reach_the_config(tmp_path):
+    captured = {}
+    _run(tmp_path, captured, sensor="landsat", index="lst",
+         missions=["L5", "L7", "L8", "L9"], write_metadata=True)
+    assert captured["cfg"].missions == ["L5", "L7", "L8", "L9"]
+    assert captured["cfg"].metadata is True
+    captured = {}
+    _run(tmp_path, captured, sensor="landsat", index="lst")
+    assert captured["cfg"].missions is None       # empty = the L8/L9 default
+    assert captured["cfg"].metadata is False
+
+
+def test_fit_frame_grows_the_frame_to_the_canvas_aspect(tmp_path):
+    # The fake frame_bbox returns a square-ish [0,0,2,2]; at 16:9 with a two-line
+    # header that pillarboxes badly, so the short side must grow to ~2.373.
+    import math
+    captured = {}
+    _run(tmp_path, captured, preset="1080p", aspect="16:9", interpolate=10,
+         fit_frame=True)
+    minlon, minlat, maxlon, maxlat = captured["cfg"].frame_aoi["bbox"]
+    lat = (minlat + maxlat) / 2
+    w = (maxlon - minlon) * 111320 * math.cos(math.radians(lat))
+    h = (maxlat - minlat) * 110540
+    assert abs(w / h - 2.3733) < 0.01
+    # the original region is still inside the grown frame
+    assert minlon <= 0.0 and maxlon >= 2.0 and minlat <= 0.0 and maxlat >= 2.0
+    # and it is off by default
+    captured = {}
+    _run(tmp_path, captured, preset="1080p", aspect="16:9", interpolate=10)
+    assert captured["cfg"].frame_aoi["bbox"] == [0.0, 0.0, 2.0, 2.0]
+
+
+def test_fit_frame_is_a_noop_without_a_preset_or_fixed_aspect(tmp_path):
+    for kw in ({"preset": gui.NATIVE_PRESET, "aspect": "16:9"},
+               {"preset": "1080p", "aspect": "match"}):
+        captured = {}
+        _run(tmp_path, captured, fit_frame=True, **kw)
+        assert captured["cfg"].frame_aoi["bbox"] == [0.0, 0.0, 2.0, 2.0]
+
+
+def test_number_value_keeps_negative_and_zero_bounds():
+    # Regression: _blank() treats any non-positive number as unset (right for
+    # pooling years, wrong for a colour scale) — a viz min of -0.5 or 0 must survive.
+    assert gui._number_value(-0.5) == -0.5
+    assert gui._number_value(0) == 0.0
+    assert gui._number_value("-0.2") == -0.2
+    assert gui._number_value(None) is None
+    assert gui._number_value("") is None and gui._number_value("   ") is None
+    assert gui._number_value("not a number") is None

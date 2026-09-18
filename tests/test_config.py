@@ -1,6 +1,10 @@
 import textwrap
+from pathlib import Path
+
 import pytest
 from gee_animation.config import RunConfig, ConfigError
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _write(tmp_path, body: str):
@@ -108,8 +112,8 @@ def test_from_yaml_loads_valid_config(tmp_path):
     assert cfg.project == "hnee-331218"
     assert cfg.frame_aoi == {"bbox": [13.7, 52.8, 13.9, 52.95]}
     assert cfg.region_aoi == {"bbox": [13.7, 52.8, 13.9, 52.95]}
-    assert cfg.viz_min == -1.0 and cfg.viz_max == 1.0
-    assert cfg.palette == ["#a1622f", "#e8d9a0", "#3b7a2a"]
+    assert cfg.viz_min == -0.2 and cfg.viz_max == 1.0
+    assert cfg.palette == ["#4575b4", "#aeaec7", "#8c510a", "#d8b365", "#f6e8c3", "#41ab5d", "#006d2c"]
     assert cfg.fps == 4 and cfg.dimensions == 768
     assert cfg.out_dir == "out"
 
@@ -129,8 +133,8 @@ def test_index_viz_defaults_from_index(tmp_path):
     """)
     cfg = RunConfig.from_yaml(p)
     assert cfg.index == "ndvi"
-    assert cfg.viz_min == -1.0 and cfg.viz_max == 1.0
-    assert cfg.palette == ["#a1622f", "#e8d9a0", "#3b7a2a"]
+    assert cfg.viz_min == -0.2 and cfg.viz_max == 1.0
+    assert cfg.palette == ["#4575b4", "#aeaec7", "#8c510a", "#d8b365", "#f6e8c3", "#41ab5d", "#006d2c"]
 
 
 def test_viz_block_overrides_defaults(tmp_path):
@@ -617,3 +621,253 @@ def test_validate_rejects_data_mode_for_a_composite_index(tmp_path):
         "interpolate_mode: data}"))
     with pytest.raises(ConfigError, match="crossfade"):
         RunConfig.from_yaml(p)
+
+
+def test_title_and_subtitle_round_trip_from_top_level_yaml(tmp_path):
+    # The header's first two lines are the only place a frame says WHAT and WHERE it
+    # is, so both have to survive the YAML -> RunConfig trip verbatim (including
+    # non-ASCII, which the bundled DejaVu font can draw).
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+        "index: ndvi\n"
+        'title: "Grumsiner Forst — UNESCO World Heritage beech forest"\n'
+        'subtitle: "Brandenburg, Germany"\n')))
+    assert cfg.title == "Grumsiner Forst — UNESCO World Heritage beech forest"
+    assert cfg.subtitle == "Brandenburg, Germany"
+
+
+def test_title_and_subtitle_default_to_none(tmp_path):
+    # Absent keys must stay None (not ""), so render() can fall back to the index's
+    # display_name for the title and omit the second line entirely.
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.title is None and cfg.subtitle is None
+
+
+def test_credit_defaults_to_none_for_zero_config_auto_attribution(tmp_path):
+    # An absent `credit:` key must stay None (not ""), so render._default_credit
+    # falls back to the sensor's auto attribution — zero-config compliance is the
+    # whole point of this field.
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.credit is None
+
+
+def test_credit_round_trips_verbatim_from_top_level_yaml(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+        'index: ndvi\ncredit: "Imagery courtesy of ACME Corp"\n')))
+    assert cfg.credit == "Imagery courtesy of ACME Corp"
+
+
+def test_credit_explicit_empty_string_survives_as_empty_not_none(tmp_path, caplog):
+    # Unlike title/subtitle, an explicit "" is a distinct, deliberate choice (omit
+    # the attribution line) that must not collapse to None (which would mean
+    # "unset, pick the sensor default" and silently restore the Copernicus notice).
+    body = _base('index: ndvi\ncredit: ""\n').replace("sensor: landsat", "sensor: sentinel2")
+    with caplog.at_level("WARNING"):
+        cfg = RunConfig.from_yaml(_write(tmp_path, body))
+    assert cfg.credit == ""
+
+
+def test_empty_credit_on_sentinel2_warns_about_the_copernicus_licence(tmp_path, caplog):
+    body = _base('index: ndvi\ncredit: ""\n').replace("sensor: landsat", "sensor: sentinel2")
+    with caplog.at_level("WARNING"):
+        cfg = RunConfig.from_yaml(_write(tmp_path, body))
+    assert cfg.credit == ""
+    assert "Copernicus" in caplog.text
+    caplog.clear()
+    # Landsat has no such licence requirement: no warning for the same empty credit.
+    with caplog.at_level("WARNING"):
+        RunConfig.from_yaml(_write(tmp_path, _base('index: ndvi\ncredit: ""\n')))
+    assert "Copernicus" not in caplog.text
+    caplog.clear()
+    # And a non-empty credit on sentinel2 is a deliberate override, not an
+    # omission — no warning either.
+    with caplog.at_level("WARNING"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            'index: ndvi\ncredit: "Custom credit"\n').replace(
+            "sensor: landsat", "sensor: sentinel2")))
+    assert "Copernicus" not in caplog.text
+
+
+# --- render.quality (MP4 encode quality knob, Task 8) ------------------------------
+
+def test_quality_defaults_to_none(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n")))
+    assert cfg.quality is None
+
+
+def test_quality_read_from_render_block(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, quality: 7}"))
+    assert RunConfig.from_yaml(p).quality == 7
+
+
+@pytest.mark.parametrize("q", [1, 5, 10])
+def test_quality_accepts_the_full_1_to_10_range(tmp_path, q):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        f"render: {{fps: 4, scale: 30, dimensions: 768, quality: {q}}}"))
+    assert RunConfig.from_yaml(p).quality == q
+
+
+@pytest.mark.parametrize("q", [0, 11])
+def test_quality_rejects_out_of_range_values(tmp_path, q):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        f"render: {{fps: 4, scale: 30, dimensions: 768, quality: {q}}}"))
+    with pytest.raises(ConfigError, match="quality"):
+        RunConfig.from_yaml(p)
+
+
+@pytest.mark.parametrize("q", ["abc", "[1, 2]", "high", "{}"])
+def test_quality_rejects_non_numeric_values_as_a_config_error(tmp_path, q):
+    # Review finding: the int() coercion sat outside from_yaml's guarded block, so a
+    # non-numeric quality raised a bare ValueError and `cli.main` -- which catches
+    # ConfigError/RuntimeError -- let it out as a traceback. Every other malformed key
+    # in this file produces a one-line message; this one must too, and it must name
+    # both the key and the value so you can find it in the YAML.
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        f"render: {{fps: 4, scale: 30, dimensions: 768, quality: {q}}}"))
+    with pytest.raises(ConfigError, match="render.quality must be a whole number"):
+        RunConfig.from_yaml(p)
+
+
+def test_quality_error_names_the_offending_value(tmp_path):
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, quality: abc}"))
+    with pytest.raises(ConfigError, match="'abc'"):
+        RunConfig.from_yaml(p)
+
+
+def test_quality_null_is_the_unset_default(tmp_path):
+    # `quality:` with no value is YAML null, i.e. "not configured" -- not an error.
+    p = _write(tmp_path, _base("index: ndvi\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, quality: null}"))
+    assert RunConfig.from_yaml(p).quality is None
+
+
+def test_wne_summer_pooled_example_loads_as_16_9(tmp_path):
+    # Task 8 / review H6: every shipped example used to render aspect: match, which
+    # for this AOI is a ~0.91 portrait frame — never letterboxed, never the widescreen
+    # 16:9 an audience actually expects on a slide or in a video player.
+    cfg = RunConfig.from_yaml(_REPO_ROOT / "config" / "wne_summer_pooled.example.yaml")
+    assert cfg.aspect == "16:9"
+
+
+def test_mask_clouds_defaults_on_and_loads_from_yaml(tmp_path):
+    assert RunConfig.from_yaml(_write(tmp_path, _base("index: rgb\n"))).mask_clouds is True
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+        "index: rgb\nmask_clouds: false\n").replace("sensor: landsat", "sensor: sentinel2")))
+    assert cfg.mask_clouds is False
+
+
+def test_mask_clouds_false_is_rejected_for_palette_indices(tmp_path):
+    # A palette index colorizes every unmasked pixel through the ramp, so a cloud
+    # left in the data would render as a plausible real value (the CLAUDE.md
+    # invariant: clouds must never read as low NDVI / bare soil). Only composites
+    # (rgb/cir), where a cloud looks like a cloud, may opt out.
+    with pytest.raises(ConfigError, match="composite"):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: ndvi\nmask_clouds: false\n").replace(
+                "sensor: landsat", "sensor: sentinel2")))
+    with pytest.raises(ConfigError, match="composite"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nmask_clouds: false\n")))
+    # composites pass
+    for idx in ("rgb", "cir"):
+        cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+            f"index: {idx}\nmask_clouds: false\n").replace(
+                "sensor: landsat", "sensor: sentinel2")))
+        assert cfg.mask_clouds is False
+
+
+def test_quarterly_cadence_is_supported_and_quiet_for_landsat(tmp_path, caplog):
+    import logging
+    with caplog.at_level(logging.WARNING):
+        cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: lst\n").replace("cadence: monthly", "cadence: quarterly")))
+    assert cfg.cadence == "quarterly"
+    # quarterly bins are WIDER than monthly, so the sparse-bins warning that fires
+    # for sub-monthly landsat runs must stay silent here
+    assert "16-day repeat" not in caplog.text
+    with caplog.at_level(logging.WARNING):
+        RunConfig.from_yaml(_write(tmp_path, _base(
+            "index: lst\n").replace("cadence: monthly", "cadence: 10day")))
+    assert "16-day repeat" in caplog.text
+
+
+def test_anomaly_rejects_quarterly_cadence(tmp_path):
+    body = _base(
+        "index: lst\nanomaly: climatology\nbaseline_years: [2015, 2024]\n"
+    ).replace("cadence: monthly", "cadence: quarterly")
+    with pytest.raises(ConfigError, match="monthly"):
+        RunConfig.from_yaml(_write(tmp_path, body))
+
+
+def test_quoted_false_is_rejected_for_top_level_flags(tmp_path):
+    # YAML `mask_clouds: "false"` is a non-empty STRING; bool() would coerce it to
+    # True and silently keep masking the clouds the user asked to see. Same strict
+    # rule as render.gif/frames (_flag).
+    for flag in ("mask_clouds", "draw_region", "metadata"):
+        with pytest.raises(ConfigError, match=flag):
+            RunConfig.from_yaml(_write(tmp_path, _base(
+                f'index: rgb\nsensor2: x\n{flag}: "false"\n').replace(
+                    "sensor: landsat", "sensor: sentinel2").replace("sensor2: x\n", "")))
+
+
+def test_quality_rejects_yaml_booleans(tmp_path):
+    # `quality: true` is int()-able (bool is int) and would become quality 1 — the
+    # WORST setting — as a silent surprise.
+    with pytest.raises(ConfigError, match="quality"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n").replace(
+            "render: {fps: 4, scale: 30, dimensions: 768}",
+            "render: {fps: 4, scale: 30, dimensions: 768, quality: true}")))
+
+
+def test_credit_rejects_non_string_values(tmp_path):
+    # `credit: false` is falsy-but-not-"" and used to collapse to None — i.e. the
+    # automatic attribution the user was trying to switch off.
+    with pytest.raises(ConfigError, match="credit"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\ncredit: false\n")))
+    with pytest.raises(ConfigError, match="credit"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\ncredit: 0\n")))
+
+
+def test_render_pixel_grid_defaults_off(tmp_path):
+    # The overlay is opt-in: an existing config renders byte-identically.
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: lst\n")))
+    assert cfg.pixel_grid is False
+    cfg.validate()
+
+
+def test_render_pixel_grid_parses_true(tmp_path):
+    body = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, pixel_grid: true, preset: 720p}")
+    assert RunConfig.from_yaml(_write(tmp_path, body)).pixel_grid is True
+
+
+@pytest.mark.parametrize("value", ['"true"', "100", "yes-please"])
+def test_render_pixel_grid_rejects_a_non_boolean(tmp_path, value):
+    # Same rule as the other render flags: a quoted string or a number is a typo,
+    # not a request (`pixel_grid: 100` would read as "100 m" and mean nothing).
+    body = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        f"render: {{fps: 4, scale: 30, dimensions: 768, pixel_grid: {value}}}")
+    with pytest.raises(ConfigError, match="render.pixel_grid must be true or false"):
+        RunConfig.from_yaml(_write(tmp_path, body))
+
+
+def test_pixel_grid_requires_a_preset_to_upscale_into(tmp_path):
+    # Without render.preset the output equals the fetched raster, every pixel is
+    # a cell edge and the mesh degenerates into a 35 % white wash.
+    body = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, pixel_grid: true}")
+    with pytest.raises(ConfigError, match="pixel_grid"):
+        RunConfig.from_yaml(_write(tmp_path, body))
+    ok = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, pixel_grid: true, preset: 1080p}")
+    assert RunConfig.from_yaml(_write(tmp_path, ok)).pixel_grid is True

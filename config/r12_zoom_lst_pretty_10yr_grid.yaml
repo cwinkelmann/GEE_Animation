@@ -1,0 +1,57 @@
+# ZOOMED cut of r12_lst_pretty_10yr_grid: the frame is just the footprint extent (+0.4 km), so the
+# subject fills the canvas. New frame bbox => new fetch keys (not a cache hit).
+# Tegeler Forst, Revier 12: the r12_lst_pretty_10yr surface-temperature cut WITH
+# the pixel raster drawn on. Same fetch key as that run (pure cache hit): only
+# pixel_grid, upscale and the subtitle differ, all client-side.
+#
+# smooth: harmonic -- every frame is a per-pixel seasonal curve fitted across
+# 2017-2026 and evaluated at that month; hole-free, labelled 'modelled' on-frame.
+# Do NOT render this through scripts/render_chunked.py: each chunk would fit its
+# own curve and the model would jump at every chunk boundary. Landsat 8/9 only.
+#
+# The 30 m thermal-product pixels are honest at 16.3 km / 30 m = 543 px, so
+# render() caps `dimensions` there and lanczos-upscales to 1080p. `scale: 10` is
+# kept from the template for cache parity with the NDVI run's key, not for detail.
+#
+name: r12_zoom_lst_pretty_10yr_grid
+project: hnee-331218
+title: Tegeler Forst, Revier 12
+subtitle: "Surface temperature · harmonic seasonal model · 100 m grid"
+aoi:
+  frame: { bbox: [13.2162, 52.5680, 13.2862, 52.6102] }   # footprint bounds + 0.4 km, 4.7 x 4.7 km
+  region: { geojson: docs/aoi/r12/r12_footprint.geojson }
+  region_max_cloud_percent: 20
+start: "2017-01-01"
+end: "2026-09-01"
+sensor: landsat
+index: lst
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+missions: [L8, L9]
+smooth: harmonic
+harmonics: 2
+metadata: false
+
+viz:
+  min: 15.0
+  max: 45.0
+  palette: ['#30123b', '#4145ab', '#4675ed', '#39a2fc', '#1bcfd4', '#24eca6',
+            '#61fc6c', '#a4fc3b', '#d1e834', '#f3c63a', '#fe9b2d', '#f36315',
+            '#d93806', '#b11901', '#7a0402']
+
+render:
+  fps: 6
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 10
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: "match"               # canvas follows the near-square footprint extent
+  upscale: nearest               # flat blocks: the mesh sits on real cell edges
+  region_line_width: 5
+  quality: 9
+  raw_frames: true
+  geotiffs: false
+  pixel_grid: true               # trace the 162 x 69 fetched raster (~100 m cells)

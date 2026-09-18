@@ -14,17 +14,57 @@ _S2_ALIASES = (("B2", "B3", "B4", "B8", "B11", "B12"),
                ("blue", "green", "red", "nir", "swir1", "swir2"))
 
 
+# s2cloudless probability (percent) above which a pixel is cloud. SCL detects
+# cloud CORES well but misses thin edges, haze and some shadows around them —
+# those undetected pixels then colorize as plausible index values (user-reported
+# on NDVI). 40 is deliberately stricter than the tutorial's 50–60: over a
+# temperate forest AOI the cost of over-masking (a few extra grey pixels) is
+# far below the cost of haze reading as data. Code-level constant, not config:
+# changing it is a science decision and CACHE_VERSION covers invalidation.
+S2_CLOUD_PROB_MAX = 40
+
+
+def _s2_attach_cloud_prob(coll, start, end, geom, ee_module=ee):
+    """Join s2cloudless (COPERNICUS/S2_CLOUD_PROBABILITY) onto every granule.
+
+    Adds the matching probability image's band as ``cloud_prob``, so
+    `_s2_mask_clouds`/`_s2_cloud_band` can screen pixels SCL alone misses.
+    Inner-join semantics: the rare granule with no probability match is dropped
+    entirely — a scene that cannot be cloud-screened must not enter a composite
+    as if it were clear.
+    """
+    prob = (ee_module.ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")
+            .filterDate(start, end)
+            .filterBounds(geom))
+    joined = ee_module.Join.saveFirst("cloud_prob_img").apply(
+        coll, prob,
+        ee_module.Filter.equals(leftField="system:index", rightField="system:index"))
+
+    def _add(img):
+        img = ee_module.Image(img)
+        return img.addBands(
+            ee_module.Image(img.get("cloud_prob_img"))
+            .select("probability").rename("cloud_prob"))
+
+    return ee_module.ImageCollection(joined).map(_add)
+
+
 def _s2_mask_clouds(image, ee_module=ee):
     scl = image.select("SCL")
     mask = ee_module.Image.constant(1)
     for cls in _S2_SCL_CLOUD:
         mask = mask.And(scl.neq(cls))
+    # s2cloudless catches what SCL misses (thin edges, haze); the band is attached
+    # by _s2_attach_cloud_prob, which every pipeline path reaches via collection.build.
+    mask = mask.And(image.select("cloud_prob").lte(S2_CLOUD_PROB_MAX))
     return image.updateMask(mask)
 
 
 def _s2_cloud_band(image, ee_module=ee):
     scl = image.select("SCL")
-    return scl.remap(_S2_SCL_CLOUD, [1] * len(_S2_SCL_CLOUD), 0).rename("cloud")
+    scl_bad = scl.remap(_S2_SCL_CLOUD, [1] * len(_S2_SCL_CLOUD), 0)
+    prob_bad = image.select("cloud_prob").gt(S2_CLOUD_PROB_MAX)
+    return scl_bad.Or(prob_bad).rename("cloud")
 
 
 def _s2_reflectance(image, ee_module=ee):
@@ -38,9 +78,9 @@ _L_QA_BITS = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5)
 # L4/5/7 (TM/ETM+) and L8/9 (OLI/TIRS) name bands differently; harmonize every
 # mission to a single canonical band set at collection build. SR and ST scale
 # factors are identical across all C2 L2 missions, and QA_PIXEL is standardized.
-_L_CANON = ["blue", "green", "red", "nir", "swir1", "swir2", "thermal", "QA_PIXEL"]
-_L_TM_SRC = ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "ST_B6", "QA_PIXEL"]
-_L_OLI_SRC = ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "ST_B10", "QA_PIXEL"]
+_L_CANON = ["blue", "green", "red", "nir", "swir1", "swir2", "thermal", "st_qa", "QA_PIXEL"]
+_L_TM_SRC = ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "ST_B6", "ST_QA", "QA_PIXEL"]
+_L_OLI_SRC = ["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "ST_B10", "ST_QA", "QA_PIXEL"]
 # (mission id, Collection-2 L2 id) per mission; each image is tagged with a
 # "mission" property so build() can select missions (e.g. L8/L9-only for thermal).
 _L_TM_MISSIONS = (("L4", "LANDSAT/LT04/C02/T1_L2"), ("L5", "LANDSAT/LT05/C02/T1_L2"),
@@ -60,13 +100,28 @@ def _landsat_collection(ee_module=ee):
     return merged
 
 
+# QA_PIXEL confidence bit-pairs (1 low, 2 medium, 3 high): cloud 8–9,
+# cloud shadow 10–11, cirrus 14–15. The flag bits in _L_QA_BITS fire at high
+# confidence; additionally masking medium-confidence pixels is the Landsat
+# counterpart of the s2cloudless screen — it catches the thin edges/haze that
+# leave cold smears in LST and false lows in the reflectance indices.
+_L_CONF_SHIFTS = (8, 10, 14)
+
+
 def _landsat_mask_clouds(image, ee_module=ee):
-    clear = image.select("QA_PIXEL").bitwiseAnd(_L_QA_BITS).eq(0)
+    qa = image.select("QA_PIXEL")
+    clear = qa.bitwiseAnd(_L_QA_BITS).eq(0)
+    for shift in _L_CONF_SHIFTS:
+        clear = clear.And(qa.rightShift(shift).bitwiseAnd(3).lte(1))
     return image.updateMask(clear)
 
 
 def _landsat_cloud_band(image, ee_module=ee):
-    return image.select("QA_PIXEL").bitwiseAnd(_L_QA_BITS).neq(0).rename("cloud")
+    qa = image.select("QA_PIXEL")
+    bad = qa.bitwiseAnd(_L_QA_BITS).neq(0)
+    for shift in _L_CONF_SHIFTS:
+        bad = bad.Or(qa.rightShift(shift).bitwiseAnd(3).gte(2))
+    return bad.rename("cloud")
 
 
 def _landsat_reflectance(image, ee_module=ee):
@@ -142,9 +197,18 @@ def _ndvi(sensor, image, ee_module=ee):
             .set("system:time_start", image.get("system:time_start")))
 
 
+# Max acceptable surface-temperature retrieval uncertainty (kelvin). Landsat C2 L2
+# ships per-pixel ST_QA (scale 0.01 K); cloud-contaminated retrievals carry high
+# uncertainty even when CFMask never flags the cloud, so this gate removes the
+# cold smears undetected cloud leaves in LST. Typical clear-sky ST_QA is 2–4 K.
+ST_QA_MAX_K = 5.0
+
+
 def _lst(sensor, image, ee_module=ee):
+    st_uncertainty = image.select("st_qa").multiply(0.01)
     return (image.select("thermal")
             .multiply(0.00341802).add(149.0).subtract(273.15)
+            .updateMask(st_uncertainty.lte(ST_QA_MAX_K))
             .rename(INDEX_BAND)
             .set("system:time_start", image.get("system:time_start")))
 
@@ -171,6 +235,20 @@ def _ndmi(sensor, image, ee_module=ee):
     # NDMI = (nir − swir1)/(nir + swir1) — canopy/soil moisture.
     refl = sensor.reflectance(image, ee_module)
     return (refl.normalizedDifference(["nir", "swir1"]).rename(INDEX_BAND)
+            .set("system:time_start", image.get("system:time_start")))
+
+
+def _ndre(sensor, image, ee_module=ee):
+    # NDRE = (nir − red_edge)/(nir + red_edge) — chlorophyll/nitrogen-sensitive,
+    # slower to saturate over dense canopy than NDVI. Sentinel-2 only: the red
+    # edge (B5, 705 nm, 20 m) has no counterpart in Landsat or MODIS, so this
+    # reads B5 straight off the raw image rather than through the shared
+    # reflectance alias table (which only carries the 6 bands common to every
+    # reflectance sensor). Scaled the same way _s2_reflectance scales its bands.
+    refl = sensor.reflectance(image, ee_module)
+    red_edge = image.select("B5").multiply(0.0001).rename("red_edge")
+    combo = refl.select("nir").rename("nir").addBands(red_edge)
+    return (combo.normalizedDifference(["nir", "red_edge"]).rename(INDEX_BAND)
             .set("system:time_start", image.get("system:time_start")))
 
 
@@ -238,6 +316,10 @@ class Sensor:
     mask_clouds: Callable
     cloud_band: Callable
     reflectance: Callable
+    # Optional (coll, start, end, geom, ee_module) -> coll, applied by
+    # collection.build right after the date/bounds filters: attaches auxiliary
+    # per-granule data the masks need (e.g. Sentinel-2's s2cloudless band).
+    attach_aux: Callable = None
 
 
 @dataclass(frozen=True)
@@ -250,24 +332,129 @@ class Index:
     # uses it instead of the sensor's default collection — for indices that need a
     # bespoke, satellite-aware source (e.g. lst_smw joins the TOA thermal band).
     build_collection: Callable = None
-    # Overlay metadata (drawn on every frame): the bands used and the formula.
+    # Optional (collection, ee_module) -> Image, used INSTEAD of `.median()` wherever
+    # compositing forms one period's image. A median is meaningless for a categorical
+    # product — the median of {water=0, trees=1, built=6} is "trees", an artefact of
+    # the numbering — so `landcover` averages class PROBABILITIES and takes the
+    # argmax instead.
+    reduce_period: Callable = None
+    # Categorical products only: ((value, label, hex), ...) in legend order. Non-empty
+    # marks the product as classified, which drives the swatch legend instead of a
+    # colour ramp and forbids interpolation (blending two class colours invents a
+    # class that does not exist).
+    classes: tuple = ()
+    # Method-doc metadata: the bands used and the formula. Deliberately NOT drawn on
+    # the frame any more — an analyst-persona review found the scaling coefficients
+    # ("ST_B * 0.00341802 + 149.0 - 273.15") read as debug output and cost the frame
+    # credibility while saying nothing about what the viewer is looking at. Nothing is
+    # lost: both live in the method doc, where a reader who wants the definition can
+    # find it. `display_name` is what the frame shows instead.
     bands: str = ""
     formula: str = None
+    # Plain-language product name for the frame header (line 1, when no `cfg.title`
+    # is set). "NDVI" names a variable; "Vegetation greenness (NDVI)" names a subject
+    # and still carries the acronym for anyone who wants it.
+    display_name: str = ""
     # composite=True => a 3-band (R,G,B) visualization, not a 1-band palette index.
     composite: bool = False
     # Physical unit of the index values (e.g. "°C" for thermal indices); "" if
     # unitless (normalized-difference indices, composites). Shown on the colorbar.
     units: str = ""
+    # Word anchors for the colorbar ends -- e.g. "bare"/"dense vegetation" -- so a lay
+    # viewer reads what the ramp *means*, not just its numbers. "" (the default) draws
+    # no anchor; composites have no colorbar at all, so both stay "".
+    low_label: str = ""
+    high_label: str = ""
+
+
+# --- Dynamic World (near-real-time 10 m land cover from Sentinel-2) ----------
+# Google/WRI, 2015-06-27 -> present. Every image carries a `label` band (the
+# argmax class) plus one probability band per class. It is already cloud-screened
+# at source — pixels Sentinel-2 could not see are simply masked — so the sensor
+# needs no cloud mask of its own.
+_DW_ID = "GOOGLE/DYNAMICWORLD/V1"
+_DW_CLASSES = (
+    (0, "Water", "#419BDF"),
+    (1, "Trees", "#397D49"),
+    (2, "Grass", "#88B053"),
+    (3, "Flooded vegetation", "#7A87C6"),
+    (4, "Crops", "#E49635"),
+    (5, "Shrub and scrub", "#DFC35A"),
+    (6, "Built", "#C4281B"),
+    (7, "Bare", "#A59B8F"),
+    (8, "Snow and ice", "#B39FE1"),
+)
+_DW_PROB_BANDS = ["water", "trees", "grass", "flooded_vegetation", "crops",
+                  "shrub_and_scrub", "built", "bare", "snow_and_ice"]
+
+
+def _dw_mask_clouds(image, ee_module=ee):
+    return image        # already cloud-screened at source
+
+
+def _dw_cloud_band(image, ee_module=ee):
+    # No label == Sentinel-2 saw nothing usable, which is exactly "cloud" here.
+    return image.select("label").mask().Not().rename("cloud")
+
+
+def _hex_to_rgb(hx):
+    hx = hx.lstrip("#")
+    return [int(hx[i:i + 2], 16) for i in (0, 2, 4)]
+
+
+def _dw_class_to_rgb(class_img, ee_module=ee):
+    """Paint a class-index image with the Dynamic World palette -> R/G/B bands.
+
+    `remap`, not a palette stretch: class values are labels, not magnitudes, so
+    every class must land on its exact colour with nothing interpolated between.
+    """
+    values = [v for v, _n, _h in _DW_CLASSES]
+    channels = list(zip(*[_hex_to_rgb(h) for _v, _n, h in _DW_CLASSES]))
+    bands = [class_img.remap(values, list(ch)).rename(name)
+             for ch, name in zip(channels, ("R", "G", "B"))]
+    return ee_module.Image.cat(bands).toUint8()
+
+
+def _dw_reduce_period(collection, ee_module=ee):
+    """One period's land cover: mean class probability, then argmax.
+
+    Averaging probabilities and taking the argmax is Dynamic World's own
+    recommended compositing recipe. It beats a mode of the labels because it uses
+    every scene's full confidence rather than only its winner, so a pixel that was
+    marginally "grass" in three passes and confidently "crops" in one resolves the
+    way the evidence points.
+    """
+    probs = collection.select(_DW_PROB_BANDS).mean()
+    top = probs.toArray().arrayArgmax().arrayGet([0])
+    return _dw_class_to_rgb(top, ee_module).set(
+        "system:time_start", collection.first().get("system:time_start"))
+
+
+def _dw_landcover(sensor, image, ee_module=ee):
+    """Per-image step: keep the class PROBABILITIES, defer the classification.
+
+    `collection.build` maps this over every scene *before* compositing, so
+    painting classes here would leave `reduce_period` holding finished RGB with
+    nothing left to average — the probabilities have to survive to the point
+    where a period is actually formed. All four period-forming sites go through
+    `compositing._period_image`, so every frame reaches `_dw_reduce_period`,
+    which is where argmax and painting belong.
+    """
+    return image.select(_DW_PROB_BANDS).set(
+        "system:time_start", image.get("system:time_start"))
 
 
 SENSORS = {
     "sentinel2": Sensor("sentinel2", _merged("COPERNICUS/S2_SR_HARMONIZED"),
                         "CLOUDY_PIXEL_PERCENTAGE",
-                        _s2_mask_clouds, _s2_cloud_band, _s2_reflectance),
+                        _s2_mask_clouds, _s2_cloud_band, _s2_reflectance,
+                        attach_aux=_s2_attach_cloud_prob),
     "landsat": Sensor("landsat", _landsat_collection, "CLOUD_COVER",
                       _landsat_mask_clouds, _landsat_cloud_band, _landsat_reflectance),
     "modis": Sensor("modis", _merged("MODIS/061/MOD09A1"), None,
                     _modis_mask_clouds, _modis_cloud_band, _modis_reflectance),
+    "dynamicworld": Sensor("dynamicworld", _merged(_DW_ID), None,
+                           _dw_mask_clouds, _dw_cloud_band, _no_reflectance),
     "modis_lst": Sensor("modis_lst", _merged(_MOD11_TERRA), None,
                         _modis_lst_mask_clouds, _modis_lst_cloud_band, _no_reflectance),
 }
@@ -280,8 +467,9 @@ _REFL = frozenset({"sentinel2", "landsat", "modis"})
 THERMAL_INDICES = frozenset({"lst", "lst_smw", "lst_sharp", "lst_modis"})
 
 # Coarsest-relevant native ground sampling (metres) per sensor, with overrides.
-_SENSOR_NATIVE_M = {"sentinel2": 10, "landsat": 30, "modis": 500, "modis_lst": 1000}
-_S2_20M_INDICES = frozenset({"ndmi"})   # uses the 20 m SWIR band
+_SENSOR_NATIVE_M = {"sentinel2": 10, "landsat": 30, "modis": 500, "modis_lst": 1000,
+                    "dynamicworld": 10}   # Sentinel-2 derived, so Sentinel-2's grid
+_S2_20M_INDICES = frozenset({"ndmi", "ndre"})   # ndmi: 20 m SWIR; ndre: 20 m red edge (B5)
 
 
 def native_scale_m(sensor: str, index: str) -> int:
@@ -300,32 +488,98 @@ def native_scale_m(sensor: str, index: str) -> int:
 
 INDICES = {
     # Normalized-difference indices span their definitional -1..1 range.
+    # Palette: 7 evenly-spaced stops over -0.2..1.0 (imaging.colorize interpolates
+    # linearly between stops placed at equal fractions of vmin..vmax), boundaries at
+    # -0.2, 0, 0.2, 0.4, 0.6, 0.8, 1.0. The five stops from 0..1 are the unmodified,
+    # official 5-class ColorBrewer BrBG (colour-vision-deficiency safe); the old
+    # brown/green ramp had near-identical endpoints under deuteranopia (measured
+    # separation 18/255 -- ~8% of men could not tell bare soil from dense canopy).
+    # These endpoints separate at 90/255 under the same simulation.
+    #
+    # A naive version of this fix (blue stop at -0.25, BrBG's brown landing exactly
+    # at 0) was verified numerically to fail: with only ONE stop spanning the whole
+    # water range, water as shallow as NDVI=-0.1 already interpolated to brown
+    # (colorize blends linearly between adjacent stops, and -0.1 sits close to the
+    # brown endpoint of that wide segment) -- the exact "lake reads as scorched
+    # earth" bug (H3) this palette exists to fix. A second, paler water stop keeps
+    # the entire negative range in the blue family (R<B at every pixel <= NDVI 0)
+    # while the land ramp still turns visibly brown by NDVI~0.032 (measured
+    # crossover; see tests/test_imaging.py for the sweep that picked this value).
+    #
+    # "#e0f3f8" (RdYlBu's pale-blue neighbour of "#4575b4") was the first candidate
+    # tried and rejected: at NDVI=0 it is only 18.1/255 from render.NODATA_RGB
+    # (240,240,240) -- the SAME magnitude gap H2 condemned in the old land ramp,
+    # meaning a viewer could not tell "observed shallow water" from "no observation"
+    # over exactly the -0.03..+0.03 band this project paints no-data honestly for.
+    # "#aeaec7" (a muted slate-blue, still officially in the blue family, not a
+    # ColorBrewer stock colour) was picked by a small numeric sweep over candidate
+    # hexes requiring: (1) R<B for every pixel at NDVI<=0; (2) >=60/255 from
+    # NODATA_RGB at NDVI=0 (measured 101.9); (3) decisively brown by NDVI=0.10,
+    # R-B>=40 (measured 53); (4) brown crossover <=0.08 (measured 0.0323). Endpoint
+    # (first/last stop) deuteranopia separation is unaffected: still 89.5/255. This
+    # is not a water mask: turbid/vegetated water with slightly positive NDVI still
+    # renders brownish.
+    # Top two stops are GREENS (ColorBrewer Greens), not BrBG's dark teal: on-frame
+    # the teal top end sat visually close to the water blue (user feedback), while
+    # green vs blue stays separated for deuteranopia too (it is green vs RED/brown
+    # that collapses — hence the pale-yellow buffer between the browns and the
+    # greens). Water-stop criteria (stops 1-2) unchanged.
     "ndvi": Index("ndvi", _REFL,
-                  (-1.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _ndvi,
-                  bands="NIR, Red", formula="(NIR - Red) / (NIR + Red)"),
+                  (-0.2, 1.0, ["#4575b4", "#aeaec7", "#8c510a", "#d8b365",
+                               "#f6e8c3", "#41ab5d", "#006d2c"]), _ndvi,
+                  bands="NIR, Red", formula="(NIR - Red) / (NIR + Red)",
+                  display_name="Vegetation greenness (NDVI)",
+                  low_label="water", high_label="dense vegetation"),
     "lst": Index("lst", frozenset({"landsat"}),
                  (-10.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
                  _lst, bands="Thermal (ST_B6/ST_B10)",
-                 formula="ST_B * 0.00341802 + 149.0 - 273.15 [C]", units="°C"),
+                 formula="ST_B * 0.00341802 + 149.0 - 273.15 [C]", units="°C",
+                 display_name="Land surface temperature",
+                 low_label="cooler", high_label="warmer"),
     "evi": Index("evi", _REFL,
                  (-1.0, 1.0, ["#a1622f", "#e8d9a0", "#3b7a2a"]), _evi,
                  bands="NIR, Red, Blue",
-                 formula="2.5*(NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1)"),
+                 formula="2.5*(NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1)",
+                 display_name="Vegetation greenness (EVI)",
+                 low_label="bare", high_label="dense vegetation"),
     "ndwi": Index("ndwi", _REFL,
                   (-1.0, 1.0, ["#a1622f", "#f6e8c3", "#2166ac"]), _ndwi,
-                  bands="Green, NIR", formula="(Green - NIR) / (Green + NIR)"),
+                  bands="Green, NIR", formula="(Green - NIR) / (Green + NIR)",
+                  display_name="Surface water index (NDWI)",
+                  low_label="dry", high_label="water"),
     "ndmi": Index("ndmi", _REFL,
                   (-1.0, 1.0, ["#8c510a", "#f6e8c3", "#01665e"]), _ndmi,
-                  bands="NIR, SWIR1", formula="(NIR - SWIR1) / (NIR + SWIR1)"),
+                  bands="NIR, SWIR1", formula="(NIR - SWIR1) / (NIR + SWIR1)",
+                  display_name="Vegetation moisture (NDMI)",
+                  low_label="dry", high_label="moist"),
+    "ndre": Index("ndre", frozenset({"sentinel2"}),
+                  (-0.2, 1.0, ["#a1622f", "#f6e8c3", "#238b45"]), _ndre,
+                  bands="NIR, Red Edge (B5)",
+                  formula="(NIR - RedEdge) / (NIR + RedEdge)",
+                  display_name="Vegetation red-edge index (NDRE)",
+                  low_label="bare/stressed", high_label="dense vegetation"),
+    # Categorical: composite=True because the pipeline is handed finished colour
+    # (the class palette applied server-side), never a value to stretch through a
+    # ramp. viz 0..255 is the byte range of that colour, not a data range.
+    "landcover": Index("landcover", frozenset({"dynamicworld"}),
+                       (0.0, 255.0, None), _dw_landcover,
+                       reduce_period=_dw_reduce_period, classes=_DW_CLASSES,
+                       composite=True,
+                       bands="Dynamic World label + 9 class probabilities",
+                       display_name="Land cover (Dynamic World)"),
     "rgb": Index("rgb", _REFL, (0.0, 0.3, None), _rgb,
-                 bands="Red, Green, Blue", composite=True),
+                 bands="Red, Green, Blue", composite=True,
+                 display_name="True colour"),
     "cir": Index("cir", _REFL, (0.0, 0.3, None), _cir,
-                 bands="R<-NIR, G<-Red, B<-Green", composite=True),
+                 bands="R<-NIR, G<-Red, B<-Green", composite=True,
+                 display_name="Colour infrared"),
     "lst_sharp": Index("lst_sharp", frozenset({"landsat"}),
                        (-10.0, 40.0, ["#000080", "#0000ff", "#00ffff", "#ffff00", "#ff0000", "#800000"]),
                        _lst_sharp, bands="Thermal(100m) + NIRv(30m)",
                        formula="TsHARP: fit LST~NIRv @100m, apply @30m, +coarse residual",
-                       units="°C"),
+                       units="°C",
+                       display_name="Land surface temperature (sharpened)",
+                       low_label="cooler", high_label="warmer"),
 }
 
 
@@ -339,14 +593,22 @@ INDICES["lst_smw"] = Index("lst_smw", frozenset({"landsat"}),
                            (-10.0, 40.0, _LST_PALETTE), smw_lst.compute,
                            build_collection=smw_lst.landsat_collection,
                            bands="TOA Tb, NIR, Red, Green, QA",
-                           formula="A*Tb/e + B/e + C  (Ermida 2020 SMW)", units="°C")
+                           formula="A*Tb/e + B/e + C  (Ermida 2020 SMW)", units="°C",
+                           # Ermida et al. (2020) is the Statistical MONO-Window
+                           # algorithm (ONE thermal band + emissivity + water-vapour
+                           # coefficients); "split-window" is the two-band family
+                           # (e.g. MODIS MxD11) and was a mislabel here.
+                           display_name="Land surface temperature (mono-window)",
+                           low_label="cooler", high_label="warmer")
 
 # MODIS LST (MOD11A1 Terra daily, 1 km) — coarse but ~daily, so it fills the
 # cloud-locked months Landsat's 16-day revisit misses.
 INDICES["lst_modis"] = Index("lst_modis", frozenset({"modis_lst"}),
                              (-10.0, 40.0, _LST_PALETTE), _lst_modis,
                              bands="MOD11A1 LST_Day_1km (1 km, daily)",
-                             formula="LST_Day_1km * 0.02 - 273.15 [C]", units="°C")
+                             formula="LST_Day_1km * 0.02 - 273.15 [C]", units="°C",
+                             display_name="Land surface temperature (MODIS)",
+                             low_label="cooler", high_label="warmer")
 
 
 def get_product(sensor: str, index: str):

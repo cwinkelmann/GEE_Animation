@@ -29,7 +29,10 @@ class _Img:
 
 
 def _frames(n):
-    return [Frame(f"2022-{i + 1:02d}", _Img(), i + 1) for i in range(n)]
+    # Real consecutive period keys, rolling into the next year past December: these
+    # runs go well past 12 frames, and render() now renders the label as plain
+    # language (labels.period_text), which has no month 13.
+    return [Frame(f"{2022 + i // 12}-{i % 12 + 1:02d}", _Img(), i + 1) for i in range(n)]
 
 
 def _shaded_fetch(delay=0.0):
