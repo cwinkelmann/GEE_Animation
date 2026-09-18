@@ -110,6 +110,10 @@ cross-year gap-fill, cinema-paced interpolation) and shown downscaled here:
 <td align="center"><b>LST-sharp</b> NDVI-sharpened LST (Landsat)<br><img src="docs/images/example_lst_sharp.png" width="360"></td>
 <td align="center"><b>NDVI</b> (MODIS, 500 m)<br><img src="docs/images/example_modis_ndvi.png" width="360"></td>
 </tr>
+<tr>
+<td align="center"><b>LST-RF</b> forest-sharpened LST to 20 m, experimental (Landsat + Sentinel-2)<br><img src="docs/images/example_lst_rf.png" width="360"></td>
+<td align="center"><b>LST-RF Δ</b> reserve only, departure from the reserve mean<br><img src="docs/images/example_lst_rf_delta.png" width="360"></td>
+</tr>
 </table>
 
 Generate them all in one go:

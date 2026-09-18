@@ -29,7 +29,8 @@ SECTIONS = [
       "wne_cinema_ndwi_2018_2026", "wne_cinema_ndmi_2018_2026",
       "wne_cinema_rgb_2018_2026", "wne_cinema_cir_2018_2026",
       "wne_cinema_lst_2018_2026", "wne_cinema_lst_smw_2018_2026",
-      "wne_cinema_lst_sharp_2018_2026", "wne_cinema_modis_ndvi_2018_2026"]),
+      "wne_cinema_lst_sharp_2018_2026", "wne_cinema_modis_ndvi_2018_2026",
+      "wne_cinema_lst_rf_2018_2026", "wne_focus_lst_rf_delta_2018_2026"]),
     ("Summer-scaled temperature", "The same thermal data on a 15–45 °C ramp "
      "instead of −10…46 °C. On the wide ramp a real 2–3 °C forest/field "
      "difference is about 5% of the width and reads as uniform red; here the "
@@ -59,10 +60,17 @@ TITLES = {
     "rgb": "True colour", "cir": "Colour infrared",
     "lst": "Land surface temperature", "lst_smw": "Temperature (mono-window)",
     "lst_sharp": "Temperature (sharpened)", "modis_ndvi": "NDVI (MODIS 500 m)",
+    "lst_rf": "Temperature (forest-sharpened, 20 m)",
     "landcover": "Land cover (Dynamic World)",
 }
 
 NOTES = {
+    "wne_cinema_lst_rf_2018_2026": "Experimental. Random-forest sharpening to 20 m "
+        "with Sentinel-2 predictors; every 100 m cell still averages to the observed "
+        "temperature, the finer pattern is index texture. Trained on the workstation.",
+    "wne_focus_lst_rf_delta_2018_2026": "Reserve only, each month as its departure "
+        "from the reserve mean (K): absolute levels differ between years, the "
+        "within-reserve contrast stays comparable.",
     "wne_lst_summer_lst": "Primary. Gap-filled, so every month is present; "
         "borrowed frames say so on-frame.",
     "wne_lst_summer_lst_smw": "Primary. Mono-window retrieval — runs 1–3 K below "
