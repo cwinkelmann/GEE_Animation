@@ -465,6 +465,11 @@ class RunConfig:
                 raise ConfigError(
                     f"relative: {self.relative} needs a single-band continuous index; "
                     f"{self.index!r} has no INDEX band to take a mean of")
+        if self.pixel_grid and not self.preset:
+            raise ConfigError(
+                "render.pixel_grid needs render.preset: without an upscale the output "
+                "equals the fetched raster, every pixel is a cell edge and the mesh "
+                "degenerates into a flat wash")
         if self.anomaly is not None:
             from .products import THERMAL_INDICES
             if self.cadence != "monthly":

@@ -3144,3 +3144,26 @@ def test_export_geotiffs_writes_a_local_image_directly(tmp_path):
     with rasterio.open(paths[0]) as ds:
         assert ds.count == 1 and ds.res == (20.0, 20.0) and ds.read(1)[5, 5] == 7.0
         assert ds.bounds.left == 0 and ds.bounds.top == 200
+def test_grid_mask_is_empty_when_cells_would_be_narrower_than_two_pixels():
+    # Code review 2026-09-17: with no upscale every pixel is a cell edge, so the
+    # mask was all ones and the frame washed 35 % white. A mesh only makes sense
+    # when a cell spans >= 2 output pixels on both axes; otherwise draw nothing.
+    from gee_animation.render import _grid_mask
+    assert not _grid_mask((10, 20), (10, 20)).any()          # no upscale
+    assert not _grid_mask((10, 20), (19, 38)).any()          # 1.9 px cells
+    m = _grid_mask((10, 20), (20, 40))                        # exactly 2 px cells
+    assert m.any() and not m.all()
+
+
+def test_render_skips_the_pixel_grid_without_an_upscale_and_warns(tmp_path, monkeypatch, caplog):
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.pixel_grid = True                                     # and no preset
+    monkeypatch.setattr(r, "_composite_alpha", lambda *a, **k: pytest.fail("grid must not be drawn"))
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
+
+    with caplog.at_level("WARNING"):
+        render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+    assert "pixel_grid" in caplog.text
