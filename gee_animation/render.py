@@ -1399,6 +1399,10 @@ def _grid_mask(native_hw: tuple, out_hw: tuple, line_px: int = 1) -> np.ndarray:
     nh, nw = native_hw
     h, w = out_hw
     mask = np.zeros((h, w), np.float32)
+    if w / nw < 2 or h / nh < 2:
+        # No (or too little) upscale: a cell spans < 2 output pixels, so every pixel
+        # would be a cell edge and the "mesh" a flat 35 % wash. Draw nothing.
+        return mask
     lp = max(1, int(line_px))
     for j in range(nw + 1):
         x = min(int(round(j * w / nw)), w - 1)
@@ -2162,7 +2166,13 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                 if grid_mask is None:
                     grid_mask = _grid_mask(native_hw, rgb.shape[:2],
                                            line_px=max(1, round(rgb.shape[0] / 1080)))
-                rgb = _composite_alpha(rgb, grid_mask, GRID_RGB, GRID_ALPHA)
+                    if not grid_mask.any():
+                        log.warning("pixel_grid: output %dx%d is not an upscale of the "
+                                    "fetched %dx%d raster (cells < 2 px), so no grid is "
+                                    "drawn — set render.preset to upscale",
+                                    rgb.shape[1], rgb.shape[0], native_hw[1], native_hw[0])
+                if grid_mask.any():
+                    rgb = _composite_alpha(rgb, grid_mask, GRID_RGB, GRID_ALPHA)
             if draw_overlay:
                 # The rings, bounds and frame size are identical every frame, so the
                 # (comparatively expensive) supersampled masks are built once here on

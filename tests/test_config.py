@@ -844,7 +844,7 @@ def test_render_pixel_grid_defaults_off(tmp_path):
 def test_render_pixel_grid_parses_true(tmp_path):
     body = _base("index: lst\n").replace(
         "render: {fps: 4, scale: 30, dimensions: 768}",
-        "render: {fps: 4, scale: 30, dimensions: 768, pixel_grid: true}")
+        "render: {fps: 4, scale: 30, dimensions: 768, pixel_grid: true, preset: 720p}")
     assert RunConfig.from_yaml(_write(tmp_path, body)).pixel_grid is True
 
 
@@ -857,3 +857,17 @@ def test_render_pixel_grid_rejects_a_non_boolean(tmp_path, value):
         f"render: {{fps: 4, scale: 30, dimensions: 768, pixel_grid: {value}}}")
     with pytest.raises(ConfigError, match="render.pixel_grid must be true or false"):
         RunConfig.from_yaml(_write(tmp_path, body))
+
+
+def test_pixel_grid_requires_a_preset_to_upscale_into(tmp_path):
+    # Without render.preset the output equals the fetched raster, every pixel is
+    # a cell edge and the mesh degenerates into a 35 % white wash.
+    body = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, pixel_grid: true}")
+    with pytest.raises(ConfigError, match="pixel_grid"):
+        RunConfig.from_yaml(_write(tmp_path, body))
+    ok = _base("index: lst\n").replace(
+        "render: {fps: 4, scale: 30, dimensions: 768}",
+        "render: {fps: 4, scale: 30, dimensions: 768, pixel_grid: true, preset: 1080p}")
+    assert RunConfig.from_yaml(_write(tmp_path, ok)).pixel_grid is True
