@@ -1,0 +1,46 @@
+# Spandauer Forst, Revier 13: absolute RF-sharpened surface temperature on the zoomed
+# frame (forest trained locally), 15-45 C turbo like the pretty LST cut. Same
+# exported inputs as the delta runs (cache hit).
+name: r13_zoom_lst_rf_local_10yr
+project: hnee-331218
+title: Spandauer Forst, Revier 13
+subtitle: "RF-sharpened surface temperature"
+aoi:
+  frame: { bbox: [13.1330, 52.5582, 13.2168, 52.6024] }   # footprint bounds + 0.4 km, 5.7 x 4.9 km
+  region: { geojson: docs/aoi/r13/r13_footprint.geojson }
+  region_max_cloud_percent: 20
+start: "2017-01-01"
+end: "2026-09-01"
+sensor: landsat
+index: lst_rf
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+missions: [L8, L9]
+metadata: false
+sharpen: local                 # EE exports composites; the forest trains here (sharpen_local)
+
+pool_years: [2017, 2026]
+pool_strategy: gap_fill
+
+viz:
+  min: 15.0
+  max: 45.0
+  palette: ['#30123b', '#4145ab', '#4675ed', '#39a2fc', '#1bcfd4', '#24eca6',
+            '#61fc6c', '#a4fc3b', '#d1e834', '#f3c63a', '#fe9b2d', '#f36315',
+            '#d93806', '#b11901', '#7a0402']
+
+render:
+  fps: 6
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 20
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: "match"               # canvas follows the near-square footprint extent
+  upscale: lanczos
+  region_line_width: 5
+  quality: 9
+  raw_frames: true
+  geotiffs: true                 # the delta field itself, per observed month
