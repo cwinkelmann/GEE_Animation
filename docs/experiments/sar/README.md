@@ -60,3 +60,32 @@ the decline is in the stands that later fell, not in the reference, and not
 in the sensor. It starts in 2019, i.e. with the 2018–2020 drought years in
 Brandenburg. Interpretation stays open with one site: progressive crown loss
 before the storm, or a stand type whose backscatter behaves differently.
+
+## Other storms: the WINMOL annotated corpus (2026-09-21, `scripts/sar_multistorm.py`)
+
+Eleven hand-digitised windthrow polygons from three storms, each against a ring of
+intact tree cover 100–500 m around it (ESA WorldCover, every damage polygon removed).
+Monthly VH, 2016–2026. "Step" = polygon−ring mean over the 12 months after the storm
+minus the 12 months before; "slope" = pre-storm trend of polygon−ring over 24 months.
+
+| site (storm) | species | step, dB | pre-storm slope, dB/yr |
+|---|---|---|---|
+| Eberswalde Campus (Xavier 2017-10) | beech | **−1.00** | −0.21 (only ~20 months of S1 before) |
+| Eberswalde survey polygon (Xavier) | beech | **−0.72** | −0.24 |
+| Bachsee north (Xavier) | beech | −0.34 | −0.14 |
+| Kaufland (summer 2021, date guessed) | beech, 0.5 ha | +0.01 | −0.20 |
+| Campus Oberheide (Zeynep 2022-02) | beech | −0.09 | +0.03 |
+| Eberswalde survey polygon (Zeynep) | beech | +0.06 | 0.00 |
+| Barnekow 3 / 5 / survey (Zeynep) | spruce/pine | **−0.97 / −1.13 / −0.95** | +0.01 / −0.03 / −0.01 |
+| Bremerhagen 3 / survey (Zeynep) | spruce | **−1.59 / −0.76** | −0.04 / −0.05 |
+
+Detection replicates: 8 of 11 polygons drop by 0.3–1.6 dB at the storm, on beech in
+autumn (Xavier) and on spruce/pine in winter (Zeynep). The three that do not are the
+0.5 ha Kaufland patch (too small for 20 m cells, storm date uncertain) and the two
+Eberswalde beech polygons of Zeynep — leaf-off beech in February, on ground that
+already carried Xavier damage in the ring. The **pre-storm decline does not
+replicate**: every Zeynep site has a flat pre-storm slope (±0.05 dB/yr); the Xavier
+sites show −0.14 to −0.24 dB/yr but with under two years of Sentinel-1 before the
+storm that number is not trustworthy. So: VH backscatter is a robust windthrow
+*detector* across storms and species; the R12/R13 pre-storm decline stays a Tegel
+observation, not a general precursor.
