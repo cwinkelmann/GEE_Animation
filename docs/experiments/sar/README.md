@@ -40,3 +40,23 @@ R12 series does not have. That pre-storm drift is worth a look on its own:
 stands losing volume scattering for years before they fell. Grumsin's
 footprint-wide backscatter is flat across 2025 (−0.1 to −0.2 dB, within
 year-to-year noise).
+
+## Is the R13 pre-storm drift real? (2026-09-21, `scripts/sar_canopy_check.py`)
+
+Checked against the two artefacts that could fake it. Orbit mix: Sentinel-1B
+flew until 2021-12 (≈ 23 scenes/month), 2022–24 had S1A alone (≈ 12), S1C/S1D
+joined in 2025–26; the same four relative orbits (44, 95, 146, 168) cover every
+month. Within a single pass the drift is unchanged:
+
+| VH windthrow − canopy | 2018 | 2024 | slope 2018–24 | after storm |
+|---|---|---|---|---|
+| ascending only | +0.29 dB | −0.19 dB | −0.07 dB/yr | −0.57 dB |
+| descending only | +0.41 dB | −0.16 dB | −0.09 dB/yr | −0.56 dB |
+| both (as first reported) | | | −0.08 dB/yr | |
+
+Absolute levels: the windthrow stands fell from −14.96 to −15.43 dB VH between
+2018 and 2024 while the stem-free canopy stayed at −15.3; the same in VV. So
+the decline is in the stands that later fell, not in the reference, and not
+in the sensor. It starts in 2019, i.e. with the 2018–2020 drought years in
+Brandenburg. Interpretation stays open with one site: progressive crown loss
+before the storm, or a stand type whose backscatter behaves differently.
