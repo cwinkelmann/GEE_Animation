@@ -14,10 +14,15 @@ from rasterio.features import rasterize
 from scipy.stats import spearmanr
 
 import os
-R12 = next(p for p in ("/Volumes/storage/Datasets/Winmol/training_data/WINDWURF_Tegel/Revier_12",   # NAS, the reliable one
-                       "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel/Revier_12", os.path.expanduser("~/data/Winmol/training_data/WINDWURF_Tegel/Revier_12")) if os.path.isdir(p))
-STEMS = f"{R12}/predictions_cw_2026/R12_stems_tegel-unet_2026-08.gpkg"
-STREETS = f"{R12}/steet_mask.gpkg"
+# Site selection: WT_SITE=R12 (default) or R13, or explicit WT_STEMS / WT_STREETS paths.
+_SITE = os.environ.get("WT_SITE", "R12")
+_ROOTS = ("/Volumes/storage/Datasets/Winmol/training_data/WINDWURF_Tegel",   # NAS, the reliable one
+          "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel",
+          os.path.expanduser("~/data/Winmol/training_data/WINDWURF_Tegel"))
+_REV = {"R12": "Revier_12", "R13": "Revier_13"}[_SITE]
+R12 = next(f"{r}/{_REV}" for r in _ROOTS if os.path.isdir(f"{r}/{_REV}"))
+STEMS = os.environ.get("WT_STEMS", f"{R12}/predictions_cw_2026/{_SITE}_stems_tegel-unet_2026-08.gpkg")
+STREETS = os.environ.get("WT_STREETS", f"{R12}/steet_mask.gpkg")      # absent for R13: no street exclusion
 WT_MIN_M = 20.0          # ≥ 20 m of predicted stem per 20 m cell (~4 stems) = "windthrow cell"
 BINS = [0, 0.01, 10, 30, 60, 1e9]
 BIN_NAMES = ["none", "0-10 m", "10-30 m", "30-60 m", ">60 m"]
@@ -35,9 +40,12 @@ def stem_density(template):
     dens = np.zeros((template.height, template.width), "float32")
     ok = (rows >= 0) & (rows < template.height) & (cols >= 0) & (cols < template.width)
     np.add.at(dens, (np.asarray(rows)[ok], np.asarray(cols)[ok]), pts[ok, 2])
-    streets = gpd.read_file(STREETS).to_crs(template.crs)
-    street = rasterize([(geom, 1) for geom in streets.geometry], out_shape=dens.shape,
-                       transform=template.transform, fill=0, all_touched=True).astype(bool)
+    if os.path.exists(STREETS):
+        streets = gpd.read_file(STREETS).to_crs(template.crs)
+        street = rasterize([(geom, 1) for geom in streets.geometry], out_shape=dens.shape,
+                           transform=template.transform, fill=0, all_touched=True).astype(bool)
+    else:
+        street = np.zeros(dens.shape, bool)
     return dens, street
 
 def main():

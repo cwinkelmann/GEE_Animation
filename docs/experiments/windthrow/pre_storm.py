@@ -3,7 +3,7 @@ import glob, re, sys, numpy as np, rasterio
 from scipy import ndimage
 from scipy.stats import spearmanr, mannwhitneyu
 from sklearn.metrics import roc_auc_score
-sys.path.insert(0, "/private/tmp/claude-501/-Users-christian-work-hnee-GEE-animation/cb67f53d-9e2d-4a19-b00f-f9ebfe8add3b/scratchpad")
+sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
 from windthrow_vs_delta import stem_density
 PAT = sys.argv[1]
 def months(lo, hi, mm=(5, 6, 7, 8, 9)):

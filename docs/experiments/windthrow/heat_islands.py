@@ -12,7 +12,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy import ndimage
 from scipy.stats import spearmanr
-sys.path.insert(0, "/private/tmp/claude-501/-Users-christian-work-hnee-GEE-animation/cb67f53d-9e2d-4a19-b00f-f9ebfe8add3b/scratchpad")
+sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
 from windthrow_vs_delta import stem_density
 
 POST, PRE, OUT = sys.argv[1], sys.argv[2], sys.argv[3]

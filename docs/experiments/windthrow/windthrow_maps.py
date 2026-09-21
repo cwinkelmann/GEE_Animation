@@ -11,7 +11,7 @@ import numpy as np, rasterio, matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.stats import spearmanr, pearsonr
-sys.path.insert(0, "/private/tmp/claude-501/-Users-christian-work-hnee-GEE-animation/cb67f53d-9e2d-4a19-b00f-f9ebfe8add3b/scratchpad")
+sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
 from windthrow_vs_delta import stem_density
 
 def block(a, k, fn=np.nanmean):
