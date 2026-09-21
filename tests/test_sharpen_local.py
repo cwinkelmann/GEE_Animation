@@ -137,3 +137,23 @@ def test_apply_sets_an_earth_engine_deadline_so_a_dead_network_cannot_hang_the_r
     sharpen_local.apply([], cfg, types.SimpleNamespace(buffer=lambda m: types.SimpleNamespace(bounds=lambda: "B")),
                         "REGION", ee_module=ee, fetch=lambda url: b"")
     assert seen == [sharpen_local.EE_DEADLINE_MS]
+
+
+def test_download_key_ignores_region_only_and_relative(tmp_path, monkeypatch):
+    # region_only / relative are applied AFTER sharpening, on this machine; the
+    # exported inputs are identical either way, so flipping them must be a cache hit.
+    import gee_animation.cache as cache
+    monkeypatch.setenv(cache.ENV_CACHE_DIR, str(tmp_path))
+    fetched = []
+    fetch = lambda url: (fetched.append(url) or b"tif-bytes")
+    img = types.SimpleNamespace(getDownloadURL=lambda params: "http://x/tif")
+    base = dict(name="t", out_dir=str(tmp_path), sensor="landsat", index="lst_rf", sharpen="local",
+                start="2022-01-01", end="2022-02-01", viz_min=0.0, viz_max=1.0, palette=[], dimensions=64,
+                scale=20, frame_aoi={"bbox": [0, 0, 1, 1]}, region_aoi={"bbox": [0, 0, 1, 1]}, cache=True,
+                cache_dir=None, region_only=False, relative=None)
+    frame = Frame("2022-01", img)
+    params = {"crs": "EPSG:32633", "scale": 20, "format": "GEO_TIFF"}
+    sharpen_local._download(types.SimpleNamespace(**base), frame, img, params, "lst", fetch)
+    sharpen_local._download(types.SimpleNamespace(**{**base, "region_only": True, "relative": "region_mean"}),
+                            frame, img, params, "lst", fetch)
+    assert len(fetched) == 1, "same inputs: the second download must come from cache"

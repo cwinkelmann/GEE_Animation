@@ -15,6 +15,7 @@ train_frame_models.
 """
 from __future__ import annotations
 
+import copy
 import csv
 import io
 import logging
@@ -141,8 +142,14 @@ def train_frame_models(inputs: dict, factor: int = FACTOR,
 
 def _download(cfg, frame, image, params, marker: str, fetch) -> bytes:
     key_params = {**params, "local_input": marker}
+    # region_only / relative act after sharpening, locally: the exported inputs
+    # do not depend on them, so they must not be part of the download key.
+    key_cfg = copy.copy(cfg)
+    for neutral in ("region_only", "relative"):
+        if hasattr(key_cfg, neutral):
+            setattr(key_cfg, neutral, None)
     with cache.frame_identity(getattr(frame, "label", None), getattr(frame, "source", None)):
-        key = cache.thumb_key(cfg, key_params, False)
+        key = cache.thumb_key(key_cfg, key_params, False)
         data = cache.load(cfg, key)
         if data is None:
             data = fetch(image.getDownloadURL(params))
