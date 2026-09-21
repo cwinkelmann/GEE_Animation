@@ -125,3 +125,29 @@ deeper than Barnekow 3 at 231/ha). Eberswalde Campus at 69/ha is the one polygon
 that drops more than its density predicts (in-leaf beech, October). Kaufland's
 polygon was already 1 dB below its ring by 2019, two years before the flight
 date used as the storm date, so its damage predates the assumed storm.
+
+### Can blocks distinguish damaged parts *within* Tegel? (`scripts/sar_block_scale.py`, `sar_block_scale.png`)
+
+Per-block VH step (12 months after 2025-07 minus 12 before, intact median = 0)
+against tegel-unet stems/ha, for blocks of 20 to 500 m. "Damaged" = densest 10 %
+of blocks, "intact" = below-median density.
+
+| site | block | blocks | densest 10 % ≥ stems/ha | Spearman | AUC | top-10 % step | intact sd |
+|---|---|---|---|---|---|---|---|
+| R12 | 20 m | 12,487 | 50 | −0.33 | 0.79 | −0.56 dB | 0.28 |
+| R12 | 60 m | 1,380 | 44 | −0.43 | 0.91 | −0.55 | 0.12 |
+| R12 | 120 m | 358 | 35 | −0.54 | 0.97 | −0.44 | 0.07 |
+| R12 | 240 m | 89 | 30 | −0.77 | **1.00** | −0.36 | 0.04 |
+| R12 | 500 m | 19 | 25 | −0.84 | 1.00 | −0.18 | 0.03 |
+| R13 | 20 m | 25,835 | 75 | −0.23 | 0.69 | −0.30 | 0.28 |
+| R13 | 60 m | 2,886 | 61 | −0.32 | 0.74 | −0.22 | 0.15 |
+| R13 | 120 m | 718 | 54 | −0.35 | 0.72 | −0.12 | 0.10 |
+| R13 | 240 m | 180 | 47 | −0.32 | 0.68 | −0.07 | 0.06 |
+| R13 | 500 m | 38 | 40 | −0.33 | 0.72 | −0.05 | 0.04 |
+
+R12: yes. Aggregation shrinks the signal (dilution, −0.56 → −0.36 dB) but shrinks
+the noise between intact blocks faster (0.28 → 0.04 dB), so at 120–240 m the
+densest blocks separate completely from the intact half (AUC 0.97–1.00) and the
+240 m step map is a readable damage map. R13: no, at any scale. The damage is so
+diffuse that the densest 240 m blocks hold only ~50 stems/ha and their step (−0.07
+dB) is at the intact-block noise (0.06 dB); AUC stays ~0.7 from 20 to 500 m.
