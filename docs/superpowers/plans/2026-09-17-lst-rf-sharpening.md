@@ -440,6 +440,37 @@ rate). The thermal signal is a consequence of the throws, not a precursor;
 whatever weak pre-signal exists is the edge/thin-stand exposure that the
 temperature and the storm both respond to.
 
+### Revier 13 (Spandauer Forst) — the same analysis on the second footprint (2026-09-21)
+
+`docs/experiments/windthrow/r13/`, run with `WT_SITE=R13` on
+`r13_focus_lst_rf_delta_local_10yr` (107 months). 25,238 predicted stems over
+1,033 ha — three times R12's density — and **no street mask** exists for R13.
+
+Series (windthrow cells ≥ 20 m stem, n = 2,087, minus stem-free, n = 15,360):
+−0.1 to −0.6 K in every pre-storm month (the future windthrow stands were the
+*cooler*, denser ones), then +1.02 K (2025-08), +0.55 to +0.96 K (2026-04 → 08).
+Weaker than R12's +1.6 to +2.3 K, and 2025-07 (+0.13) and 2025-09 (−0.52) do
+not show it. 2025-10 is a 21-cell masked frame; ignore.
+
+| test | R12 | R13 |
+|---|---|---|
+| new post-storm heat islands: stem density vs base rate | 25.7 vs 3.3 m (8×), 59 % windthrow-dense | 30.4 vs 5.6 m (5×), 71 % windthrow-dense |
+| permutation p | < 0.002 | < 0.002 |
+| windthrow clusters that form a heat island | 45 % of 78 | **16 % of 264** |
+| cell-level Spearman(stem density, post−pre warming) | +0.24 | **+0.29** |
+| warming, windthrow-dense vs stem-free cells | +1.58 vs −0.11 K | +0.61 vs −0.14 K |
+| pre-storm AUC | 0.56 | 0.51 |
+
+Reading: the direction is the same and the new heat islands are again the
+windthrow clusters, but R13's damage is diffuse — 264 clusters spread over the
+whole footprint, most of them small — so the footprint mean itself contains a
+lot of windthrow and the *relative* signal per cluster is diluted (+0.6 K, not
++1.6 K). The cell-level warming test, which does not depend on the footprint
+mean, is actually stronger in R13. The 100 m comparison against "stem-free"
+cells is uninformative here (almost no 100 m cell is stem-free; the few that
+are sit on clearings). Edge exposure runs the other way in R13: windthrow
+rate 4 % within 100 m of the edge vs 10 % beyond 200 m.
+
 ## Open questions for Christian
 
 - **Q1 — branch base.** The worktree branches from committed HEAD, so it lacks

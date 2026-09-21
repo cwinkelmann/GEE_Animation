@@ -14,7 +14,7 @@ a1.axhline(0, color="#888", lw=1)
 a1.plot(x, diff, color="#c44", lw=1.5, marker="o", ms=4, label="windthrow cells (≥20 m stem) minus stem-free canopy")
 a1.scatter(x[summer], diff[summer], s=40, color="#c44", zorder=3)
 a1.scatter(x[~summer], diff[~summer], s=40, facecolor="white", edgecolor="#c44", zorder=3, label="open marker = Oct–Apr")
-a1.set_ylabel("Δ temperature, K"); a1.set_title("Predicted windthrow cells vs stem-free canopy, R12, RF-sharpened LST departure from footprint mean", loc="left", fontsize=11)
+a1.set_ylabel("Δ temperature, K"); import os; a1.set_title(f"Predicted windthrow cells vs stem-free canopy, {os.environ.get('WT_SITE', 'R12')}, RF-sharpened LST departure from footprint mean", loc="left", fontsize=11)
 a1.legend(loc="upper left", frameon=False); a1.grid(alpha=0.25)
 for k, y in enumerate(range(x.min().astype(int), int(x.max()) + 1)):
     a1.axvline(y, color="#ddd", lw=0.8, zorder=0)
