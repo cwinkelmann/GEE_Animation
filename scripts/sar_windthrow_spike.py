@@ -12,10 +12,16 @@ for windthrow-dense cells.
 """
 import glob, os, re, sys, urllib.request, warnings
 import numpy as np
-FRAME = [13.2162, 52.5680, 13.2862, 52.6102]     # r12 zoom frame (footprint + 0.4 km)
+SITES = {   # zoom frames (footprint + 0.4 km), footprint geometry, and whether a stem map exists
+    "R12": dict(frame=[13.2162, 52.5680, 13.2862, 52.6102], footprint="docs/aoi/r12/r12_footprint.geojson", stems=True, start="2017-01"),
+    "R13": dict(frame=[13.1330, 52.5582, 13.2168, 52.6024], footprint="docs/aoi/r13/r13_footprint.geojson", stems=True, start="2017-01"),
+    "WNE": dict(frame=[13.8634, 52.9713, 13.9299, 53.0008], footprint="docs/aoi/wne/wne.shp", stems=False, start="2018-01"),
+}
+SITE = os.environ.get("WT_SITE", "R12"); CFG = SITES[SITE]
+FRAME = CFG["frame"]
 CRS, SCALE = "EPSG:32633", 20
-START, END = "2017-01", "2026-09"
-OUT = "out/sar"
+START, END = CFG["start"], "2026-09"
+OUT = f"out/sar_{SITE.lower()}"
 FILL = -9999.0
 
 def months():
@@ -58,10 +64,17 @@ def analyse(out_png):
     from windthrow_vs_delta import stem_density, WT_MIN_M
     files = sorted(glob.glob(f"{OUT}/*.tif"))
     with rasterio.open(files[0]) as t:
-        dens, street = stem_density(t)
-        fp = gpd.read_file("docs/aoi/r12/r12_footprint.geojson").to_crs(t.crs)
+        fp = gpd.read_file(CFG["footprint"]).to_crs(t.crs)
         inside = geometry_mask(list(fp.geometry), out_shape=(t.height, t.width), transform=t.transform, invert=True)
-    core = inside & ~street; wt, ctl = core & (dens >= WT_MIN_M), core & (dens == 0)
+        if CFG["stems"]:
+            dens, street = stem_density(t)
+        else:
+            dens, street = np.zeros((t.height, t.width), "float32"), np.zeros((t.height, t.width), bool)
+    core = inside & ~street
+    if CFG["stems"]:
+        wt, ctl = core & (dens >= WT_MIN_M), core & (dens == 0)
+    else:
+        wt, ctl = core, None          # control site: footprint-wide mean, no split
     bands = ["VV", "VH", "VH − VV"]; labs, vals = [], {b: [] for b in bands}; stack = {}
     for f in files:
         lab = re.search(r"(\d{4}-\d{2})\.tif$", f).group(1)
@@ -70,7 +83,8 @@ def analyse(out_png):
         stack[lab] = a; labs.append(lab)
         for i, b in enumerate(bands):
             with warnings.catch_warnings():
-                warnings.simplefilter("ignore"); vals[b].append(float(np.nanmean(a[i][wt]) - np.nanmean(a[i][ctl])))
+                warnings.simplefilter("ignore")
+                vals[b].append(float(np.nanmean(a[i][wt]) - np.nanmean(a[i][ctl])) if ctl is not None else float(np.nanmean(a[i][wt])))
     x = np.array([int(l[:4]) + (int(l[5:7]) - 0.5) / 12 for l in labs])
     summer = np.array([int(l[5:7]) in (5, 6, 7, 8, 9) for l in labs])
     pre_keys = [l for l in labs if "2022-04" <= l <= "2024-09" and int(l[5:7]) in (4,5,6,7,8,9)]
@@ -82,22 +96,23 @@ def analyse(out_png):
         ax.plot(x, y, color="#357", lw=1.2); ax.scatter(x[summer], y[summer], s=18, color="#357", zorder=3)
         ax.scatter(x[~summer], y[~summer], s=18, facecolor="white", edgecolor="#357", zorder=3)
         pre = y[(x < 2025.5)]; post = y[x >= 2025.5]
-        ax.set_title(f"{b}: windthrow − canopy, dB · before {pre.mean():+.2f} → after {post.mean():+.2f}", loc="left", fontsize=10); ax.grid(alpha=0.25)
+        ax.set_title(f"{b}: {'windthrow − canopy' if CFG['stems'] else 'footprint mean'}, dB · before {pre.mean():+.2f} → after {post.mean():+.2f}", loc="left", fontsize=10); ax.grid(alpha=0.25)
         for s in ("top", "right"): ax.spines[s].set_visible(False)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             chg = np.nanmean(np.stack([stack[k][i] for k in post_keys]), 0) - np.nanmean(np.stack([stack[k][i] for k in pre_keys]), 0)
         ok = core & np.isfinite(chg)
-        auc = roc_auc_score((dens[ok] >= WT_MIN_M).astype(int), chg[ok])
-        auc = max(auc, 1 - auc)
+        auc = float("nan")
+        if CFG["stems"]:
+            auc = roc_auc_score((dens[ok] >= WT_MIN_M).astype(int), chg[ok]); auc = max(auc, 1 - auc)
         ax2 = axes[1, i]; lim = 2.0
         im = ax2.imshow(np.where(inside, chg, np.nan), cmap="RdBu_r", vmin=-lim, vmax=lim, interpolation="nearest")
-        ax2.set_title(f"{b}: post − pre change · AUC for windthrow {auc:.2f} · wt {chg[ok & (dens >= WT_MIN_M)].mean():+.2f} vs canopy {chg[ok & (dens == 0)].mean():+.2f} dB", loc="left", fontsize=9)
+        ax2.set_title(f"{b}: post − pre change" + (f" · AUC for windthrow {auc:.2f} · wt {chg[ok & (dens >= WT_MIN_M)].mean():+.2f} vs canopy {chg[ok & (dens == 0)].mean():+.2f} dB" if CFG["stems"] else f" · footprint mean {chg[ok].mean():+.2f} dB"), loc="left", fontsize=9)
         ax2.set_xticks([]); ax2.set_yticks([])
         for s in ax2.spines.values(): s.set_visible(False)
         fig.colorbar(im, ax=ax2, fraction=0.046, pad=0.02).set_label("dB")
-        print(f"{b:8s} months {len(labs)} | windthrow−canopy before {pre.mean():+.2f} after {post.mean():+.2f} dB | post−pre change: windthrow-dense {chg[ok & (dens >= WT_MIN_M)].mean():+.2f} vs stem-free {chg[ok & (dens == 0)].mean():+.2f} dB | AUC {auc:.3f}")
-    fig.suptitle("R12 · Sentinel-1 GRD monthly median (IW, both orbits) vs predicted windthrow", x=0.01, ha="left", fontsize=12)
+        print(f"{b:8s} months {len(labs)} | before {pre.mean():+.2f} after {post.mean():+.2f} dB | post−pre change " + (f"windthrow-dense {chg[ok & (dens >= WT_MIN_M)].mean():+.2f} vs stem-free {chg[ok & (dens == 0)].mean():+.2f} dB | AUC {auc:.3f}" if CFG["stems"] else f"footprint mean {chg[ok].mean():+.2f} dB"))
+    fig.suptitle(f"{SITE} · Sentinel-1 GRD monthly median (IW, both orbits)" + (" vs predicted windthrow" if CFG["stems"] else " · footprint-wide (control, no stem map)"), x=0.01, ha="left", fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.97)); fig.savefig(out_png, dpi=110); print("wrote", out_png)
 
 if __name__ == "__main__":
