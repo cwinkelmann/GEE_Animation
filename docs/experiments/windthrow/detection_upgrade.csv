@@ -1,0 +1,23 @@
+site,features,n_features,auc
+R12,temperature,1,0.8243517403774654
+R12,NDVI,1,0.9236904677596403
+R12,radar VH (12-month means),1,0.8924386530222018
+R12,radar VH change-point t at storm,1,0.934549945115258
+R12,three sensors,3,0.9348773060444036
+R12,"+ NDMI, NDRE, EVI",6,0.9601538543252719
+R12,+ change-point,7,0.9635498034772139
+R12,+ 3x3 texture,12,0.9688923904960873
+R12,"break within ±2 mo of storm, windthrow cells",0,0.33064516129032256
+R12,"break within ±2 mo of storm, canopy cells",0,0.028210757409440176
+R13,temperature,1,0.7275943558087765
+R13,NDVI,1,0.6974836319327982
+R13,radar VH (12-month means),1,0.719366789450567
+R13,radar VH change-point t at storm,1,0.8378452049393068
+R13,three sensors,3,0.7390727631867912
+R13,"+ NDMI, NDRE, EVI",6,0.8488002365836129
+R13,+ change-point,7,0.8812623220631688
+R13,+ 3x3 texture,12,0.9028225011479796
+R13,"break within ±2 mo of storm, windthrow cells",0,0.19357930043124102
+R13,"break within ±2 mo of storm, canopy cells",0,0.03697916666666667
+R13,"three sensors, trained on R12",3,0.7264133094503673
+R12,"three sensors, trained on R13",3,0.9234499486562091

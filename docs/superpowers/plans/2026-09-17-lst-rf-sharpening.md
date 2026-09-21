@@ -537,3 +537,24 @@ including winter. The SAR spike on `spike/sar-windthrow` adds VH backscatter:
   invented. Out of scope until the RF result is known.
 - Per-scene (rather than per-month) training.
 - Any change to `lst_sharp`.
+
+## Detection upgrade and ALS fusion (2026-09-21 evening, `detection_upgrade.py`, `als_fusion.py`)
+
+Asked to "try" the improvement ideas. Same cells/split as everything else,
+5-fold CV on 500 m blocks, logistic regression (class-balanced) unless noted.
+
+Detection AUC R12 / R13: temperature 0.82/0.73 · NDVI 0.92/0.70 · VH 12-month
+means 0.89/0.72 · **VH change-point t at storm month 0.93/0.84** · three sensors
+0.93/0.74 · +NDMI/NDRE/EVI 0.96/0.85 · +change-point 0.96/0.88 · +3×3 texture
+**0.97/0.90**. Transfer: train R13→test R12 0.92, train R12→test R13 0.73.
+Unsupervised break month within ±2 mo of 2025-07: 33 % of R12 windthrow cells,
+19 % R13, vs 3–4 % of canopy. Capture: top 10 % of R12 by fused score holds 65 %
+of predicted stem (25 % → 85 %); R13 42 % / 69 %.
+
+ALS 2017 crown segmentation (`WINDWURF_Tegel/ALS segmentation 2017.gpkg`,
+538k crowns, R13 only, no species) rasterised to the grid. Detection at R13:
+0.92 → 0.94 (logit) / 0.96 (GBT). **Prediction** (pre-storm only, R13): single
+ALS features 0.52–0.61, edge distance 0.53, VH loss 0.68, NDVI level 0.63; ALS
+8 features GBT 0.66; satellite-only GBT 0.72; **ALS + edge + satellite GBT
+0.77**. Radar-seen condition beats 2017 structure as a predictor; 0.77 ranks
+stands, does not map damage. Results in `detection_upgrade.csv`, `als_fusion.csv`.

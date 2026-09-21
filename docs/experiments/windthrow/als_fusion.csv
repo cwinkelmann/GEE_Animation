@@ -1,0 +1,22 @@
+site,kind,features,model,n_features,auc
+R13,predict,als_n,single,1,0.6100509264356534
+R13,predict,als_h_mean,single,1,0.541334133842592
+R13,predict,als_h_max,single,1,0.5284330981286033
+R13,predict,als_h_sd,single,1,0.5522747079054474
+R13,predict,als_crown_ratio,single,1,0.5671575978004204
+R13,predict,als_dbh,single,1,0.5233727045230188
+R13,predict,als_cover,single,1,0.5673227325233126
+R13,predict,als_slender,single,1,0.5174476523437375
+R13,predict,edge_dist_m,single,1,0.533145629859018
+R13,predict,vh_loss,single,1,0.6759410210836021
+R13,predict,vh_2022_24,single,1,0.6757596341453277
+R13,predict,ndvi_pre,single,1,0.6334093466524593
+R13,predict,ALS structure 2017 (8 features),logit,8,0.626726225324582
+R13,predict,ALS structure 2017 (8 features),gbt,8,0.6627083417803573
+R13,predict,ALS + edge distance,gbt,9,0.6484910971619526
+R13,predict,radar loss + NDVI level (satellite only),gbt,3,0.7178499710157517
+R13,predict,ALS + edge + satellite pre-storm,logit,12,0.72634896356501
+R13,predict,ALS + edge + satellite pre-storm,gbt,12,0.7653942663609169
+R13,detect,all change features (as before),logit,12,0.924084884065551
+R13,detect,all change features + ALS structure,logit,20,0.9407436762680843
+R13,detect,all change features + ALS structure,gbt,20,0.9581149533783656
