@@ -21,7 +21,7 @@ SITES = {   # polygon file stem -> (label, storm date)
     "2022_Zeynep_BB_Eberswalde_UAV_AOE": ("Eberswalde survey polygon (Zeynep)", "2022-02-18"),
     "20220212_Barnekow_3_AOE": ("Barnekow 3 (Zeynep)", "2022-02-18"),
     "20220212_Barnekow_5_AOE": ("Barnekow 5 (Zeynep)", "2022-02-18"),
-    "20220212_Barnekow_6_AOE": ("Barnekow 6 (Zeynep)", "2022-02-18"),
+    "20220212_Barnekow_6_AOI": ("Barnekow 6 (Zeynep)", "2022-02-18"),
     "2022_Zeynep_MV_Barnekow_AOE": ("Barnekow survey polygon (Zeynep)", "2022-02-18"),
     "2022_Zeynep_MV_Bremerhagen_AOE": ("Bremerhagen survey polygon (Zeynep)", "2022-02-18"),
     "20220209_Bremerhagen_3_AOE": ("Bremerhagen 3 (Zeynep)", "2022-02-18"),
@@ -34,7 +34,8 @@ def fetch(out_csv):
     from gee_animation import auth
     auth.init("hnee-331218"); ee.data.setDeadline(120_000)
     polys = {}
-    for stem in SITES:
+    only = os.environ.get("MS_ONLY")            # MS_ONLY=a,b fetches a subset (appended by hand)
+    for stem in [k for k in SITES if not only or k in only.split(",")]:
         f = f"{GIS}/{stem}.shp"
         if not os.path.exists(f): print("missing", stem); continue
         g = gpd.read_file(f).to_crs(4326); geom = g.geometry.union_all()

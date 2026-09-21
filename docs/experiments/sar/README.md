@@ -100,3 +100,28 @@ its ring includes damage), so the drop is entirely in the damaged part; and the
 Barnekow/Bremerhagen conifer polygons sit 0.5–1 dB *below* their ring for years
 before Zeynep — a stand-type offset, not a precursor, which is why their pre-storm
 slope is flat.
+
+### Does the step scale with how much fell? (`scripts/sar_step_vs_density.py`, `sar_step_vs_density.png`)
+
+Why do some polygons drop and others not? Test: VH step of each polygon against
+its annotated fallen-stem density (WINMOL stem outlines / polygon area; Tegel as
+whole footprints vs their stem-free cells, with the tegel-unet stems). Barnekow 6
+was fetched for this (`MS_ONLY=` subset fetch, appended to the CSV).
+
+| polygon | ha | stems/ha | step, dB |
+|---|---|---|---|
+| Tegel R12 / R13 footprint | 515 / 1033 | 16 / 24 | −0.10 / −0.07 |
+| Bachsee, Campus Oberheide | 3.2, 11.2 | 43, 44 | −0.34, −0.09 |
+| Eberswalde Campus | 11.9 | 69 | −1.00 |
+| Barnekow 3 / 5 / 6 | 1.6 / 2.8 / 1.0 | 231 / 364 / 717 | −0.97 / −1.13 / −0.84 |
+| Bremerhagen 3 | 0.26 | 616 | −1.59 |
+| Kaufland (date uncertain, excluded) | 0.54 | 232 | +0.01 |
+
+Spearman r = −0.73 (p = 0.025), Pearson r on log density = −0.86 (p = 0.003),
+n = 9 dated storms. So the on/off pattern is mostly damage fraction: below ~50
+stems/ha the polygon mean drops by 0.1–0.3 dB, which is inside the noise; above
+~200 stems/ha it drops by about 1 dB and saturates (Barnekow 6 at 717/ha is not
+deeper than Barnekow 3 at 231/ha). Eberswalde Campus at 69/ha is the one polygon
+that drops more than its density predicts (in-leaf beech, October). Kaufland's
+polygon was already 1 dB below its ring by 2019, two years before the flight
+date used as the storm date, so its damage predates the assumed storm.
