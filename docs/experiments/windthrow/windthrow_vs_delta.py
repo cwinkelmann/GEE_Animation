@@ -19,8 +19,8 @@ _SITE = os.environ.get("WT_SITE", "R12")
 _ROOTS = ("/Volumes/storage/Datasets/Winmol/training_data/WINDWURF_Tegel",   # NAS, the reliable one
           "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel",
           os.path.expanduser("~/data/Winmol/training_data/WINDWURF_Tegel"))
-_REV = {"R12": "Revier_12", "R13": "Revier_13"}[_SITE]
-R12 = next(f"{r}/{_REV}" for r in _ROOTS if os.path.isdir(f"{r}/{_REV}"))
+_REV = {"R12": "Revier_12", "R13": "Revier_13"}.get(_SITE)     # a site without a stem map (WNE) has no Revier folder
+R12 = next((f"{r}/{_REV}" for r in _ROOTS if _REV and os.path.isdir(f"{r}/{_REV}")), "")
 STEMS = os.environ.get("WT_STEMS", f"{R12}/predictions_cw_2026/{_SITE}_stems_tegel-unet_2026-08.gpkg")
 STREETS = os.environ.get("WT_STREETS", f"{R12}/steet_mask.gpkg")      # absent for R13: no street exclusion
 WT_MIN_M = 20.0          # ≥ 20 m of predicted stem per 20 m cell (~4 stems) = "windthrow cell"
