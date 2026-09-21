@@ -89,3 +89,14 @@ sites show −0.14 to −0.24 dB/yr but with under two years of Sentinel-1 befor
 storm that number is not trustworthy. So: VH backscatter is a robust windthrow
 *detector* across storms and species; the R12/R13 pre-storm decline stays a Tegel
 observation, not a general precursor.
+
+### Damaged vs intact, absolute VH (`scripts/sar_damaged_vs_intact.py`, `sar_damaged_vs_intact.png`)
+
+Same data as the two analyses above, but the two parts of each site plotted as
+separate absolute series (dB) instead of their difference: Tegel windthrow cells vs
+stem-free cells, corpus polygons vs their ring. What the difference plots hide: the
+intact part is flat across every storm (−0.05 to +0.05 dB, Bachsee −0.32 because
+its ring includes damage), so the drop is entirely in the damaged part; and the
+Barnekow/Bremerhagen conifer polygons sit 0.5–1 dB *below* their ring for years
+before Zeynep — a stand-type offset, not a precursor, which is why their pre-storm
+slope is flat.
