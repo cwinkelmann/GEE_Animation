@@ -471,6 +471,27 @@ cells is uninformative here (almost no 100 m cell is stem-free; the few that
 are sit on clearings). Edge exposure runs the other way in R13: windthrow
 rate 4 % within 100 m of the edge vs 10 % beyond 200 m.
 
+### Control: Grumsin vs Tegel R12 / R13 (2026-09-21)
+
+`docs/experiments/windthrow/site_comparison.py` on the three footprint-only
+delta runs (Grumsin `wne_focus_lst_rf_delta_2018_2026`, 95 months; R12/R13
+107 months). Site-neutral metrics, summers only; "pre" = 2022–24, "post" =
+2025-07 onward.
+
+| site | heat-island share of footprint, pre → post | spatial sd, pre → post | cells warmed ≥ 1 K |
+|---|---|---|---|
+| Grumsin (control, no known windthrow) | 4.5 % → 4.9 % | 1.07 → 1.23 K | **1.5 %** |
+| Tegel R12 | 1.9 % → **3.5 %** | 1.26 → 1.75 K | **7.5 %** |
+| Tegel R13 | 5.8 % → 6.1 % | 1.78 → 1.86 K | **4.7 %** |
+
+Grumsin's 1.5 % of cells warming by ≥ 1 K is the background one gets from
+different summers and forest randomness alone; R12 shows five times that, R13
+three times. R12's heat-island share nearly doubles after the storm; R13's
+barely moves because it was already the hottest, most heterogeneous footprint
+(diffuse damage, no street mask), which is the same dilution seen in its
+cluster statistics. The control holds: the 2025 step is a Tegel signal, not a
+weather or method artefact.
+
 ## Open questions for Christian
 
 - **Q1 — branch base.** The worktree branches from committed HEAD, so it lacks
