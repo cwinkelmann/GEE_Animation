@@ -94,7 +94,7 @@ def main(out_png, out_csv):
         ax.scatter(r["stems_ha"][ok] + 1, r["step"][ok], s=14, color="#357", alpha=0.7); ax.set_xscale("log"); ax.axhline(0, color="#888", lw=1)
         ax.axvline(r["dense_cut"] + 1, color="#c44", lw=0.8, ls="--")
         ax.set_xlabel("stems / ha + 1 (log)"); ax.set_ylabel("VH step, dB"); ax.grid(alpha=0.25)
-        ax.set_title(f"{site}: {r['n']} blocks · Spearman {r['spearman']:+.2f} · AUC densest 10 % (≥ {r['dense_cut']:.0f}/ha) vs below-median {r['auc']:.2f}", loc="left", fontsize=10)
+        ax.set_title(f"{site}: {r['n']} blocks · Spearman {r['spearman']:+.2f}\nAUC densest 10 % (≥ {r['dense_cut']:.0f} stems/ha, red line) vs below-median half: {r['auc']:.2f}", loc="left", fontsize=9.5)
         for sp in ("top", "right"): ax.spines[sp].set_visible(False)
     fig.suptitle("Sentinel-1 VH step (12 months after 2025-07 minus 12 before) vs windthrow density, Tegel footprints in 240 m blocks", x=0.01, ha="left", fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.97)); fig.savefig(out_png, dpi=110); print("wrote", out_png)
