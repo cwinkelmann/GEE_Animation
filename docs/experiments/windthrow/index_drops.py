@@ -16,10 +16,12 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from windthrow_vs_delta import stem_density, WT_MIN_M
 ROOT, LST_GLOB, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
-FOOTPRINT = os.environ.get("WT_FOOTPRINT", "docs/aoi/r12/r12_footprint.geojson")
-INDICES = [("lst_rf Δ", LST_GLOB, "K", "#c44"), ("ndvi", f"{ROOT}/r12_data_ndvi/*.tif", "", "#2a8"),
-           ("ndmi", f"{ROOT}/r12_data_ndmi/*.tif", "", "#27a"), ("ndre", f"{ROOT}/r12_data_ndre/*.tif", "", "#a5a"),
-           ("evi", f"{ROOT}/r12_data_evi/*.tif", "", "#c93")]
+SITE = os.environ.get("WT_SITE", "R12")
+FOOTPRINT = os.environ.get("WT_FOOTPRINT", {"R12": "docs/aoi/r12/r12_footprint.geojson", "R13": "docs/aoi/r13/r13_footprint.geojson"}.get(SITE, "docs/aoi/wne/wne.shp"))
+PREFIX = os.environ.get("WT_PREFIX", f"{SITE.lower()}_data_")
+INDICES = [("lst_rf Δ", LST_GLOB, "K", "#c44"), ("ndvi", f"{ROOT}/{PREFIX}ndvi/*.tif", "", "#2a8"),
+           ("ndmi", f"{ROOT}/{PREFIX}ndmi/*.tif", "", "#27a"), ("ndre", f"{ROOT}/{PREFIX}ndre/*.tif", "", "#a5a"),
+           ("evi", f"{ROOT}/{PREFIX}evi/*.tif", "", "#c93")]
 def series(pattern):
     files = sorted(glob.glob(pattern))
     if not files: return [], [], []
@@ -57,6 +59,6 @@ for ax, (name, pat, unit, col) in zip(axes, INDICES):
     ax.text(0.995, 0.92, f"summer mean before {pre.mean():+.3f} → after {post.mean():+.3f}   (n months {len(pre)} / {len(post)})",
             transform=ax.transAxes, ha="right", va="top", fontsize=9, color="#333")
     print(f"{name:8s} months {len(labs):3d} | summer windthrow−canopy before {pre.mean():+.3f} after {post.mean():+.3f} | change {post.mean()-pre.mean():+.3f} | spread of pre-storm summers sd {pre.std():.3f}")
-axes[0].set_title("R12: windthrow cells (≥ 20 m predicted stem) minus stem-free canopy, per observed month · filled = May–Sep", loc="left", fontsize=11)
+axes[0].set_title(f"{SITE}: windthrow cells (≥ 20 m predicted stem) minus stem-free canopy, per observed month · filled = May–Sep", loc="left", fontsize=11)
 axes[-1].set_xlabel("year")
 fig.tight_layout(); fig.savefig(OUT, dpi=110); print("wrote", OUT)
