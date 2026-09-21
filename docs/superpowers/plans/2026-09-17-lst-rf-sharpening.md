@@ -492,6 +492,28 @@ barely moves because it was already the hottest, most heterogeneous footprint
 cluster statistics. The control holds: the 2025 step is a Tegel signal, not a
 weather or method artefact.
 
+### Do the vegetation indices show the same drop? — yes, more sharply (2026-09-21)
+
+`docs/experiments/windthrow/index_drops.py` on data-only, non-gap-filled runs
+(`config/r12_data_<index>.yaml`; NDRE's run failed, see below). Windthrow cells
+minus stem-free canopy, summer means before (2017–2025-05, 40 months) → after
+(2025-07 onward, 7 months):
+
+| product | before → after | change | sd of the pre-storm summers |
+|---|---|---|---|
+| lst_rf Δ | −0.01 → +1.80 K | +1.81 K | 0.16 K (≈ 11 σ) |
+| NDVI | +0.016 → −0.182 | −0.20 | 0.009 (≈ 22 σ) |
+| NDMI | −0.009 → −0.179 | −0.17 | 0.015 (≈ 11 σ) |
+| EVI | +0.040 → −0.175 | −0.22 | 0.021 (≈ 10 σ) |
+
+The optical drops are cleaner than the thermal step: they show a seasonal
+cycle before the storm (windthrow stands slightly greener in summer, less so
+in winter) and then a flat −0.2 that does not recover through 2026. The thermal
+signal needs a clear summer pass; the NDVI drop is visible in every month
+including winter. The SAR spike on `spike/sar-windthrow` adds VH backscatter:
+−1 dB at windthrow, AUC 0.88, independent of cloud (see that branch's
+`docs/experiments/sar/README.md`).
+
 ## Open questions for Christian
 
 - **Q1 — branch base.** The worktree branches from committed HEAD, so it lacks
