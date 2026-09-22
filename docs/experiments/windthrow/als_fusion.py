@@ -84,7 +84,7 @@ def main():
     print("PREDICTION (pre-storm information only):")
     als_cols = ["als_n", "als_h_mean", "als_h_max", "als_h_sd", "als_crown_ratio", "als_dbh", "als_cover", "als_slender"]
     for c in als_cols + ["edge_dist_m", "vh_loss", "vh_2022_24", "ndvi_pre"]: run(c, [c], "predict")
-    run("ALS structure 2017 (8 features)", als_cols, "predict"); run("ALS structure 2017 (8 features)", als_cols, "predict", "gbt")
+    run("ALS structure 2021 (8 features)", als_cols, "predict"); run("ALS structure 2021 (8 features)", als_cols, "predict", "gbt")
     run("ALS + edge distance", als_cols + ["edge_dist_m"], "predict", "gbt")
     run("radar loss + NDVI level (satellite only)", ["vh_loss", "vh_2022_24", "ndvi_pre"], "predict", "gbt")
     allpre = als_cols + ["edge_dist_m", "vh_loss", "vh_2022_24", "ndvi_pre"]
@@ -109,10 +109,10 @@ def main():
             s = (v >= a) & (v <= b); r = y[s].mean(); n = s.sum(); rates.append(r); mids.append((a + b) / 2); e = 1.96 * np.sqrt(r * (1 - r) / max(n, 1)); lo.append(r - e); hi.append(r + e)
         ax.plot(mids, rates, marker="o", color="#c8502a"); ax.fill_between(mids, lo, hi, color="#c8502a", alpha=0.15); ax.axhline(y.mean(), color="#888", lw=1, ls="--")
         ax.set_xlabel(xlabel); ax.set_ylabel("share of cells that became windthrow"); ax.grid(alpha=0.25); [ax.spines[s].set_visible(False) for s in ("top", "right")]
-    rate_by("als_h_mean", 10, fig.add_subplot(gs[1, 0]), "mean tree height in the cell, 2017 ALS (m), deciles")
+    rate_by("als_h_mean", 10, fig.add_subplot(gs[1, 0]), "mean tree height in the cell, 2021 ALS (m), deciles")
     rate_by("edge_dist_m", 10, fig.add_subplot(gs[1, 1]), "distance to nearest crown-free cell (m), deciles")
     rate_by("vh_loss", 10, fig.add_subplot(gs[1, 2]), "VH change 2017–18 → 2022–24 summers (dB), deciles")
-    fig.suptitle("Fusing the 2017 ALS crown segmentation: what pre-storm stand structure says about where trees fell (R13)", x=0.01, ha="left", fontsize=13)
+    fig.suptitle("Fusing the 2021 ALS crown segmentation (file named 2017): what pre-storm stand structure says about where trees fell (R13)", x=0.01, ha="left", fontsize=13)
     fig.tight_layout(rect=(0, 0, 1, 0.96)); fig.savefig(f"{OUT}/als_fusion.png", dpi=110); print("wrote", f"{OUT}/als_fusion.png")
 
 if __name__ == "__main__":

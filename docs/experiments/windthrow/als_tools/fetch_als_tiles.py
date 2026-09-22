@@ -3,7 +3,7 @@ import os, sqlite3, struct, sys, time, zipfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from remote_zip import RemoteFile
 GPKG = "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel/ALS segmentation 2017.gpkg"
-DEST = "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel/ALS_2017_tiles"; os.makedirs(DEST, exist_ok=True)
+DEST = "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel/ALS_2021_tiles"; os.makedirs(DEST, exist_ok=True)
 tiles = sorted(r[0] for r in sqlite3.connect(GPKG).execute('select distinct layer from "ALS Kronenerfassung"'))
 print(len(tiles), "tiles referenced by the crown file", flush=True)
 zips = {"Nordwest": "https://gdi.berlin.de/data/a_als/atom/Nordwest.zip", "West": "https://gdi.berlin.de/data/a_als/atom/West.zip"}

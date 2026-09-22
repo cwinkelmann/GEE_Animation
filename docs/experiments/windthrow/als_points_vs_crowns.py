@@ -3,7 +3,7 @@
 import sys, numpy as np, laspy, geopandas as gpd, pyogrio
 from scipy.spatial import cKDTree
 import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
-TILE = "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel/ALS_2017_tiles/3dm_33_375_5827_1_be.las"
+TILE = "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel/ALS_2021_tiles/3dm_33_375_5827_1_be.las"
 ALS = "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel/ALS segmentation 2017.gpkg"
 cx, cy, W = 375500, 5827300, 120; OUT = sys.argv[1]
 las = laspy.read(TILE); x, y, z, c = las.x, las.y, las.z, np.asarray(las.classification)
@@ -35,5 +35,5 @@ ax.scatter(x[top][assigned[top] >= 0], y[top][assigned[top] >= 0], s=0.8, c=cols
 ax.axhspan(cy - 10, cy + 10, color="#c44", alpha=0.08); ax.set_aspect("equal"); ax.set_xlim(cx - W/2, cx + W/2); ax.set_ylim(cy - W/2, cy + W/2)
 ax.set_title(f"Plan view: vegetation points (> 2 m) coloured by crown, crown outlines in black; red band = the strip above · {len(crowns)} crowns, {len(veg):,} points", loc="left", fontsize=10)
 for a_ in axes: [a_.spines[s].set_visible(False) for s in ("top", "right")]
-fig.suptitle("Berlin ALS 2017 point cloud (tile 3dm_33_375_5827) against the crown segmentation", x=0.01, ha="left", fontsize=13)
+fig.suptitle("Berlin ALS 2021 point cloud (tile 3dm_33_375_5827) against the crown segmentation", x=0.01, ha="left", fontsize=13)
 fig.tight_layout(rect=(0, 0, 1, 0.97)); fig.savefig(OUT, dpi=110); print("wrote", OUT)

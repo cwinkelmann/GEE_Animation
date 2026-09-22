@@ -1,9 +1,12 @@
-# Berlin ALS point cloud tiles, Spandau block (2026-09-22)
+# Berlin ALS point cloud tiles (flight 24/25 Feb and 2 Mar 2021), Spandau block (fetched 2026-09-22)
 
 20 tiles, LAS 1.4 point format 6, ~9.8 pts/m², classified (2 ground, 3/4/5 low/medium/high
 vegetation, 7 low points, 0 default), ETRS89 / UTM 33N (EPSG:25833), 1 km × 1 km each.
 These are exactly the tiles referenced in the `layer` column of
-`../ALS segmentation 2017.gpkg` (the crown segmentation), so they are its input.
+`../ALS segmentation 2017.gpkg` (the crown segmentation), so they are its input. NOTE: the crown file is named "2017" but Berlin's only published ALS is the
+Feb/Mar 2021 flight (metadata lineage; LAS headers created 2021-07-01 by TerraScan), and the crown
+heights match the 2021 point maxima to 0.00 m median for canopy trees — the crowns were segmented
+from THIS 2021 scan (leaf-off). Treat "2017" in the crown file name as a misnomer.
 
 Source: Senatsverwaltung für Stadtentwicklung, Bauen und Wohnen Berlin,
 "Airborne Laserscanning (ALS) Primäre 3D Laserscan-Daten", INSPIRE ATOM download
