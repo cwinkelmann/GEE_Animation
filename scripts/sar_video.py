@@ -32,7 +32,7 @@ delta = MODE == "delta"
 cfg = types.SimpleNamespace(
     name=f"{SITE.lower()}_sar_vh_{MODE}", out_dir="out", project="hnee-331218",
     sensor="landsat", index="s1_vh", title=TITLES[SITE],
-    subtitle="Sentinel-1 VH backscatter" + (" · Δ vs footprint mean" if delta else ""),
+    subtitle=("VH · Δ vs footprint mean" if delta else "Sentinel-1 VH backscatter"),   # short: line 2 is shared with the caveats
     credit="Contains modified Copernicus Sentinel-1 data 2017–2026",
     frame_aoi={"bbox": FRAME}, region_aoi=region_aoi, region_max_cloud_percent=100,
     start=frames[0].label + "-01", end=frames[-1].label + "-01", cadence="monthly", max_cloud_percent=100,
