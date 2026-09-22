@@ -27,6 +27,8 @@ def grid_tile(path):
         filled = griddata(pts, vals, (rr[~have], cc[~have]), method="linear")
         dtm[~have] = filled; still = ~np.isfinite(dtm)
         if still.any(): dtm[still] = NearestNDInterpolator(pts, vals)(rr[still], cc[still])
+    cover = binary_dilation(np.isfinite(dsm), iterations=15)            # only fill holes within 15 m of any return; no extrapolation past the scan edge
+    dtm[~cover] = np.nan
     chm = np.clip(dsm - dtm, 0, None); chm[~np.isfinite(dsm)] = np.nan
     tr = from_origin(x0, y0 + 1000, RES, RES)
     return dict(dtm=dtm.astype("float32"), dsm=dsm.astype("float32"), chm=chm.astype("float32")), tr, int(g.sum()), int(len(z))
