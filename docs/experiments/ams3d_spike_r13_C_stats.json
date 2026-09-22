@@ -1,0 +1,30 @@
+{
+ "veg_points": 263724,
+ "iterations": 40,
+ "mean_shift_s": 295.3,
+ "clusters_total": 477,
+ "trees_in_patch": 339,
+ "trees_per_ha": 339.0,
+ "height_mean": 24.046309669615944,
+ "diam_mean": 7.900794093040142,
+ "n_ref": 407,
+ "n_ams3d": 339,
+ "n_matched": 213,
+ "recall": 0.5233415233415234,
+ "precision": 0.6283185840707964,
+ "ref_height_mean": 22.8309828009828,
+ "ams3d_height_mean": 24.046309669615944,
+ "ref_diam_mean": 5.781913932207054,
+ "ams3d_diam_mean": 7.900794093040142,
+ "matched_height_rmse": 0.7601463191144802,
+ "params": {
+  "HMIN": 2.0,
+  "A_S": 0.12,
+  "S_MIN": 1.0,
+  "A_R": 0.27,
+  "R_MIN": 1.5,
+  "MERGE_XY": 1.5,
+  "MERGE_Z": 6.0,
+  "MIN_PTS": 50
+ }
+}

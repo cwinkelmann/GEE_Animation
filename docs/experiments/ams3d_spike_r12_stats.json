@@ -1,0 +1,20 @@
+{
+ "veg_points": 172379,
+ "iterations": 40,
+ "mean_shift_s": 114.5,
+ "clusters_total": 931,
+ "trees_in_patch": 658,
+ "trees_per_ha": 658.0,
+ "height_mean": 18.65521032826744,
+ "diam_mean": 5.398971439417245,
+ "params": {
+  "HMIN": 2.0,
+  "A_S": 0.12,
+  "S_MIN": 1.0,
+  "A_R": 0.27,
+  "R_MIN": 1.5,
+  "MERGE_XY": 1.0,
+  "MERGE_Z": 2.0,
+  "MIN_PTS": 20
+ }
+}
