@@ -13,7 +13,8 @@ tile_dir, out = sys.argv[1], sys.argv[2]; os.makedirs(out, exist_ok=True)
 
 def grid_tile(path):
     las = laspy.read(path); x, y, z, c = np.asarray(las.x), np.asarray(las.y), np.asarray(las.z), np.asarray(las.classification)
-    keep = (c != 7) & (c != 18); x, y, z, c = x[keep], y[keep], z[keep], c[keep]
+    keep = ~np.isin(c, (7, 9, 18, 20))         # drop noise, water and LGB's synthetic water/wet-surface class 20
+    x, y, z, c = x[keep], y[keep], z[keep], c[keep]
     x0, y0 = np.floor(x.min() / 1000) * 1000, np.floor(y.min() / 1000) * 1000          # snap to the 1 km tile origin
     n = int(1000 / RES); col = ((x - x0) / RES).astype(int); row = ((y0 + 1000 - y) / RES).astype(int)
     ok = (col >= 0) & (col < n) & (row >= 0) & (row < n); col, row, z, c = col[ok], row[ok], z[ok], c[ok]
