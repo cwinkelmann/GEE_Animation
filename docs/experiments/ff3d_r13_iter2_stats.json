@@ -1,0 +1,17 @@
+{
+ "pred_points": 289274,
+ "tree_points": 68408,
+ "instances": 139,
+ "semantic_classes": {
+  "0": 99674,
+  "1": 15503,
+  "2": 174097
+ },
+ "veg_points_above_2m": 187493,
+ "frac_veg_above_2m_in_instances": 0.36108548052460626,
+ "trees_in_patch": 139,
+ "trees_per_ha": 139.0,
+ "height_mean": 24.524481532371492,
+ "diam_mean": 6.018311169147624,
+ "reference": "skipped, /Volumes/2TB/winmol/training_data/WINDWURF_Tegel/ALS segmentation 2017.gpkg not mounted"
+}

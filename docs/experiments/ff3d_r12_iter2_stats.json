@@ -1,0 +1,16 @@
+{
+ "pred_points": 192814,
+ "tree_points": 37965,
+ "instances": 155,
+ "semantic_classes": {
+  "0": 68141,
+  "1": 6514,
+  "2": 118159
+ },
+ "veg_points_above_2m": 121308,
+ "frac_veg_above_2m_in_instances": 0.2963365977511788,
+ "trees_in_patch": 155,
+ "trees_per_ha": 155.0,
+ "height_mean": 18.811437458063168,
+ "diam_mean": 5.183784680208684
+}

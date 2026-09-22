@@ -1,0 +1,16 @@
+{
+ "gt_trees": 20,
+ "pred_instances": 49,
+ "pred_mostly_outside_plot": 29,
+ "precision_inside_plot": 1.0,
+ "matched_iou50": 20,
+ "detection_rate": 1.0,
+ "precision": 0.40816326530612246,
+ "mean_best_iou": 0.9899759901606912,
+ "median_best_iou": 0.9955801338474796,
+ "semantic_classes": {
+  "0": 1324354,
+  "1": 215546,
+  "2": 2406198
+ }
+}

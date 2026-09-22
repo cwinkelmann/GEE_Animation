@@ -4,7 +4,7 @@
 on the Berlin 2021 ALS point clouds, first on FOR-instance plots to prove the
 installation, then on Tegel patches.
 
-**Status: blocked on hardware.** Everything that does not need a GPU is staged
+**Status (later the same day): running on carrot, see `2026-09-22-forestformer3d-results.md`.** Original note: everything that does not need a GPU is staged
 (see below). The model cannot run on this Mac (Apple M2, 24 GB, no NVIDIA):
 
 - The official environment is a Docker image `FROM pytorch/pytorch:1.13.1-cuda11.6`

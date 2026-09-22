@@ -1,0 +1,26 @@
+{
+ "pred_points": 289274,
+ "tree_points": 60469,
+ "instances": 106,
+ "semantic_classes": {
+  "0": 99674,
+  "1": 15519,
+  "2": 174081
+ },
+ "veg_points_above_2m": 187493,
+ "frac_veg_above_2m_in_instances": 0.319846607606684,
+ "trees_in_patch": 106,
+ "trees_per_ha": 106.0,
+ "height_mean": 26.836858660374563,
+ "diam_mean": 6.631008592830619,
+ "n_ref": 407,
+ "n_ams3d": 106,
+ "n_matched": 84,
+ "recall": 0.20638820638820637,
+ "precision": 0.7924528301886793,
+ "ref_height_mean": 22.8309828009828,
+ "ams3d_height_mean": 26.836858660374563,
+ "ref_diam_mean": 5.781913932207054,
+ "ams3d_diam_mean": 6.631008592830619,
+ "matched_height_rmse": 0.619345630002207
+}
