@@ -538,7 +538,7 @@ including winter. The SAR spike on `spike/sar-windthrow` adds VH backscatter:
 - Per-scene (rather than per-month) training.
 - Any change to `lst_sharp`.
 
-## Detection upgrade and ALS fusion (2026-09-21 evening, `detection_upgrade.py`, `als_fusion.py`)
+## Detection upgrade (2026-09-21 evening, `detection_upgrade.py`)
 
 Asked to "try" the improvement ideas. Same cells/split as everything else,
 5-fold CV on 500 m blocks, logistic regression (class-balanced) unless noted.
@@ -551,23 +551,7 @@ Unsupervised break month within ±2 mo of 2025-07: 33 % of R12 windthrow cells,
 19 % R13, vs 3–4 % of canopy. Capture: top 10 % of R12 by fused score holds 65 %
 of predicted stem (25 % → 85 %); R13 42 % / 69 %.
 
-ALS 2017 crown segmentation (`WINDWURF_Tegel/ALS segmentation 2017.gpkg`,
-538k crowns, R13 only, no species) rasterised to the grid. Detection at R13:
-0.92 → 0.94 (logit) / 0.96 (GBT). **Prediction** (pre-storm only, R13): single
-ALS features 0.52–0.61, edge distance 0.53, VH loss 0.68, NDVI level 0.63; ALS
-8 features GBT 0.66; satellite-only GBT 0.72; **ALS + edge + satellite GBT
-0.77**. Radar-seen condition beats 2017 structure as a predictor; 0.77 ranks
-stands, does not map damage. Results in `detection_upgrade.csv`, `als_fusion.csv`.
-
-### Correction (2026-09-22): the crown file is from the 2021 Berlin ALS, not 2017
-
-Berlin publishes exactly one ALS point cloud (flights 24/25 Feb + 2 Mar 2021, LAS 1.4,
-9.8 pts/m², TerraScan headers dated 2021-07-01). The 20 tiles named in the crown file
-were fetched from it (`als_tools/`, HTTP range into the regional zips; now at
-`WINDWURF_Tegel/ALS_2021_tiles/`, 13.8 GB). Canopy TreeH equals the max 2021 point
-height inside each polygon to 0.00 m median (56 % of all crowns within 0.3 m; the
-rest are understorey crowns overtopped by canopy points), so the segmentation was run
-on this scan. "2017" in the file name is a misnomer; report and figures now say 2021.
-Point-vs-crown check: 95 % of vegetation points > 2 m fall inside a crown polygon, 88 %
-inside a crown's 3-D box; understorey boxes hold their own point clusters — a 3-D
-clustering segmentation, consistent with adaptive mean shift.
+The ALS crown-segmentation fusion (`als_fusion.py`, prediction AUC 0.77 at R13 with
+2021 crown structure + satellite pre-storm features), the Berlin/Brandenburg point-cloud
+tiles, the 1 m DTM/DSM/CHM builder and the AMS3D diagnostics live on branch
+`als-ams3d-spike` (moved there 2026-09-22).
