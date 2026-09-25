@@ -14,13 +14,19 @@ from rasterio.features import rasterize
 from scipy.stats import spearmanr
 
 import os
-# Site selection: WT_SITE=R12 (default) or R13, or explicit WT_STEMS / WT_STREETS paths.
+# Site selection: WT_SITE=R12 (default), R13, or WNE (no stem map). The WINMOL data root
+# (the folder holding Revier_12/ and Revier_13/) comes from WT_DATA_ROOT; without it the
+# three locations used on the HNEE Mac are tried. WT_STEMS / WT_STREETS override the files.
 _SITE = os.environ.get("WT_SITE", "R12")
-_ROOTS = ("/Volumes/storage/Datasets/Winmol/training_data/WINDWURF_Tegel",   # NAS, the reliable one
-          "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel",
-          os.path.expanduser("~/data/Winmol/training_data/WINDWURF_Tegel"))
+_ROOTS = tuple(r for r in (os.environ.get("WT_DATA_ROOT"),
+                           "/Volumes/storage/Datasets/Winmol/training_data/WINDWURF_Tegel",   # NAS
+                           "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel",              # external mirror
+                           os.path.expanduser("~/data/Winmol/training_data/WINDWURF_Tegel")) if r)
 _REV = {"R12": "Revier_12", "R13": "Revier_13"}.get(_SITE)     # a site without a stem map (WNE) has no Revier folder
 R12 = next((f"{r}/{_REV}" for r in _ROOTS if _REV and os.path.isdir(f"{r}/{_REV}")), "")
+if _REV and not R12 and not os.environ.get("WT_STEMS"):
+    raise SystemExit(f"windthrow_vs_delta: no {_REV}/ under WT_DATA_ROOT or the default roots {_ROOTS}; "
+                     "set WT_DATA_ROOT to the WINDWURF_Tegel folder (or WT_STEMS / WT_STREETS)")
 STEMS = os.environ.get("WT_STEMS", f"{R12}/predictions_cw_2026/{_SITE}_stems_tegel-unet_2026-08.gpkg")
 STREETS = os.environ.get("WT_STREETS", f"{R12}/steet_mask.gpkg")      # absent for R13: no street exclusion
 WT_MIN_M = 20.0          # ≥ 20 m of predicted stem per 20 m cell (~4 stems) = "windthrow cell"
