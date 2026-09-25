@@ -222,7 +222,7 @@ See `config/example.yaml` (Sentinel-2 NDVI) or `config/lst.example.yaml` (Landsa
 - **`pool_years`** / **`pool_strategy`** (optional): cross-year pooling `[firstYear, lastYear]`. `gap_fill` keeps the requested year wherever it has data and borrows another year's same calendar period only for empty ones (every borrowed frame is labelled "image from <year>"); `least_cloudy` re-picks every frame from the clearest pooled year (cosmetic, not a time series); `median` blends all pooled years.
 - **`sensor`**: `sentinel2`, `landsat` (Collection-2 L2, missions 4/5/7/8/9 harmonized — ~1984→present), or `modis` (MOD09A1, 8-day 500 m).
 - **`index`**: `ndvi`, `evi`, `ndwi` (McFeeters, open water), `ndmi` (moisture) — all sensors; `ndre` (red-edge/chlorophyll, Sentinel-2 only, uses the 20 m B5 band); or `lst` (USGS C2 L2 ST), `lst_smw` (Ermida et al. 2020 Statistical Mono-Window), or `lst_sharp` (Landsat only). `lst_sharp` is an NDVI-sharpened LST (an approximation — **not** the real ECOSTRESS mission; that product exists in EE as `NASA/ECOSTRESS/L2T_LSTE/V2` but is LA-only for now and its ISS orbit barely reaches this AOI's latitude).
-- **`sharpen: local`** (optional; `index: lst_rf` only): train the sharpening forest on your machine instead of in Earth Engine. EE then only exports two cached 20 m GeoTIFFs per month (the LST composite and the Sentinel-2 predictors); one scikit-learn forest per calendar month is trained across all years, leave-one-year-out scored (`<out_dir>/<name>_models.csv`) and saved with joblib under `<out_dir>/models/<name>/`. Needs the `ml` extra (`pip install -e ".[ml]"`). Not combinable with `metadata`.
+- **`sharpen: local`** (optional; `index: lst_rf` only): train the sharpening forest on your machine instead of in Earth Engine. EE then only exports two cached 20 m GeoTIFFs per frame (the LST composite and the Sentinel-2 predictors); **one scikit-learn forest per frame** is trained on that frame's own 100 m cells, scored out-of-bag (`<out_dir>/<name>_models.csv`: cells, OOB R², RMSE) and saved with joblib under `<out_dir>/models/<name>/<label>.joblib`. Pooling frames across years was tried and rejected: the index→temperature relation does not transfer between dates and the pooled field carried three times the high-frequency noise. Needs the `ml` extra (`pip install -e ".[ml]"`). Not combinable with `metadata` or `anomaly`.
 - **`region_only`** (optional, default false): mask imagery outside `aoi.region` (rendered as the no-data grey), so the colour range can be spent on the subject alone. **`relative: region_mean`** (optional): each frame becomes value − its own region mean, in the index's units (K for a thermal index); defaults to a symmetric ±4 diverging `viz`. Absolute levels differ between years, the within-region contrast stays comparable. Both change the pixels (not cache hits).
 - **`missions`** (optional; Landsat only): whitelist of missions, e.g. `[L8, L9]`. Thermal indices (`lst`, `lst_smw`, `lst_sharp`) default to **L8/L9** — Landsat 7's SLC-off gaps and the coarse TM/ETM+ thermal band otherwise stripe a few-scene median. Reflectance indices default to all missions (4/5/7/8/9).
 - **`min_scenes`** (default `1`): minimum scenes per monthly median; months with fewer are skipped. Every frame is annotated with its scene count (`n=<count>`) — a median of 1–2 scenes says more about that morning's weather than the land, so raise this to reject thin composites.
@@ -277,6 +277,17 @@ costs: [`docs/rendering-products.md`](docs/rendering-products.md).
   texture — the conservation is unit-tested in `imaging.distrad_sharpen`). NIRv is the
   predictor because NDVI saturates in a closed canopy. It is **not** the real ECOSTRESS
   mission (`NASA/ECOSTRESS/L2T_LSTE/V2` is in EE but LA-only and edge-of-coverage here).
+- `lst_rf` (experimental) sharpens the same 100 m LST to the Sentinel-2 **20 m** grid with a
+  random forest `LST₁₀₀ₘ ~ NDVI, NIRv, NDBI, MNDWI, DEM` (Sentinel-2 SR median over the
+  frame's month ± 30 days, Copernicus DEM), applied at 20 m with the coarse residual added
+  back so every 100 m cell still averages to the observed temperature. Honest resolution is
+  20 m because NDBI and MNDWI need the 20 m SWIR band. A pre-registered degrade-and-recover
+  test (300 m → 100 m) showed it does **not** beat "no sharpening" on measured data — the
+  Landsat thermal field has almost no variance below ~300 m — so treat the 20 m detail as
+  index texture carrying the observed coarse temperature, and use only the within-frame
+  contrast quantitatively (`region_only` + `relative: region_mean`). `sharpen: local`
+  moves the training off Earth Engine; see the decision log in
+  `docs/superpowers/plans/2026-09-17-lst-rf-sharpening.md`.
 - **MODIS is being decommissioned.** Terra & Aqua begin shutting down in late
   2026 / early 2027 (exact dates vary by NASA source — treat as imminent), and both
   platforms are already drifting from their designed orbits, shifting equatorial

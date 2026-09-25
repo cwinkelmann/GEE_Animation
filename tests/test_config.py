@@ -867,6 +867,15 @@ def test_smooth_harmonic_refuses_lst_rf(tmp_path):
         RunConfig.from_yaml(_write(tmp_path, body))
 
 
+def test_sharpen_local_refuses_anomaly(tmp_path):
+    # anomaly runs before sharpen_local in cli.run and rebuilds each frame with only
+    # its timestamp, dropping the s2_start/s2_end window the local sharpener needs;
+    # without this guard EE fails at export time with an opaque ee.Date(null) error.
+    body = _base("index: lst_rf\nsharpen: local\nanomaly: climatology\n")
+    with pytest.raises(ConfigError, match="anomaly"):
+        RunConfig.from_yaml(_write(tmp_path, body))
+
+
 def test_region_only_defaults_off_and_parses_a_boolean(tmp_path):
     assert RunConfig.from_yaml(_write(tmp_path, _base("index: lst\n"))).region_only is False
     assert RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nregion_only: true\n"))).region_only is True

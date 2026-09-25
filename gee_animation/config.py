@@ -455,6 +455,12 @@ class RunConfig:
                 raise ConfigError(
                     "sharpen: local cannot be combined with metadata: true — the frames "
                     "no longer live in Earth Engine, where the stats are computed")
+            if self.anomaly:
+                raise ConfigError(
+                    "sharpen: local cannot be combined with anomaly — the anomaly step "
+                    "runs first and rebuilds each frame without the Sentinel-2 window the "
+                    "local sharpener needs (and a sharpened z-score is not a temperature). "
+                    "Use relative: region_mean for a within-frame departure instead")
         if self.relative is not None:
             from .focus import RELATIVE_MODES
             if self.relative not in RELATIVE_MODES:

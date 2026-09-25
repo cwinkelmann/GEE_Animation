@@ -157,6 +157,19 @@ Four different things, all reported in °C:
 - **`lst_sharp`** — TsHARP: fit LST against NIRv at 100 m, apply the fit at
   30 m, add the coarse residual. An **approximation** that sharpens an existing
   retrieval; it invents no new thermal information and is not ECOSTRESS.
+- **`lst_rf`** (experimental) — the same idea with a random forest on five
+  Sentinel-2/DEM predictors, applied at 20 m, mean-conserving residual. Trained
+  per frame in Earth Engine by default, or on your machine with `sharpen: local`
+  (EE exports the two 20 m GeoTIFFs per frame; scikit-learn fits one forest per
+  frame, out-of-bag scored, models saved under `<out_dir>/models/<name>/`).
+  Validation against degraded real data showed no gain over the coarse field,
+  so the 20 m detail is a visualisation. Two knobs make the *within-frame*
+  contrast usable: `region_only: true` masks everything outside `aoi.region`
+  so the colour range is spent on the subject, and `relative: region_mean`
+  renders each frame as value − its own region mean (K), with a symmetric
+  diverging default `viz`, so years with different absolute temperatures stay
+  comparable. Both change what EE computes (cache misses). `sharpen: local` is
+  refused with `metadata` and with `anomaly`.
 - **`lst_modis`** — MOD11A1 daily `LST_Day_1km × 0.02 − 273.15`. Coarse, but its
   daily revisit fills months Landsat's 16-day repeat misses entirely.
 
