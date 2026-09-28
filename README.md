@@ -155,6 +155,18 @@ previews each month with a **ZIP of the single PNGs** to download, and a **regio
 time-series chart** (the index averaged over the AOI, one point per month) is
 shown alongside it.
 
+Two accordions expose the thermal work: **Thermal sharpening & region focus**
+(train the `lst_rf` forest locally, show the region only, render each frame
+relative to its own region mean, draw the pixel grid, choose the upscaling filter)
+and **Seasonal model & anomaly** (harmonic smoothing with its number of harmonics,
+the anomaly mode and its baseline years). They map one-to-one onto the config keys
+`sharpen`, `region_only`, `relative`, `render.pixel_grid`, `render.upscale`,
+`smooth`/`harmonics` and `anomaly`/`baseline_years`, run through the same steps
+in the same order as the CLI, and the combinations the config refuses are
+reported as messages, not tracebacks. Locally sharpened runs skip the
+inside/outside chart (their frames are local rasters, not Earth Engine images)
+and report where the per-frame models and their out-of-bag scores were written.
+
 ## Docker
 
 Run the GUI in a container. Earth Engine auth is **not** interactive here, so use a

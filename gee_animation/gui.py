@@ -15,7 +15,8 @@ import types
 import zipfile
 from pathlib import Path
 
-from . import anomaly, auth, aoi, charts, collection, compositing, inventory, render
+from . import (anomaly, auth, aoi, charts, collection, compositing, focus, inventory,
+               render, sharpen_local, smoothing)
 from .compositing import period_starts
 from .config import POOL_STRATEGIES, SUPPORTED_CADENCES, ConfigError, RunConfig
 from .products import INDICES, SENSORS, get_product
@@ -28,10 +29,22 @@ DEFAULT_DEPS = types.SimpleNamespace(
     build=collection.build,
     monthly_median=compositing.monthly_median,
     anomaly=anomaly.apply,
+    smooth=smoothing.apply,
+    sharpen_local=sharpen_local.apply,
+    focus=focus.apply,
     render=render.render,
     timeseries=charts.inside_outside_timeseries,
     inventory=inventory.write_inventory,
 )
+
+# Choices for the pipeline knobs that arrived with the thermal work. "none" is the
+# GUI spelling of the config's null (a Dropdown cannot hold None).
+NONE_CHOICE = "none"
+SMOOTH_CHOICES = [NONE_CHOICE, "harmonic"]
+ANOMALY_CHOICES = [NONE_CHOICE, "climatology", "reference"]
+RELATIVE_CHOICES = [NONE_CHOICE, "region_mean"]
+UPSCALE_CHOICES = ["lanczos", "bicubic", "bilinear", "nearest"]
+DEFAULT_UPSCALE = "lanczos"
 
 # Cadence choices, monthly first (the default).
 CADENCES = ["monthly"] + sorted(SUPPORTED_CADENCES - {"monthly"})
@@ -296,22 +309,23 @@ def _blank(value) -> bool:
         return False
 
 
-def _pool_years(first, last) -> list | None:
-    """``[firstYear, lastYear]`` from the two GUI year boxes, or ``None`` when off.
+def _pool_years(first, last, what: str = "cross-year pooling") -> list | None:
+    """``[firstYear, lastYear]`` from two GUI year boxes, or ``None`` when off.
 
-    Both boxes empty => pooling off. Exactly one filled is a user mistake, not a
-    half-open range, so it is refused rather than guessed at.
+    Both boxes empty => off. Exactly one filled is a user mistake, not a half-open
+    range, so it is refused rather than guessed at. ``what`` names the feature in
+    the error (the same helper serves the anomaly baseline years).
     """
     if _blank(first) and _blank(last):
         return None
     if _blank(first) or _blank(last):
         raise ValueError(
-            "cross-year pooling needs both a first and a last year "
-            "(or leave both empty to switch pooling off)")
+            f"{what} needs both a first and a last year "
+            f"(or leave both empty to switch it off)")
     try:
         return [int(first), int(last)]
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"pooling years must be whole years: {exc}") from exc
+        raise ValueError(f"{what} years must be whole years: {exc}") from exc
 
 
 def _preset_value(preset):
@@ -399,7 +413,10 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
              crs_custom=None, interpolate=0, interpolate_mode="auto",
              raw_frames=False, geotiffs=False, min_scenes=1,
              fit_frame=False, viz_min=None, viz_max=None, missions=None,
-             write_metadata=False, deps):
+             write_metadata=False, sharpen_local=False, region_only=False,
+             relative=NONE_CHOICE, pixel_grid=False, upscale=DEFAULT_UPSCALE,
+             smooth=NONE_CHOICE, harmonics=2, anomaly_mode=NONE_CHOICE,
+             baseline_start_year=None, baseline_end_year=None, deps):
     """Authenticate, resolve the AOIs and build a validated RunConfig.
 
     Returns ``(cfg, frame_geom, region_geom, warnings)``. Shared by
@@ -448,7 +465,10 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
         max_cloud_percent=float(max_cloud_percent),
         region_max_cloud_percent=float(region_max_cloud_percent),
         viz_min=viz_min, viz_max=viz_max, palette=palette,
-        fps=float(fps), scale=_SCALE.get(sensor, 30), dimensions=int(dimensions),
+        # lst_rf is predicted on the Sentinel-2 20 m grid; every other product keeps
+        # the sensor's fetch scale (render caps it to the native GSD anyway).
+        fps=float(fps), scale=(20 if index == "lst_rf" else _SCALE.get(sensor, 30)),
+        dimensions=int(dimensions),
         # `dimensions` is the *fetch* size (capped to the product's native GSD by
         # render._cap_dimensions); `preset` is the output size it is upscaled to.
         # Without a preset a 100 m LST over a ~9 km AOI renders at ~91 px.
@@ -475,6 +495,19 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
         title=_text_value(title), subtitle=_text_value(subtitle),
         credit=_credit_value(credit, omit_credit),
         quality=_quality_value(quality),
+        # The thermal-work knobs. "none" in a dropdown is the config's None; the
+        # combinations validate() refuses (smooth + lst_rf, sharpen: local + anomaly
+        # or metadata, pixel_grid without a preset) surface through _validate below.
+        sharpen=("local" if sharpen_local else None),
+        region_only=bool(region_only),
+        relative=(None if _blank(relative) or relative == NONE_CHOICE else str(relative)),
+        pixel_grid=bool(pixel_grid),
+        upscale=str(upscale or DEFAULT_UPSCALE),
+        smooth=(None if _blank(smooth) or smooth == NONE_CHOICE else str(smooth)),
+        harmonics=max(1, int(harmonics or 2)),
+        anomaly=(None if _blank(anomaly_mode) or anomaly_mode == NONE_CHOICE else str(anomaly_mode)),
+        baseline_years=_pool_years(baseline_start_year, baseline_end_year,
+                                   what="the anomaly baseline"),
     )
     return cfg, frame_geom, region_geom, _validate(cfg)
 
@@ -490,7 +523,10 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
                   crs_custom=None, interpolate=0, interpolate_mode="auto",
                   raw_frames=False, geotiffs=False, min_scenes=1,
                   fit_frame=False, viz_min=None, viz_max=None, missions=None,
-                  write_metadata=False, deps=DEFAULT_DEPS):
+                  write_metadata=False, sharpen_local=False, region_only=False,
+                  relative=NONE_CHOICE, pixel_grid=False, upscale=DEFAULT_UPSCALE,
+                  smooth=NONE_CHOICE, harmonics=2, anomaly_mode=NONE_CHOICE,
+                  baseline_start_year=None, baseline_end_year=None, deps=DEFAULT_DEPS):
     """Write the per-scene usable/rejected inventory CSV. Returns ``(csv_path, status)``.
 
     Mirrors ``cli.run(..., inventory=True)``, including its refusal to combine the
@@ -520,7 +556,11 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
         interpolate_mode=interpolate_mode, raw_frames=raw_frames,
         geotiffs=geotiffs, min_scenes=min_scenes, fit_frame=fit_frame,
         viz_min=viz_min, viz_max=viz_max, missions=missions,
-        write_metadata=write_metadata, deps=deps)
+        write_metadata=write_metadata, sharpen_local=sharpen_local,
+        region_only=region_only, relative=relative, pixel_grid=pixel_grid,
+        upscale=upscale, smooth=smooth, harmonics=harmonics, anomaly_mode=anomaly_mode,
+        baseline_start_year=baseline_start_year, baseline_end_year=baseline_end_year,
+        deps=deps)
     path = deps.inventory(cfg, frame_geom, region_geom)
     status = (f"Wrote the scene inventory for {sensor} {index.upper()} "
               f"({cfg.start} → {cfg.end}, {cfg.cadence}) — one row per candidate scene "
@@ -544,7 +584,10 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
                   crs_custom=None, interpolate=0, interpolate_mode="auto",
                   raw_frames=False, geotiffs=False, min_scenes=1,
                   fit_frame=False, viz_min=None, viz_max=None, missions=None,
-                  write_metadata=False, deps=DEFAULT_DEPS):
+                  write_metadata=False, sharpen_local=False, region_only=False,
+                  relative=NONE_CHOICE, pixel_grid=False, upscale=DEFAULT_UPSCALE,
+                  smooth=NONE_CHOICE, harmonics=2, anomaly_mode=NONE_CHOICE,
+                  baseline_start_year=None, baseline_end_year=None, deps=DEFAULT_DEPS):
     """Build one animation from GUI inputs.
 
     Returns ``(mp4_path, gif_path, frame_pngs, frames_zip, status, series)`` where
@@ -569,7 +612,11 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
         interpolate_mode=interpolate_mode, raw_frames=raw_frames,
         geotiffs=geotiffs, min_scenes=min_scenes, fit_frame=fit_frame,
         viz_min=viz_min, viz_max=viz_max, missions=missions,
-        write_metadata=write_metadata, deps=deps)
+        write_metadata=write_metadata, sharpen_local=sharpen_local,
+        region_only=region_only, relative=relative, pixel_grid=pixel_grid,
+        upscale=upscale, smooth=smooth, harmonics=harmonics, anomaly_mode=anomaly_mode,
+        baseline_start_year=baseline_start_year, baseline_end_year=baseline_end_year,
+        deps=deps)
     out_dir = cfg.out_dir
 
     coll = deps.build(cfg, frame_geom, region_geom)
@@ -579,15 +626,22 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
             "No imagery found for that AOI, date range and cloud filter — "
             "try a wider date range or a higher cloud threshold."
         )
+    # Same steps, same order as cli.run: each is a no-op unless its config field is set.
     frames = deps.anomaly(frames, cfg, frame_geom, region_geom, deps.build)
+    frames = deps.smooth(frames, coll, cfg)
+    frames = deps.sharpen_local(frames, cfg, frame_geom, region_geom)
+    frames = deps.focus(frames, cfg, region_geom)
     paths = deps.render(frames, cfg, geometry=frame_geom)
     mp4 = next((str(p) for p in paths if str(p).endswith(".mp4")), None)
     gif = next((str(p) for p in paths if str(p).endswith(".gif")), None)
     frame_pngs = [str(p) for p in paths if str(p).endswith(".png")]
     frames_zip = _zip_frames(frame_pngs, out_dir, cfg.name) if frame_pngs else None
     # [(month, inside, outside)] — index mean inside the AOI vs the surrounding frame.
-    # Composites (rgb/cir) have no single INDEX band to reduce, so skip the chart.
-    series = [] if composite else deps.timeseries(frames, region_geom, frame_geom, cfg.scale)
+    # Composites (rgb/cir) have no single INDEX band to reduce, and locally sharpened
+    # frames are numpy rasters rather than EE images, so both skip the chart.
+    local = cfg.sharpen == "local"
+    series = ([] if (composite or local)
+              else deps.timeseries(frames, region_geom, frame_geom, cfg.scale))
     n_periods = len(period_starts(cfg.start, cfg.end, cfg.cadence))
     dropped = n_periods - len(frames)
     status = (f"Rendered {len(frames)} of {n_periods} {cfg.cadence} periods as "
@@ -604,6 +658,11 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
     if cfg.pool_years:
         status += (f"\n\nPooled over {cfg.pool_years[0]}–{cfg.pool_years[1]} "
                    f"({cfg.pool_strategy}). {POOL_WARNING}")
+    if local:
+        status += ("\n\nSharpening forest trained locally, one per frame; the models and "
+                   f"their out-of-bag scores are under {out_dir}/models/{cfg.name}/ and "
+                   f"{cfg.name}_models.csv. The inside/outside chart is skipped for "
+                   "locally sharpened frames.")
     return mp4, gif, frame_pngs, frames_zip, _with_warnings(status, warnings), series
 
 
@@ -770,6 +829,64 @@ def build_app():
                             info="Suppresses the attribution line entirely. For "
                                  "Sentinel-2 this is a licence-relevant choice — "
                                  "the Copernicus notice normally appears here.")
+                with gr.Accordion("🌡️ Thermal sharpening & region focus", open=False):
+                    gr.Markdown(
+                        "For `lst_rf` (Landsat thermal sharpened to the Sentinel-2 20 m "
+                        "grid with a random forest). The 20 m detail is a visualisation "
+                        "of index texture carrying the observed 100 m temperature — a "
+                        "degrade-and-recover test showed no gain over the coarse field — "
+                        "so use the *within-region contrast*, which the two focus knobs "
+                        "expose. The grid overlay works for any product.")
+                    sharpen_local = gr.Checkbox(
+                        value=False, label="Train the sharpening forest locally (lst_rf)",
+                        info="Earth Engine only exports two 20 m GeoTIFFs per frame; "
+                             "scikit-learn fits one forest per frame here, scored "
+                             "out-of-bag, and saves it with joblib. Needs the `ml` "
+                             "extra. Cannot be combined with an anomaly or with "
+                             "per-frame statistics.")
+                    with gr.Row():
+                        region_only = gr.Checkbox(
+                            value=False, label="Show the region only",
+                            info="Masks everything outside the AOI to the no-data "
+                                 "grey, so the colour range is spent on the subject.")
+                        relative = gr.Dropdown(
+                            RELATIVE_CHOICES, value=NONE_CHOICE, label="Relative to",
+                            info="region_mean: each frame becomes value − its own "
+                                 "region mean (K for thermal products), with a "
+                                 "symmetric diverging scale — years with different "
+                                 "absolute levels stay comparable.")
+                    with gr.Row():
+                        pixel_grid = gr.Checkbox(
+                            value=False, label="Draw the pixel grid",
+                            info="Traces the fetched raster's cell edges (e.g. the "
+                                 "100 m thermal cells) over the imagery. Needs an "
+                                 "output size; pair it with 'nearest' upscaling so "
+                                 "the mesh sits on flat blocks.")
+                        upscale = gr.Dropdown(
+                            UPSCALE_CHOICES, value=DEFAULT_UPSCALE, label="Upscaling filter",
+                            info="How the fetched frame is enlarged to the output "
+                                 "size: lanczos is smooth, nearest keeps cells as "
+                                 "flat blocks.")
+                with gr.Accordion("📈 Seasonal model & anomaly", open=False):
+                    with gr.Row():
+                        smooth = gr.Dropdown(
+                            SMOOTH_CHOICES, value=NONE_CHOICE, label="Seasonal smoothing",
+                            info="harmonic: fit a seasonal curve per pixel over the "
+                                 "whole run and evaluate it at each frame's date — "
+                                 "hole-free, but model output (no per-frame stats, "
+                                 "not for lst_rf).")
+                        harmonics = gr.Number(
+                            value=2, precision=0, minimum=1, maximum=5, label="Harmonics",
+                            info="1 = one annual cycle; 2 adds a half-year term.")
+                    with gr.Row():
+                        anomaly_mode = gr.Dropdown(
+                            ANOMALY_CHOICES, value=NONE_CHOICE, label="Anomaly mode",
+                            info="climatology: each frame as a z-score against the "
+                                 "same calendar period of the baseline years.")
+                        baseline_start = gr.Number(label="Baseline from year", value=None,
+                                                   precision=0)
+                        baseline_end = gr.Number(label="Baseline to year (inclusive)",
+                                                 value=None, precision=0)
                 with gr.Accordion("🔁 Cross-year pooling (cosmetic)", open=False):
                     gr.Markdown(POOL_WARNING)
                     with gr.Row():
@@ -817,7 +934,9 @@ def build_app():
                   pool_start, pool_end, pool_strategy, project, show_clouds,
                   crs_choice, crs_custom, interpolate, interpolate_mode,
                   min_scenes, raw_frames, geotiffs, write_metadata, fit_frame,
-                  viz_min, viz_max, missions]
+                  viz_min, viz_max, missions,
+                  sharpen_local, region_only, relative, pixel_grid, upscale,
+                  smooth, harmonics, anomaly_mode, baseline_start, baseline_end]
         outputs = [video, gif, gallery, frames_zip, inventory_csv, status, chart]
 
         def _error(exc):
@@ -829,7 +948,10 @@ def build_app():
                 pool_start, pool_end, pool_strategy, project, show_clouds,
                 crs_choice, crs_custom, interpolate, interpolate_mode,
                 min_scenes, raw_frames, geotiffs, write_metadata, fit_frame,
-                viz_min, viz_max, missions, progress=gr.Progress()):
+                viz_min, viz_max, missions,
+                sharpen_local, region_only, relative, pixel_grid, upscale,
+                smooth, harmonics, anomaly_mode, baseline_start, baseline_end,
+                progress=gr.Progress()):
             import pandas as pd
             try:
                 progress(0.05, desc="Filtering imagery and building frames…")
@@ -847,7 +969,11 @@ def build_app():
                     interpolate_mode=interpolate_mode, min_scenes=min_scenes,
                     raw_frames=raw_frames, geotiffs=geotiffs,
                     write_metadata=write_metadata, fit_frame=fit_frame,
-                    viz_min=viz_min, viz_max=viz_max, missions=missions)
+                    viz_min=viz_min, viz_max=viz_max, missions=missions,
+                    sharpen_local=sharpen_local, region_only=region_only,
+                    relative=relative, pixel_grid=pixel_grid, upscale=upscale,
+                    smooth=smooth, harmonics=harmonics, anomaly_mode=anomaly_mode,
+                    baseline_start_year=baseline_start, baseline_end_year=baseline_end)
                 rows = []
                 for period, inside, outside in series:
                     if inside is not None:
@@ -868,7 +994,10 @@ def build_app():
                        pool_start, pool_end, pool_strategy, project, show_clouds,
                        crs_choice, crs_custom, interpolate, interpolate_mode,
                        min_scenes, raw_frames, geotiffs, write_metadata, fit_frame,
-                       viz_min, viz_max, missions, progress=gr.Progress()):
+                       viz_min, viz_max, missions,
+                       sharpen_local, region_only, relative, pixel_grid, upscale,
+                       smooth, harmonics, anomaly_mode, baseline_start, baseline_end,
+                       progress=gr.Progress()):
             try:
                 progress(0.05, desc="Listing candidate scenes…")
                 csv_path, msg = run_inventory(
@@ -885,7 +1014,11 @@ def build_app():
                     interpolate_mode=interpolate_mode, min_scenes=min_scenes,
                     raw_frames=raw_frames, geotiffs=geotiffs,
                     write_metadata=write_metadata, fit_frame=fit_frame,
-                    viz_min=viz_min, viz_max=viz_max, missions=missions)
+                    viz_min=viz_min, viz_max=viz_max, missions=missions,
+                    sharpen_local=sharpen_local, region_only=region_only,
+                    relative=relative, pixel_grid=pixel_grid, upscale=upscale,
+                    smooth=smooth, harmonics=harmonics, anomaly_mode=anomaly_mode,
+                    baseline_start_year=baseline_start, baseline_end_year=baseline_end)
                 progress(1.0, desc="Done")
                 return None, None, None, None, csv_path, msg, None
             except Exception as exc:   # surface a friendly message in the UI

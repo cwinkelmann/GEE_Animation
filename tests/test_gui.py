@@ -41,15 +41,30 @@ def _fake_deps(tmp_path, captured, frames=None):
         p.write_text("scene_id,used\n")
         return p
 
+    calls = captured.setdefault("calls", [])
+
+    def step(name):
+        def _step(frames_, *args, **kwargs):
+            calls.append(name)
+            return frames_
+        return _step
+
+    def timeseries(frames_, region, frame, scale):
+        calls.append("timeseries")
+        return [(f.label, 0.8, 0.5) for f in frames_]
+
     return types.SimpleNamespace(
         init=lambda project: captured.__setitem__("project", project),
         parse=lambda a: ("geom", tuple(sorted(a))),
         frame_bbox=frame_bbox,
         build=lambda cfg, f, r: (captured.update(cfg=cfg, frame=f, region=r) or "COLL"),
         monthly_median=lambda coll, cfg: frames,
-        anomaly=lambda frames_, cfg, f, r, build: frames_,
-        render=render,
-        timeseries=lambda frames_, region, frame, scale: [(f.label, 0.8, 0.5) for f in frames_],
+        anomaly=step("anomaly"),
+        smooth=step("smooth"),
+        sharpen_local=step("sharpen_local"),
+        focus=step("focus"),
+        render=lambda frames_, cfg, geometry=None: (calls.append("render") or render(frames_, cfg, geometry)),
+        timeseries=timeseries,
         inventory=inventory,
     )
 
@@ -114,6 +129,86 @@ def test_run_animation_builds_config_and_threads_geometry(tmp_path):
     assert series == [("2022-05", 0.8, 0.5), ("2022-06", 0.8, 0.5)]   # (month, inside, outside)
     # inside/outside summary appended to the status
     assert "inside AOI 0.800" in status and "outside 0.500" in status and "+0.300" in status
+
+
+def test_pipeline_steps_run_in_cli_order(tmp_path):
+    # The GUI must apply the same steps as cli.run, in the same order: the seasonal
+    # model, local sharpening and the region focus all sit between anomaly and render.
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path), deps=_fake_deps(tmp_path, captured))
+    assert captured["calls"] == ["anomaly", "smooth", "sharpen_local", "focus", "render", "timeseries"]
+
+
+def test_sharpening_and_focus_fields_reach_the_config(tmp_path):
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst_rf",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        sharpen_local=True, region_only=True, relative="region_mean", pixel_grid=True,
+        upscale="nearest", deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.sharpen == "local" and cfg.scale == 20        # lst_rf lives on the 20 m Sentinel-2 grid
+    assert cfg.region_only is True and cfg.relative == "region_mean"
+    assert cfg.pixel_grid is True and cfg.upscale == "nearest"
+
+
+def test_sharpening_and_focus_default_off(tmp_path):
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path), deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.sharpen is None and cfg.region_only is False and cfg.relative is None
+    assert cfg.pixel_grid is False and cfg.upscale == "lanczos" and cfg.scale == 30
+    assert cfg.smooth is None and cfg.anomaly is None and cfg.baseline_years is None
+
+
+def test_local_sharpening_skips_the_earth_engine_timeseries(tmp_path):
+    # Locally sharpened frames are numpy rasters, not EE images; the inside/outside
+    # chart reduces EE images, so it is skipped rather than crashed.
+    captured = {}
+    *_, status, series = gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst_rf",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        sharpen_local=True, deps=_fake_deps(tmp_path, captured))
+    assert series == [] and "timeseries" not in captured["calls"]
+    assert "chart" in status.lower()
+
+
+def test_seasonal_model_and_anomaly_fields_reach_the_config(tmp_path):
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        smooth="harmonic", harmonics=3, deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.smooth == "harmonic" and cfg.harmonics == 3
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        anomaly_mode="climatology", baseline_start_year=2018, baseline_end_year=2021,
+        deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.anomaly == "climatology" and cfg.baseline_years == [2018, 2021]
+
+
+def test_refused_combinations_are_friendly_errors(tmp_path):
+    # validate() refuses smooth: harmonic with lst_rf and sharpen: local with anomaly;
+    # the GUI surfaces both as ValueError text, not a traceback.
+    with pytest.raises(ValueError, match="Invalid settings"):
+        gui.run_animation(
+            aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst_rf",
+            start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+            smooth="harmonic", deps=_fake_deps(tmp_path, {}))
+    with pytest.raises(ValueError, match="anomaly"):
+        gui.run_animation(
+            aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst_rf",
+            start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+            sharpen_local=True, anomaly_mode="climatology", baseline_start_year=2018,
+            baseline_end_year=2021, deps=_fake_deps(tmp_path, {}))
 
 
 def test_run_animation_status_reports_dropped_months(tmp_path):
@@ -465,6 +560,13 @@ def test_build_app_input_order_matches_handler_param_order():
         ("fit_frame", "Fit the frame to the output shape"),
         ("viz_min", "Colour scale min"), ("viz_max", "Colour scale max"),
         ("missions", "Landsat missions"),
+        ("sharpen_local", "sharpening forest locally"),
+        ("region_only", "Show the region only"),
+        ("relative", "Relative to"), ("pixel_grid", "pixel grid"),
+        ("upscale", "Upscaling filter"),
+        ("smooth", "Seasonal smoothing"), ("harmonics", "Harmonics"),
+        ("anomaly_mode", "Anomaly mode"),
+        ("baseline_start", "Baseline from year"), ("baseline_end", "Baseline to year"),
     ]
     app = gui.build_app()
     checked = []
