@@ -10,7 +10,9 @@ WORKDIR /app
 # (pyogrio, shapely, pyproj, imageio-ffmpeg) — no apt GDAL/ffmpeg packages needed.
 COPY pyproject.toml README.md ./
 COPY gee_animation ./gee_animation
-RUN pip install --no-cache-dir ".[gui,shapefile]"
+# `ml` brings scikit-learn/rasterio/joblib for the GUI's "train the sharpening
+# forest locally" option (lst_rf with sharpen: local).
+RUN pip install --no-cache-dir ".[gui,shapefile,ml]"
 
 # Bind Gradio to all interfaces so the app is reachable from the host.
 ENV GRADIO_SERVER_NAME=0.0.0.0 \
