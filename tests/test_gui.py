@@ -211,6 +211,57 @@ def test_refused_combinations_are_friendly_errors(tmp_path):
             baseline_end_year=2021, deps=_fake_deps(tmp_path, {}))
 
 
+def test_presets_cover_the_tegel_editions():
+    from gee_animation import presets
+    names = list(presets.PRESETS)
+    for site in ("R12", "R13"):
+        for edition in ("native", "grid", "RF"):
+            assert any(site in n and edition in n for n in names), (site, edition, names)
+
+
+def test_preset_values_are_run_animation_keywords():
+    import inspect
+    from gee_animation import presets
+    allowed = set(inspect.signature(gui.run_animation).parameters) - {"deps"}
+    for name, values in presets.PRESETS.items():
+        unknown = set(values) - allowed
+        assert not unknown, f"{name}: unknown keys {unknown}"
+        assert Path(values["aoi_path"]).exists(), f"{name}: AOI missing"
+
+
+@pytest.mark.parametrize("name", ["Tegel R12 · native 100 m", "Tegel R12 · 100 m grid",
+                                  "Tegel R12 · RF-sharpened", "Tegel R13 · RF-sharpened"])
+def test_presets_build_the_matching_config(tmp_path, name):
+    from gee_animation import presets
+    captured = {}
+    gui.run_animation(**presets.PRESETS[name], out_dir=str(tmp_path), deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.sensor == "landsat" and cfg.start == "2017-01-01" and cfg.end == "2026-09-01"
+    assert cfg.viz_min == 15.0 and cfg.viz_max == 45.0 and cfg.missions == ["L8", "L9"]
+    assert cfg.interpolate == 10 and cfg.preset == "1080p" and cfg.aspect == "match"
+    assert captured["buffer"] == 400.0
+    if "native" in name or "grid" in name:
+        assert cfg.index == "lst" and cfg.smooth == "harmonic" and cfg.sharpen is None
+        assert cfg.pixel_grid is ("grid" in name)
+        assert cfg.upscale == ("nearest" if "grid" in name else "lanczos")
+    else:
+        assert cfg.index == "lst_rf" and cfg.sharpen == "local" and cfg.smooth is None
+        assert cfg.pool_years == [2017, 2026] and cfg.pool_strategy == "gap_fill" and cfg.scale == 20
+    assert ("R12" in name) == ("Tegeler Forst" in cfg.title)
+
+
+def test_apply_preset_returns_one_value_per_wired_input():
+    pytest.importorskip("gradio")
+    app = gui.build_app()
+    for block_fn in app.fns.values():
+        if getattr(block_fn.fn, "__name__", None) == "_apply_preset":
+            values = block_fn.fn("Tegel R12 · 100 m grid")
+            assert len(values) == len(block_fn.outputs)
+            break
+    else:
+        raise AssertionError("no _apply_preset handler wired")
+
+
 def test_run_animation_status_reports_dropped_months(tmp_path):
     # 4-month range but only 2 frames -> status flags the 2 dropped (cloud-filtered) months
     aoi = _write_geojson(tmp_path)

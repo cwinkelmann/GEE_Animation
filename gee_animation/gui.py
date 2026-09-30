@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 
 from . import (anomaly, auth, aoi, charts, collection, compositing, focus, inventory,
-               render, sharpen_local, smoothing)
+               presets, render, sharpen_local, smoothing)
 from .compositing import period_starts
 from .config import POOL_STRATEGIES, SUPPORTED_CADENCES, ConfigError, RunConfig
 from .products import INDICES, SENSORS, get_product
@@ -681,6 +681,15 @@ def build_app():
             "cloud-filtered region; the animation frame is its bounding box expanded "
             "by the buffer below."
         )
+        with gr.Accordion("🎬 Presets (fill the form with a showcase render)", open=False):
+            with gr.Row():
+                preset_name = gr.Dropdown(
+                    presets.PRESET_CHOICES, value=presets.NO_PRESET, label="Preset", scale=4,
+                    info="The Tegel cuts: native 100 m thermal (harmonic seasonal model), "
+                         "the same with the 100 m grid drawn on, and the RF-sharpened 20 m "
+                         "edition with locally trained forests. Applying a preset overwrites "
+                         "every control below; edit afterwards as you like.")
+                apply_preset = gr.Button("Apply preset", variant="secondary", scale=1)
         with gr.Accordion("📂 Load a previous animation", open=False):
             with gr.Row():
                 prev = gr.Dropdown(list_previous_runs(), label="Previously rendered runs "
@@ -938,6 +947,45 @@ def build_app():
                   sharpen_local, region_only, relative, pixel_grid, upscale,
                   smooth, harmonics, anomaly_mode, baseline_start, baseline_end]
         outputs = [video, gif, gallery, frames_zip, inventory_csv, status, chart]
+
+        # Presets: one value per wired input, in `inputs` order. PRESET_PARAMS names
+        # the run_animation keyword each input feeds (the GUI-only pooling/baseline
+        # boxes map to their *_year keywords); a preset leaves untouched controls at
+        # their defaults, so applying one is a full, reproducible form fill.
+        PRESET_PARAMS = [
+            ("aoi_path", DEFAULT_AOI), ("buffer_m", 1000), ("sensor", default_sensor),
+            ("index", default_index), ("start", "2022-05-01"), ("end", "2022-09-01"),
+            ("cadence", "monthly"), ("region_max_cloud_percent", 10), ("fps", 4),
+            ("dimensions", 768), ("preset", DEFAULT_PRESET), ("aspect", DEFAULT_ASPECT),
+            ("quality", DEFAULT_QUALITY), ("write_gif", True), ("title", ""),
+            ("subtitle", ""), ("credit", ""), ("omit_credit", False),
+            ("pool_start_year", None), ("pool_end_year", None),
+            ("pool_strategy", "least_cloudy"),
+            ("project", os.environ.get("EE_PROJECT", "hnee-331218")),
+            ("show_clouds", False), ("crs_choice", DEFAULT_CRS), ("crs_custom", ""),
+            ("interpolate", 0), ("interpolate_mode", "auto"), ("min_scenes", 1),
+            ("raw_frames", False), ("geotiffs", False), ("write_metadata", False),
+            ("fit_frame", False), ("viz_min", None), ("viz_max", None), ("missions", []),
+            ("sharpen_local", False), ("region_only", False), ("relative", NONE_CHOICE),
+            ("pixel_grid", False), ("upscale", DEFAULT_UPSCALE), ("smooth", NONE_CHOICE),
+            ("harmonics", 2), ("anomaly_mode", NONE_CHOICE),
+            ("baseline_start_year", None), ("baseline_end_year", None),
+        ]
+        assert len(PRESET_PARAMS) == len(inputs)
+
+        def _apply_preset(name):
+            values = presets.PRESETS.get(name, {})
+            out = []
+            for (param, default), component in zip(PRESET_PARAMS, inputs):
+                value = values.get(param, default)
+                if component is index and name in presets.PRESETS:
+                    # the index dropdown's choices follow the sensor; refresh them too
+                    out.append(gr.update(choices=indices_for(values.get("sensor", default_sensor)),
+                                         value=value))
+                else:
+                    out.append(gr.update(value=value))
+            return out
+        apply_preset.click(_apply_preset, [preset_name], inputs)
 
         def _error(exc):
             return None, None, None, None, None, f"**Error:** {exc}", None
