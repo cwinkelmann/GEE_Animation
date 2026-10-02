@@ -54,3 +54,18 @@ PRESETS: dict[str, dict] = {
 
 NO_PRESET = "— none —"
 PRESET_CHOICES = [NO_PRESET, *PRESETS]
+
+
+def staged_aoi(path: str) -> str:
+    """Copy a packaged footprint into a fresh temp dir and return the copy's path.
+
+    Gradio refuses to serve files that it did not create and that are outside its
+    ``allowed_paths`` (``InvalidPathError`` at postprocess time), which is exactly
+    where package data lives in a container. A copy under the system temp dir is
+    "created by the application" and passes.
+    """
+    import shutil
+    import tempfile
+    staged = Path(tempfile.mkdtemp(prefix="gee_preset_")) / Path(path).name
+    shutil.copyfile(path, staged)
+    return str(staged)

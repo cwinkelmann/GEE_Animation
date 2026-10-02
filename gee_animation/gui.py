@@ -974,7 +974,12 @@ def build_app():
         assert len(PRESET_PARAMS) == len(inputs)
 
         def _apply_preset(name):
-            values = presets.PRESETS.get(name, {})
+            values = dict(presets.PRESETS.get(name, {}))
+            if "aoi_path" in values:
+                # Gradio only serves files it created itself (or under allowed_paths);
+                # a package-data path is refused at postprocess time with
+                # InvalidPathError. Hand it a copy in a fresh temp dir instead.
+                values["aoi_path"] = presets.staged_aoi(values["aoi_path"])
             out = []
             for (param, default), component in zip(PRESET_PARAMS, inputs):
                 value = values.get(param, default)

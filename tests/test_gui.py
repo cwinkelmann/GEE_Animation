@@ -252,11 +252,20 @@ def test_presets_build_the_matching_config(tmp_path, name):
 
 def test_apply_preset_returns_one_value_per_wired_input():
     pytest.importorskip("gradio")
+    import tempfile
+    from gee_animation import presets
     app = gui.build_app()
     for block_fn in app.fns.values():
         if getattr(block_fn.fn, "__name__", None) == "_apply_preset":
             values = block_fn.fn("Tegel R12 · 100 m grid")
             assert len(values) == len(block_fn.outputs)
+            # The AOI must NOT be the package-data path: Gradio refuses to serve files
+            # it did not create (InvalidPathError in the container). It is a staged
+            # copy under the temp dir, byte-identical to the shipped footprint.
+            aoi = values[0]["value"]
+            assert aoi != presets.PRESETS["Tegel R12 · 100 m grid"]["aoi_path"]
+            assert Path(aoi).is_relative_to(Path(tempfile.gettempdir()).resolve()) or Path(aoi).is_relative_to(tempfile.gettempdir())
+            assert Path(aoi).read_bytes() == Path(presets.PRESETS["Tegel R12 · 100 m grid"]["aoi_path"]).read_bytes()
             break
     else:
         raise AssertionError("no _apply_preset handler wired")
