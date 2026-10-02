@@ -308,6 +308,19 @@ def test_run_animation_rejects_unsupported_pair(tmp_path):
                           deps=_fake_deps(tmp_path, {}))
 
 
+def test_default_out_dir_is_a_timestamped_folder_under_output_dir(tmp_path, monkeypatch):
+    # A GUI run must outlive the process (the container's /app/out is a mounted volume)
+    # and be listed by "Load a previous animation", so the default is not a temp dir.
+    monkeypatch.setattr(gui, "OUTPUT_DIR", str(tmp_path / "runs"))
+    captured = {}
+    gui.run_animation(aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="sentinel2",
+                      index="ndvi", start="2022-05-01", end="2022-07-01",
+                      deps=_fake_deps(tmp_path, captured))
+    out_dir = Path(captured["cfg"].out_dir)
+    assert out_dir.parent == tmp_path / "runs"
+    assert out_dir.name.startswith("sentinel2_ndvi_") and len(out_dir.name) == len("sentinel2_ndvi_20260101-120000")
+
+
 def test_run_animation_requires_aoi(tmp_path):
     with pytest.raises(ValueError, match="upload an AOI"):
         gui.run_animation(aoi_path=None, buffer_m=1000, sensor="sentinel2", index="ndvi",

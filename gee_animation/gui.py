@@ -11,6 +11,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import time
 import types
 import zipfile
 from pathlib import Path
@@ -438,7 +439,10 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
         raise ValueError(
             f"viz min ({viz_min}) must be below viz max ({viz_max})")
     palette = palette or []      # composites (rgb/cir) carry no palette
-    out_dir = out_dir or tempfile.mkdtemp()
+    # Default to a timestamped folder under OUTPUT_DIR (the mounted volume in the
+    # container) so a GUI run survives the process and shows up in "Load a previous
+    # animation"; a temp dir, the old default, vanished with the container.
+    out_dir = out_dir or str(Path(OUTPUT_DIR) / f"{sensor}_{index}_{time.strftime('%Y%m%d-%H%M%S')}")
 
     deps.init(project)
     region_geom = deps.parse(region_aoi)
