@@ -238,6 +238,15 @@ def _ndmi(sensor, image, ee_module=ee):
             .set("system:time_start", image.get("system:time_start")))
 
 
+def _nbr(sensor, image, ee_module=ee):
+    # NBR = (nir − swir2)/(nir + swir2) — the standard disturbance index (dNBR):
+    # removing canopy exposes soil, dead wood and litter, which are bright in
+    # SWIR2 and dark in NIR, so fire, windthrow and logging all drive NBR down.
+    refl = sensor.reflectance(image, ee_module)
+    return (refl.normalizedDifference(["nir", "swir2"]).rename(INDEX_BAND)
+            .set("system:time_start", image.get("system:time_start")))
+
+
 def _ndre(sensor, image, ee_module=ee):
     # NDRE = (nir − red_edge)/(nir + red_edge) — chlorophyll/nitrogen-sensitive,
     # slower to saturate over dense canopy than NDVI. Sentinel-2 only: the red
@@ -473,7 +482,7 @@ THERMAL_INDICES = frozenset({"lst", "lst_smw", "lst_sharp", "lst_modis", "lst_rf
 # Coarsest-relevant native ground sampling (metres) per sensor, with overrides.
 _SENSOR_NATIVE_M = {"sentinel2": 10, "landsat": 30, "modis": 500, "modis_lst": 1000,
                     "dynamicworld": 10}   # Sentinel-2 derived, so Sentinel-2's grid
-_S2_20M_INDICES = frozenset({"ndmi", "ndre"})   # ndmi: 20 m SWIR; ndre: 20 m red edge (B5)
+_S2_20M_INDICES = frozenset({"ndmi", "ndre", "nbr"})   # ndmi/nbr: 20 m SWIR (B11/B12); ndre: 20 m red edge (B5)
 
 
 def native_scale_m(sensor: str, index: str) -> int:
@@ -558,6 +567,14 @@ INDICES = {
                   bands="NIR, SWIR1", formula="(NIR - SWIR1) / (NIR + SWIR1)",
                   display_name="Vegetation moisture (NDMI)",
                   low_label="dry", high_label="moist"),
+    # Range is a guess from the literature (closed canopy ~0.5–0.8, bare/burnt
+    # below 0), not a measured sweep like NDVI's — check against the AOI before
+    # publishing a styled render.
+    "nbr": Index("nbr", _REFL,
+                 (-0.5, 0.9, ["#7f3b08", "#fee0b6", "#2d6a4f"]), _nbr,
+                 bands="NIR, SWIR2", formula="(NIR - SWIR2) / (NIR + SWIR2)",
+                 display_name="Burn / disturbance ratio (NBR)",
+                 low_label="disturbed / bare", high_label="intact canopy"),
     "ndre": Index("ndre", frozenset({"sentinel2"}),
                   (-0.2, 1.0, ["#a1622f", "#f6e8c3", "#238b45"]), _ndre,
                   bands="NIR, Red Edge (B5)",

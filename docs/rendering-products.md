@@ -73,6 +73,7 @@ B8, Landsat NIR = SR_B5 for OLI). Reflectance scaling is per sensor: Sentinel-2
 | `evi` | S2 / Landsat / MODIS | 10 / 30 / 500 m | −1.0 … 1.0 | — | bare → dense vegetation |
 | `ndwi` | S2 / Landsat / MODIS | 10 / 30 / 500 m | −1.0 … 1.0 | — | dry → water |
 | `ndmi` | S2 / Landsat / MODIS | **20** / 30 / 500 m | −1.0 … 1.0 | — | dry → moist |
+| `nbr` | S2 / Landsat / MODIS | **20** / 30 / 500 m | −0.5 … 0.9 (unmeasured guess) | — | disturbed/bare → intact canopy |
 | `ndre` | Sentinel-2 only | **20** m | −0.2 … 1.0 | — | bare/stressed → dense vegetation |
 | `rgb` | S2 / Landsat / MODIS | 10 / 30 / 500 m | 0.0 … 0.3 | — | *(composite: no legend)* |
 | `cir` | S2 / Landsat / MODIS | 10 / 30 / 500 m | 0.0 … 0.3 | — | *(composite: no legend)* |

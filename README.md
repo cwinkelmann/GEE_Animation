@@ -46,6 +46,7 @@ PNG per month. Bands below are canonical roles (NIR/Red/Green/Blue/SWIR1/Thermal
 | EVI   | Sentinel-2 | `2.5·(NIR − Red) / (NIR + 6·Red − 7.5·Blue + 1)` — enhanced vegetation | `config/evi.example.yaml` (`wne_evi`) |
 | NDWI  | Sentinel-2 | `(Green − NIR) / (Green + NIR)` — open water (McFeeters) | `config/ndwi.example.yaml` (`wne_ndwi`) |
 | NDMI  | Sentinel-2 | `(NIR − SWIR1) / (NIR + SWIR1)` — canopy/soil moisture | `config/ndmi.example.yaml` (`wne_ndmi`) |
+| NBR   | Sentinel-2 | `(NIR − SWIR2) / (NIR + SWIR2)` — burn/disturbance ratio; drops when canopy is removed (fire, windthrow, logging) | `config/nbr.example.yaml` (`wne_nbr`) |
 | NDRE  | Sentinel-2 | `(NIR − RedEdge) / (NIR + RedEdge)` — chlorophyll/nitrogen, slower to saturate than NDVI | `config/ndre.example.yaml` (`wne_ndre`) |
 | RGB   | any | true colour composite: R=Red, G=Green, B=Blue | `config/rgb.example.yaml` (`wne_rgb`) |
 | CIR   | any | false-colour infrared: R←NIR, G←Red, B←Green (vegetation reads red) | `config/cir.example.yaml` (`wne_cir`) |

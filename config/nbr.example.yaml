@@ -1,0 +1,20 @@
+# Sentinel-2 NBR (normalised burn ratio) over the WNE AOIs — the standard
+# disturbance index: (NIR − SWIR2)/(NIR + SWIR2) drops where canopy is removed.
+name: wne_nbr
+project: hnee-331218
+
+aoi:
+  frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 10
+
+sensor: sentinel2
+index: nbr
+start: "2022-05-01"
+end: "2022-08-01"
+cadence: monthly
+max_cloud_percent: 60
+draw_region: true
+render: { fps: 4, scale: 20, dimensions: 768 }   # SWIR2 (B12) is a 20 m band
+# viz omitted -> NBR default (-0.5..0.9, brown->green); the default range is a
+# literature guess, not a measured sweep — pin it to your AOI for a styled render.
