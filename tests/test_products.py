@@ -9,7 +9,7 @@ _REFL_INDICES = frozenset({"sentinel2", "landsat", "modis"})
 def test_registry_contents():
     assert set(P.SENSORS) == {"sentinel2", "landsat", "modis", "modis_lst",
                               "dynamicworld"}
-    assert set(P.INDICES) == {"ndvi", "lst", "lst_smw", "evi", "ndwi", "ndmi", "ndre",
+    assert set(P.INDICES) == {"ndvi", "lst", "lst_smw", "evi", "ndwi", "ndmi", "ndre", "nbr",
                               "rgb", "cir", "lst_sharp", "lst_modis", "landcover", "lst_rf"}
     assert P.INDICES["lst_modis"].sensors == frozenset({"modis_lst"})   # MODIS-only LST
     assert P.SENSORS["modis_lst"].scene_cloud_property is None          # no per-scene cloud
@@ -24,7 +24,7 @@ def test_registry_contents():
     assert P.SENSORS["modis"].scene_cloud_property is None   # no per-scene cloud metadata
     assert callable(P.SENSORS["landsat"].collection)          # custom harmonizing builder
     assert P.INDICES["lst"].sensors == frozenset({"landsat"})
-    for name in ("ndvi", "evi", "ndwi", "ndmi"):
+    for name in ("ndvi", "evi", "ndwi", "ndmi", "nbr"):
         assert P.INDICES[name].sensors == _REFL_INDICES
 
 
@@ -35,6 +35,8 @@ def test_native_scale_m_per_product():
     assert P.native_scale_m("landsat", "ndvi") == 30       # Landsat reflectance
     assert P.native_scale_m("sentinel2", "ndvi") == 10
     assert P.native_scale_m("sentinel2", "ndmi") == 20     # 20 m SWIR band
+    assert P.native_scale_m("sentinel2", "nbr") == 20      # 20 m SWIR2 band (B12)
+    assert P.native_scale_m("landsat", "nbr") == 30
     assert P.native_scale_m("modis", "ndvi") == 500
     assert P.native_scale_m("modis_lst", "lst_modis") == 1000   # MOD11A1 1 km thermal
 
@@ -101,6 +103,19 @@ def test_ndmi_is_nir_swir1_normalized_difference():
     out = P.INDICES["ndmi"].compute(sensor, img, ee_module=None)
     assert rec["nd"] == ("nir", "swir1")                   # moisture index
     assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
+
+
+def test_nbr_is_nir_swir2_normalized_difference():
+    # NBR = (NIR − SWIR2)/(NIR + SWIR2): the standard disturbance index (dNBR for
+    # fire, windthrow and logging) — SWIR2 rises when canopy is removed and soil,
+    # dead wood and litter are exposed, so disturbance drives NBR down.
+    rec, sensor, img = _normdiff_recorder()
+    out = P.INDICES["nbr"].compute(sensor, img, ee_module=None)
+    assert rec["nd"] == ("nir", "swir2")
+    assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
+    spec = P.INDICES["nbr"]
+    assert spec.formula == "(NIR - SWIR2) / (NIR + SWIR2)" and "NBR" in spec.display_name
+    assert spec.low_label and spec.high_label                 # colourbar end words
 
 
 def test_ndre_is_sentinel2_only_at_its_native_20m_red_edge_scale():
