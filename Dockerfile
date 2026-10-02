@@ -7,7 +7,11 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # geopandas (GDAL/GEOS/PROJ) and ffmpeg arrive as self-contained Python wheels
-# (pyogrio, shapely, pyproj, imageio-ffmpeg) — no apt GDAL/ffmpeg packages needed.
+# (pyogrio, shapely, pyproj, imageio-ffmpeg) — no apt GDAL/ffmpeg packages needed,
+# except libexpat, which the rasterio wheel's GDAL links at runtime and the slim
+# image lacks ("libexpat.so.1: cannot open shared object file" on first lst_rf run).
+RUN apt-get update && apt-get install -y --no-install-recommends libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml README.md ./
 COPY gee_animation ./gee_animation
 # `ml` brings scikit-learn/rasterio/joblib for the GUI's "train the sharpening
