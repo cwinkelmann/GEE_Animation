@@ -29,14 +29,15 @@ for f in sorted(glob.glob(f"{OUT}/*.tif")):
     frames.append(Frame(lab, LocalImage(vh, (b.left, b.bottom, b.right, b.top), crs, res)))
 region_aoi = {"geojson": CFG["footprint"]} if CFG["footprint"].endswith(".geojson") else {"shapefile": CFG["footprint"]}
 delta = MODE == "delta"
+draw_region = os.environ.get("SAR_DRAW_REGION", "1") != "0"      # SAR_DRAW_REGION=0: no footprint outline
 cfg = types.SimpleNamespace(
-    name=f"{SITE.lower()}_sar_vh_{MODE}", out_dir="out", project="hnee-331218",
+    name=f"{SITE.lower()}_sar_vh_{MODE}" + ("" if draw_region else "_noaoi"), out_dir="out", project="hnee-331218",
     sensor="landsat", index="s1_vh", title=TITLES[SITE],
     subtitle=("VH · Δ vs footprint mean" if delta else "Sentinel-1 VH backscatter"),   # short: line 2 is shared with the caveats
     credit="Contains modified Copernicus Sentinel-1 data 2017–2026",
     frame_aoi={"bbox": FRAME}, region_aoi=region_aoi, region_max_cloud_percent=100,
     start=frames[0].label + "-01", end=frames[-1].label + "-01", cadence="monthly", max_cloud_percent=100,
-    draw_region=True, region_line_width=5,
+    draw_region=draw_region, region_line_width=5,
     viz_min=(-1.5 if delta else -20.0), viz_max=(1.5 if delta else -8.0),
     palette=(["#2166ac", "#67a9cf", "#d1e5f0", "#f7f7f7", "#fddbc7", "#ef8a62", "#b2182b"] if delta
              else ["#0b0f2b", "#1e3a8a", "#2f7fb8", "#5ec2c0", "#b7e3a4", "#f1f1a1", "#f5d16b", "#f7f7f7"]),
