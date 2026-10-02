@@ -443,6 +443,7 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
     # container) so a GUI run survives the process and shows up in "Load a previous
     # animation"; a temp dir, the old default, vanished with the container.
     out_dir = out_dir or str(Path(OUTPUT_DIR) / f"{sensor}_{index}_{time.strftime('%Y%m%d-%H%M%S')}")
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
 
     deps.init(project)
     region_geom = deps.parse(region_aoi)
