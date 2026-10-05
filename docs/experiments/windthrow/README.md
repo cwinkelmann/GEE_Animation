@@ -34,6 +34,8 @@ Run everything from the repo root with the project conda env.
 | `sensor_figures.py` | `python … <sar worktree> <out dir>` | `sensor_comparison_series.png`, `roc_curves.png`, `dose_response.png`, `thermal_seasonality.png` |
 | `detection_upgrade.py` | `python … <sar worktree> <out dir>` | `detection_upgrade.png/.csv` (fusion, VH change-point, texture, capture curves; blocked 5-fold CV) |
 | `truecolour_before_after.py` | `python … <out png>` (needs Earth Engine, project `hnee-331218`) | `truecolour_before_after.png` |
+| `nbr_check.py` | `python … <sar worktree> <out png>` | `nbr_check.png` (NBR vs NDVI/NDMI: series and ROC, both sites) |
+| `stem_density_raster.py` | `WT_SITE=R12 python … <template tif> <out tif>` / `… --kde 40 --res 5` | `docs/aoi/r1{2,3}/*_stem_density_20m.tif` (m of stem per 20 m cell), `*_stem_kde40_5m.tif` (Gaussian KDE, m per ha) — the `overlay:` inputs of the `*_stems` configs |
 | `r13/`, `wne/` | outputs of the same scripts for the other sites | `r13_windthrow_series.csv/.png`, `r13_heat_islands.png`, `r13_windthrow_maps.png`, `lst_rf_per_frame_oob*.csv` |
 
 `lst_rf_local_models_loyo.csv` and `lst_rf_per_frame_oob_2025_2026.csv` are the model

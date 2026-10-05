@@ -23,19 +23,36 @@ _ROOTS = tuple(r for r in (os.environ.get("WT_DATA_ROOT"),
                            "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel",              # external mirror
                            os.path.expanduser("~/data/Winmol/training_data/WINDWURF_Tegel")) if r)
 _REV = {"R12": "Revier_12", "R13": "Revier_13"}.get(_SITE)     # a site without a stem map (WNE) has no Revier folder
-R12 = next((f"{r}/{_REV}" for r in _ROOTS if _REV and os.path.isdir(f"{r}/{_REV}")), "")
-if _REV and not R12 and not os.environ.get("WT_STEMS"):
-    raise SystemExit(f"windthrow_vs_delta: no {_REV}/ under WT_DATA_ROOT or the default roots {_ROOTS}; "
-                     "set WT_DATA_ROOT to the WINDWURF_Tegel folder (or WT_STEMS / WT_STREETS)")
-STEMS = os.environ.get("WT_STEMS", f"{R12}/predictions_cw_2026/{_SITE}_stems_tegel-unet_2026-08.gpkg")
-STREETS = os.environ.get("WT_STREETS", f"{R12}/steet_mask.gpkg")      # absent for R13: no street exclusion
+
+
+def site_dir() -> str:
+    """The site's Revier folder under the first data root that has it ("" for WNE).
+    Resolved lazily so that importing this module for `stem_density()` does not
+    need the WINMOL mount; the lookup fails only when a stem map is actually read."""
+    found = next((f"{r}/{_REV}" for r in _ROOTS if _REV and os.path.isdir(f"{r}/{_REV}")), "")
+    if _REV and not found and not os.environ.get("WT_STEMS"):
+        raise SystemExit(f"windthrow_vs_delta: no {_REV}/ under WT_DATA_ROOT or the default roots {_ROOTS}; "
+                         "set WT_DATA_ROOT to the WINDWURF_Tegel folder (or WT_STEMS / WT_STREETS)")
+    return found
+
+
+def __getattr__(name):
+    # Module-level STEMS / STREETS / R12 stay available as names (every script uses
+    # them) but are resolved on first access, not at import time.
+    if name == "R12":
+        return site_dir()
+    if name == "STEMS":
+        return os.environ.get("WT_STEMS", f"{site_dir()}/predictions_cw_2026/{_SITE}_stems_tegel-unet_2026-08.gpkg")
+    if name == "STREETS":
+        return os.environ.get("WT_STREETS", f"{site_dir()}/steet_mask.gpkg")      # absent for R13: no street exclusion
+    raise AttributeError(name)
 WT_MIN_M = 20.0          # ≥ 20 m of predicted stem per 20 m cell (~4 stems) = "windthrow cell"
 BINS = [0, 0.01, 10, 30, 60, 1e9]
 BIN_NAMES = ["none", "0-10 m", "10-30 m", "30-60 m", ">60 m"]
 
 def stem_density(template):
     """metres of predicted stem per cell of `template` (an open rasterio dataset)."""
-    g = gpd.read_file(STEMS, layer="stems").to_crs(template.crs)
+    g = gpd.read_file(__getattr__("STEMS"), layer="stems").to_crs(template.crs)
     pts = []
     for line in g.geometry:
         n = max(2, int(line.length / 0.5))
@@ -46,8 +63,9 @@ def stem_density(template):
     dens = np.zeros((template.height, template.width), "float32")
     ok = (rows >= 0) & (rows < template.height) & (cols >= 0) & (cols < template.width)
     np.add.at(dens, (np.asarray(rows)[ok], np.asarray(cols)[ok]), pts[ok, 2])
-    if os.path.exists(STREETS):
-        streets = gpd.read_file(STREETS).to_crs(template.crs)
+    streets_path = __getattr__("STREETS")
+    if os.path.exists(streets_path):
+        streets = gpd.read_file(streets_path).to_crs(template.crs)
         street = rasterize([(geom, 1) for geom in streets.geometry], out_shape=dens.shape,
                            transform=template.transform, fill=0, all_touched=True).astype(bool)
     else:
