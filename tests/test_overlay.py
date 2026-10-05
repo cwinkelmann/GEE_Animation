@@ -68,6 +68,28 @@ def test_level_masks_reproject_a_metric_raster_onto_a_lonlat_frame(tmp_path):
     assert mask.any() and mask[50, 50] == 0 and mask[2, 2] == 0
 
 
+def test_parse_mode_and_label(tmp_path):
+    path = _density_tif(tmp_path / "d.tif")
+    spec = overlay.parse({"raster": path, "levels": [20]})
+    assert spec["mode"] == "lines" and spec["label"] is None
+    spec = overlay.parse({"raster": path, "levels": [20, 60], "mode": "fill", "label": "fallen stems, m/ha"})
+    assert spec["mode"] == "fill" and spec["label"] == "fallen stems, m/ha"
+    with pytest.raises(ConfigError, match="overlay.mode"):
+        overlay.parse({"raster": path, "levels": [20], "mode": "glow"})
+
+
+def test_fill_mode_masks_are_bands_between_levels(tmp_path):
+    # Band i covers level_i <= value < level_{i+1}; the last band is open-ended. A
+    # block of 50 therefore fills the [20, 60) band completely and the >= 60 band not
+    # at all — the interior is painted, unlike the lines mode.
+    path = _density_tif(tmp_path / "d.tif")
+    spec = overlay.parse({"raster": path, "levels": [20, 60], "mode": "fill"})
+    (m20, _), (m60, _) = overlay.level_masks(spec, (0.0, 0.0, 1.0, 1.0), None, (200, 200))
+    assert m20[100, 100] == 1 and m20[61:139, 61:139].all()     # interior filled
+    assert m20[20, 20] == 0 and m60.sum() == 0
+    assert abs(m20.mean() - 0.16) < 0.01                           # 4x4 of 10x10 cells = 16 %
+
+
 def test_level_masks_need_rasterio(monkeypatch, tmp_path):
     import builtins
     real_import = builtins.__import__

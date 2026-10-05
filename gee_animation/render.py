@@ -653,6 +653,28 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
     right = max([x0 + bar_w, swatch_x0 + swatch_size] + [hi for _lo, hi in shown])
     left = min([x0] + [lo for lo, _hi in shown])
     panel_bottom = anchor_y + line_h if (show_low or show_high) else text_y + text_h
+
+    # Overlay legend: one more row — a swatch per level with "≥ level", then the
+    # overlay's label — so the iso-lines / density bands drawn by `overlay.py` are
+    # explained on the frame ("what are the orange marks?"). Swatches are filled for
+    # mode "fill" and outlined for "lines", mirroring how the layer itself is drawn.
+    ov = getattr(cfg, "overlay", None)
+    ov_items = []
+    if ov:
+        from .overlay import _hex_to_rgb
+        ov_y = panel_bottom + max(3, lw * 2)
+        sw = max(6, text_h)
+        xcur = x0
+        for level, color in zip(ov["levels"], ov["colors"]):
+            text = f"≥ {level:g}"
+            tw = draw.textbbox((0, 0), text, font=font)[2]
+            ov_items.append((xcur, ov_y, sw, _hex_to_rgb(color), text))
+            xcur += sw + max(3, lw * 2) + tw + max(8, lw * 5)
+        if ov.get("label"):
+            ov_items.append((xcur, ov_y, 0, None, str(ov["label"])))
+            xcur += draw.textbbox((0, 0), str(ov["label"]), font=font)[2]
+        right = max(right, xcur)
+        panel_bottom = ov_y + max(sw, line_h)
     # Top overhang clamped to 4 px: render() places the legend 4 px below the
     # header bar, and on ≥1730 px canvases pad (lw*2 = 8+) would otherwise reach
     # up past that gap and tint the header's bottom rows.
@@ -682,6 +704,16 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
                    fill=tuple(NODATA_RGB) + (255,))
     draw.text((swatch_text_x, y0 + max(0, (swatch_size - text_h) // 2)), swatch_label,
               fill=(255, 255, 255, 255), font=font)
+
+    for xi, yi, sw, color, text in ov_items:
+        if color is not None:
+            if ov.get("mode", "lines") == "fill":
+                draw.rectangle([xi, yi, xi + sw, yi + sw], fill=tuple(color) + (255,))
+            else:
+                draw.rectangle([xi, yi, xi + sw, yi + sw], outline=tuple(color) + (255,), width=max(1, lw))
+            draw.text((xi + sw + max(3, lw * 2), yi), text, fill=(255, 255, 255, 255), font=font)
+        else:
+            draw.text((xi, yi), text, fill=(255, 255, 255, 255), font=font)
 
     return np.asarray(img)
 

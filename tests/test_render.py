@@ -3113,6 +3113,27 @@ def test_render_skips_pixel_grid_when_unset(tmp_path, monkeypatch):
 
 # --- raster overlay (overlay: {raster, levels, colors}) ------------------------------
 
+def test_colorbar_lists_the_overlay_levels_with_their_colours(tmp_path):
+    # An overlay without a legend is a riddle ("what are the orange marks?"): the
+    # legend panel gets one more row — a swatch per level with "≥ level" and the
+    # overlay's label — in the overlay's own colours.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.preset = None
+    base = np.full((400, 600, 3), 90, np.uint8)
+    plain = r.add_colorbar(base.copy(), cfg)
+    cfg.overlay = {"raster": "x.tif", "levels": [500.0, 1500.0], "colors": ["#ffb000", "#ff2a2a"],
+                   "line_px": 2, "alpha": 0.5, "mode": "fill", "label": "fallen stems, m per ha"}
+    with_legend = r.add_colorbar(base.copy(), cfg)
+    assert not np.array_equal(plain, with_legend)
+    px = with_legend.reshape(-1, 3)
+    assert ((px == (255, 176, 0)).all(axis=1)).any()      # first swatch colour appears
+    assert ((px == (255, 42, 42)).all(axis=1)).any()      # second swatch colour appears
+    # the extra row makes the translucent panel taller, never wider than the canvas
+    dark_rows_plain = (plain.mean(axis=(1, 2)) < 90).sum()
+    dark_rows_legend = (with_legend.mean(axis=(1, 2)) < 90).sum()
+    assert dark_rows_legend > dark_rows_plain
+
 def test_render_draws_the_raster_overlay_once_under_the_region_outline(tmp_path, monkeypatch):
     # Iso-lines of an external raster (fallen-stem density) are georeferenced
     # overlays like the region outline: built once from the projected frame bounds
