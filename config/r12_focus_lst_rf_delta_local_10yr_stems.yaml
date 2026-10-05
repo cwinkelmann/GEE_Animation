@@ -56,10 +56,13 @@ render:
   raw_frames: true
   geotiffs: true                 # the delta field itself, per observed month
 
-# Fallen-stem density from the 2025 drone flights (tegel-unet), outlined at the
-# analysis thresholds: 20 m of predicted stem per 20 m cell ("windthrow cell") and 60 m (dense core).
+# Continuous density of predicted fallen stems from the 2025 drone flights (tegel-unet):
+# Gaussian kernel density of the stem length, bandwidth 40 m, on a 5 m grid, in metres
+# of stem per hectare; painted as translucent bands (docs/experiments/windthrow/stem_density_raster.py --kde 40).
 overlay:
-  raster: docs/aoi/r12/r12_stem_density_20m.tif
-  levels: [20, 60]
-  colors: ["#ffb000", "#ff2a2a"]
-  line_px: 2
+  raster: docs/aoi/r12/r12_stem_kde40_5m.tif
+  mode: fill
+  levels: [100, 250, 500, 1000]
+  colors: ["#ffe082", "#ffb000", "#ff5a1f", "#c40000"]
+  alpha: 0.45
+  label: "fallen stems, m per ha"
