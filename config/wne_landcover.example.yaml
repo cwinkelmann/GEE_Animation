@@ -1,0 +1,46 @@
+# Land cover over Grumsin — Dynamic World (Google/WRI), 10 m, Sentinel-2 derived.
+#
+# CATEGORICAL, so it behaves differently from every other product here:
+#   * A period's image is the argmax of the MEAN class probabilities, not a
+#     median — the median of {water=0, trees=1, built=6} is "trees", an artefact
+#     of the numbering rather than anything on the ground.
+#   * The legend is labelled swatches, not a colour ramp.
+#   * render.interpolate MUST be 0. Blending two class colours produces a colour
+#     no class owns, so a viewer would read the in-between frames as a category
+#     that does not exist. The config is rejected if you set it.
+#
+# Dynamic World starts 2015-06-27 and is already cloud-screened at source, so
+# pixels Sentinel-2 could not see come back masked (drawn as no-data grey).
+name: wne_landcover
+project: hnee-331218
+
+title: Grumsin Beech Forest
+subtitle: UNESCO World Heritage site, Brandenburg, Germany
+
+aoi:
+  frame: { bbox: [13.7311, 52.9440, 14.0623, 53.0280] }   # 22.2 x 9.35 km, fills 16:9
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 40
+
+start: "2016-01-01"
+end: "2026-08-01"
+
+sensor: dynamicworld
+index: landcover
+cadence: quarterly        # a quarter pools enough passes that the argmax is
+                          # stable; monthly land cover flickers between classes
+                          # on marginal pixels without anything having changed
+max_cloud_percent: 100    # Dynamic World carries no per-scene cloud metadata
+draw_region: true
+
+render:
+  fps: 2
+  interpolate: 0          # required for a classified product (see above)
+  scale: 10
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: "16:9"
+  upscale: nearest        # class colours must not be blended by the resampler
+  region_line_width: 5
+  quality: 8

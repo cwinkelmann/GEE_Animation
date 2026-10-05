@@ -200,7 +200,8 @@ def animate(region, *, sensor="landsat", index="lst", start, end,
             f"No {sensor} {index} imagery for that AOI, date range and cloud filter — "
             "widen the dates or raise region_max_cloud_percent.")
     frames = deps.anomaly(frames, cfg, frame_geom, region_geom, deps.build)
-    db = deps.metadata(frames, cfg, region_geom) if write_metadata else None
+    db = (deps.metadata(frames, cfg, region_geom, frame_geom=frame_geom)
+          if write_metadata else None)
     paths = deps.render(frames, cfg, geometry=frame_geom)
 
     # Inside-vs-outside-AOI series + chart (single-band indices only; composites have

@@ -33,18 +33,43 @@ class FakeGetInfoDict:
         return {k: v.values for k, v in self._mapping.items()}
 
 
-class FakeCollection:
-    """Fakes the ImageCollection surface scene_inventory uses: aggregate_array per
-    property, keyed off of a {ee-property-name: values} dict."""
-    def __init__(self, by_prop):
-        self._by_prop = by_prop
+class FakeSceneCollection:
+    """Fakes an ImageCollection with EE's REAL aggregate_array semantics: a scene
+    whose property is null is DROPPED from the returned array, it does not come
+    back as a None element. That drop is what silently misaligned the arrays
+    against the timestamps, so the fake must reproduce it rather than pad."""
+    def __init__(self, scenes):
+        self._scenes = scenes
 
     def aggregate_array(self, prop):
-        return FakeArray(self._by_prop[prop])
+        return FakeArray([s[prop] for s in self._scenes if s.get(prop) is not None])
+
+    def filter(self, notnull_props):
+        return FakeSceneCollection([s for s in self._scenes
+                                    if all(s.get(p) is not None for p in notnull_props)])
+
+
+class FakeCollection(FakeSceneCollection):
+    """Back-compat shim for the {ee-property-name: values} tables the tests are
+    written against: turns them into per-scene dicts so they exercise the same
+    null-dropping aggregate_array as the real thing. A value absent from a
+    (deliberately short) column simply means that scene does not carry it."""
+    def __init__(self, by_prop):
+        times = by_prop["system:time_start"]
+        scenes = []
+        for i, t in enumerate(times):
+            scene = {"system:index": f"s{i}", "system:time_start": t}
+            for prop, values in by_prop.items():
+                if prop != "system:time_start" and i < len(values):
+                    scene[prop] = values[i]
+            scenes.append(scene)
+        super().__init__(scenes)
 
 
 def _fake_ee(calls):
-    return types.SimpleNamespace(Dictionary=lambda mapping: FakeGetInfoDict(mapping, calls))
+    return types.SimpleNamespace(
+        Dictionary=lambda mapping: FakeGetInfoDict(mapping, calls),
+        Filter=types.SimpleNamespace(notNull=lambda props: props))
 
 
 class FakeSensor:
@@ -135,11 +160,14 @@ def test_scene_inventory_judges_raw_region_fraction_not_the_rounded_display_valu
     assert [r.usable for r in records] == [True, False]            # raw value decides
 
 
-def test_scene_inventory_handles_missing_region_cloud_fraction(monkeypatch):
+def test_scene_inventory_refuses_an_entirely_null_region_cloud_column(monkeypatch):
     # A scene fully masked over the region (reduceRegion finds no valid pixel) comes
-    # back with region_cloud_fraction=None. Real EE Filter.lt against a null property
-    # does not evaluate true, so the real pipeline excludes the scene -- the
-    # inventory must report it as rejected, not silently usable.
+    # back with a null region_cloud_fraction, which EE DROPS from aggregate_array.
+    # When that is true of every scene the column arrives empty, which is also what
+    # an upstream property drop looks like -- the two are indistinguishable client
+    # side, so scene_inventory must fail loudly rather than report a whole inventory
+    # as "cloud fraction unavailable". The mixed case (some scenes null, some not) is
+    # resolvable and IS reported per scene -- see the id-join test below.
     sensor = FakeSensor("sentinel2", "CLOUDY_PIXEL_PERCENTAGE")
     monkeypatch.setattr(I, "get_product", lambda s, i: (sensor, None))
     coll = FakeCollection({
@@ -147,12 +175,10 @@ def test_scene_inventory_handles_missing_region_cloud_fraction(monkeypatch):
         "region_cloud_fraction": [None],
         "CLOUDY_PIXEL_PERCENTAGE": [5.0],
     })
-    records = I.scene_inventory(_cfg(), "FRAME", "REGION",
-                                build=lambda cfg, f, r, apply_cloud_filters=True, ee_module=None: coll,
-                                ee_module=_fake_ee([]))
-    assert records[0].usable is False
-    assert records[0].region_cloud_pct is None
-    assert records[0].reason == "region cloud fraction unavailable (scene fully masked)"
+    with pytest.raises(RuntimeError, match="region_cloud_fraction"):
+        I.scene_inventory(_cfg(), "FRAME", "REGION",
+                          build=lambda cfg, f, r, apply_cloud_filters=True, ee_module=None: coll,
+                          ee_module=_fake_ee([]))
 
 
 def test_scene_inventory_handles_sensor_without_cloud_property(monkeypatch):
@@ -196,8 +222,9 @@ def test_scene_inventory_raises_runtime_error_on_length_mismatch(monkeypatch):
     # Regression for the live-EE bug: index.compute derives a brand-new image and
     # drops every property except system:time_start, so aggregate_array on a
     # dropped property silently returns [] instead of one value per scene.
-    # scene_inventory must fail loudly (RuntimeError naming the property and both
-    # lengths), not index a short array and raise a bare IndexError.
+    # scene_inventory must fail loudly (RuntimeError naming the property), not
+    # report every scene as "cloud fraction unavailable" -- which is what a
+    # silently empty column would otherwise produce.
     sensor = FakeSensor("sentinel2", "CLOUDY_PIXEL_PERCENTAGE")
     monkeypatch.setattr(I, "get_product", lambda s, i: (sensor, None))
     coll = FakeCollection({
@@ -205,7 +232,7 @@ def test_scene_inventory_raises_runtime_error_on_length_mismatch(monkeypatch):
         "region_cloud_fraction": [],   # dropped -- length mismatch vs. 2 timestamps
         "CLOUDY_PIXEL_PERCENTAGE": [5.0, 12.0],
     })
-    with pytest.raises(RuntimeError, match="misaligned"):
+    with pytest.raises(RuntimeError, match="region_cloud_fraction"):
         I.scene_inventory(_cfg(), "FRAME", "REGION",
                           build=lambda cfg, f, r, apply_cloud_filters=True, ee_module=None: coll,
                           ee_module=_fake_ee([]))
@@ -232,3 +259,31 @@ def test_write_inventory_writes_csv_and_logs_period_summary(tmp_path, monkeypatc
     assert lines[1] == "2022-01,2022-01-05,sentinel2,5.0,2.0,True,"
     assert "region cloud 34%" in lines[2]
     assert "2022-01: 2 scenes, 1 usable" in caplog.text
+
+
+def test_scene_inventory_aligns_columns_when_ee_drops_a_null_property(monkeypatch):
+    # Regression for the live-EE failure on the full Sentinel-2 archive: two
+    # edge-of-swath scenes had no valid pixel over the AOI, so reduceRegion
+    # returned null and aggregate_array returned 1390 fractions for 1392 scenes.
+    # Positional indexing cannot survive that -- every scene after the first drop
+    # would be attributed the NEXT scene's cloud cover. Columns are therefore
+    # joined on system:index, and the middle scene here must keep its own None.
+    sensor = FakeSensor("sentinel2", "CLOUDY_PIXEL_PERCENTAGE")
+    monkeypatch.setattr(I, "get_product", lambda s, i: (sensor, None))
+    coll = FakeSceneCollection([
+        {"system:index": "a", "system:time_start": _ms("2022-01-05"),
+         "region_cloud_fraction": 0.02, "CLOUDY_PIXEL_PERCENTAGE": 5.0},
+        {"system:index": "b", "system:time_start": _ms("2022-01-12"),
+         "region_cloud_fraction": None, "CLOUDY_PIXEL_PERCENTAGE": 9.0},
+        {"system:index": "c", "system:time_start": _ms("2022-01-20"),
+         "region_cloud_fraction": 0.50, "CLOUDY_PIXEL_PERCENTAGE": 12.0},
+    ])
+    records = I.scene_inventory(
+        _cfg(), "FRAME", "REGION",
+        build=lambda cfg, f, r, apply_cloud_filters=True, ee_module=None: coll,
+        ee_module=_fake_ee([]))
+
+    assert [r.date for r in records] == ["2022-01-05", "2022-01-12", "2022-01-20"]
+    assert [r.region_cloud_pct for r in records] == [2.0, None, 50.0]
+    assert [r.usable for r in records] == [True, False, False]
+    assert records[1].reason == "region cloud fraction unavailable (scene fully masked)"

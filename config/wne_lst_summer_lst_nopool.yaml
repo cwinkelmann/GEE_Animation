@@ -1,0 +1,52 @@
+# Measurement-grade twin of config/wne_lst_summer_lst.yaml.
+#
+# Identical except cross-year pooling is OFF. gap_fill borrows another
+# year's imagery for a month this year could not fill — harmless in a
+# showcase loop, wrong in a series you intend to plot, because a frame
+# labelled 2019-07 may hold 2021 pixels. Here every frame is real data
+# for its own period, so metadata.db can be read as a time series.
+#
+# The cost is holes: months with no usable Landsat pass are simply
+# absent rather than filled. That is the honest trade.
+name: wne_lst_summer_lst_nopool
+project: hnee-331218
+title: Grumsin Beech Forest
+subtitle: "Surface temperature, summer scale (15-45 \xB0C) \xB7 no gap-filling"
+aoi:
+  frame:
+    bbox:
+    - 13.7311
+    - 52.944
+    - 14.0623
+    - 53.028
+  region:
+    shapefile: docs/aoi/wne/wne.shp
+  region_max_cloud_percent: 20
+start: '2018-01-01'
+end: '2026-08-01'
+sensor: landsat
+index: lst
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+missions:
+- L8
+- L9
+viz:
+  min: 15.0
+  max: 45.0
+render:
+  fps: 2
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 10
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: '16:9'
+  upscale: lanczos
+  region_line_width: 5
+  quality: 8
+  raw_frames: true
+  geotiffs: true
+metadata: true

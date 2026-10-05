@@ -1,0 +1,55 @@
+# Harmonic-smoothed surface temperature -- the smooth, hole-free cut.
+#
+# NOT a composite of observations: every frame is a seasonal curve fitted
+# per pixel across 2018-2022 and evaluated at that frame's date. It is
+# labelled 'modelled' on-frame and cannot be combined with metadata.
+#
+# Pooling is off because the fit already spans the holes -- gap-filling
+# would add borrowed pixels to a curve that does not need them.
+#
+# Do NOT render this through scripts/render_chunked.py: each chunk would
+# fit its own curve, so the model would jump at every chunk boundary.
+name: wne_lst_harmonic
+project: hnee-331218
+title: Grumsin Beech Forest
+subtitle: Surface temperature, harmonic seasonal model
+aoi:
+  frame:
+    bbox:
+    - 13.7311
+    - 52.944
+    - 14.0623
+    - 53.028
+  region:
+    shapefile: docs/aoi/wne/wne.shp
+  region_max_cloud_percent: 20
+start: '2018-01-01'
+end: '2023-01-01'
+sensor: landsat
+index: lst
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+missions:
+- L8
+- L9
+viz:
+  min: 15.0
+  max: 45.0
+render:
+  fps: 2
+  interpolate: 5
+  interpolate_mode: auto
+  scale: 10
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: '16:9'
+  upscale: lanczos
+  region_line_width: 5
+  quality: 8
+  raw_frames: false
+  geotiffs: false
+metadata: false
+smooth: harmonic
+harmonics: 2

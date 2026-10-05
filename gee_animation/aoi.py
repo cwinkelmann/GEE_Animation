@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import ee
@@ -54,3 +55,33 @@ def frame_bbox_from_region(region_geom, buffer_m, ee_module=ee):
     xs = [pt[0] for pt in ring]
     ys = [pt[1] for pt in ring]
     return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def fit_bbox_to_aspect(bbox, aspect: float):
+    """Grow `bbox` to a target width/height ratio measured in METRES.
+
+    A degree of longitude is cos(latitude) shorter than a degree of latitude, so a
+    bbox that looks wide in degrees can be square on the ground — at 53 deg N the
+    factor is 0.6. Reshaping in degrees would therefore aim at the wrong shape.
+
+    Only the short side grows; the subject is never cropped out of frame. Returns
+    a new ``[minLon, minLat, maxLon, maxLat]``.
+    """
+    minlon, minlat, maxlon, maxlat = (float(v) for v in bbox)
+    clat, clon = (minlat + maxlat) / 2.0, (minlon + maxlon) / 2.0
+    m_per_lon = 111320.0 * math.cos(math.radians(clat))
+    if m_per_lon <= 0:                       # a pole-adjacent AOI: nothing sane to do
+        return [minlon, minlat, maxlon, maxlat]
+
+    w_m = (maxlon - minlon) * m_per_lon
+    h_m = (maxlat - minlat) * 110540.0
+    if w_m <= 0 or h_m <= 0 or aspect <= 0:
+        return [minlon, minlat, maxlon, maxlat]
+
+    if w_m / h_m < aspect:
+        w_m = h_m * aspect
+    else:
+        h_m = w_m / aspect
+    dlon = (w_m / 2.0) / m_per_lon
+    dlat = (h_m / 2.0) / 110540.0
+    return [clon - dlon, clat - dlat, clon + dlon, clat + dlat]

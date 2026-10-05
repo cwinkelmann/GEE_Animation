@@ -31,10 +31,18 @@ def test_run_orchestrates_pipeline(tmp_path):
         build=lambda cfg, frame, region: (calls.append(("build", frame, region)) or "COLL"),
         monthly_median=lambda coll, cfg: (calls.append(("monthly_median", coll)) or ["f1", "f2"]),
         anomaly=lambda frames, cfg, f, r, build: (calls.append(("anomaly", frames)) or frames),
+        # harmonic smoothing runs after anomaly; pass-through unless a test
+        # configures it, so the pipeline order stays observable in `calls`
+        smooth=lambda frames, coll, cfg: (calls.append(("smooth", frames)) or frames),
+        # region_only / relative run last, on the final field, with the REGION geometry
+        sharpen_local=lambda frames, cfg, f, r: (calls.append(("sharpen_local", frames)) or frames),
+        focus=lambda frames, cfg, region: (calls.append(("focus", frames, region)) or frames),
         render=lambda frames, cfg, geometry=None: (calls.append(("render", frames, geometry)) or [tmp_path / "t.gif"]),
     )
     out = run(str(cfg_path), deps=deps)
-    assert [c[0] for c in calls] == ["init", "parse", "parse", "build", "monthly_median", "anomaly", "render"]
+    assert [c[0] for c in calls] == ["init", "parse", "parse", "build",
+                                     "monthly_median", "anomaly", "smooth", "sharpen_local", "focus", "render"]
+    assert ("focus", ["f1", "f2"], "REGION") in calls
     assert ("build", "FRAME", "REGION") in calls
     assert ("render", ["f1", "f2"], "FRAME") in calls
     assert out == [tmp_path / "t.gif"]
@@ -168,5 +176,8 @@ def test_run_refuses_inventory_with_pool_years(tmp_path):
     deps.monthly_median = lambda coll, cfg: ["f1"]
     deps.build = lambda cfg, f, r: "COLL"
     deps.anomaly = lambda frames, cfg, f, r, build: frames
+    deps.smooth = lambda frames, coll, cfg: frames
+    deps.sharpen_local = lambda frames, cfg, f, r: frames
+    deps.focus = lambda frames, cfg, region: frames
     deps.render = lambda frames, cfg, geometry=None: [tmp_path / "t.gif"]
     assert run(str(cfg_path), deps=deps) == [tmp_path / "t.gif"]

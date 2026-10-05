@@ -1,0 +1,52 @@
+# Land surface temperature as a DEPARTURE FROM NORMAL, not an absolute value.
+#
+# Why: on an absolute ramp wide enough to span winter and summer (-3..46 C), a
+# real 2-3 C forest/field difference is ~5% of the ramp and vanishes into the
+# reds — measured over Grumsin, June 2016 was 28.2 C inside the reserve against
+# 30.5 C outside, and the frame still looked uniformly hot. A z-score re-centres
+# every month on its own normal, so the contrast is what the colour shows.
+#
+# Each pixel becomes (value - mean_for_that_calendar_month) / sd, against the
+# baseline below. The default viz is diverging and symmetric (-3..+3 sigma), so
+# blue = colder than normal, red = warmer than normal, white = normal.
+name: wne_lst_anomaly
+project: hnee-331218
+
+title: Grumsin Beech Forest
+subtitle: Surface temperature vs the 2014-2024 normal
+
+aoi:
+  frame: { bbox: [13.7311, 52.9440, 14.0623, 53.0280] }   # 22.2 x 9.35 km, fills 16:9
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 40
+
+start: "2018-01-01"
+end: "2026-08-01"
+
+sensor: landsat
+index: lst_smw
+cadence: monthly          # required: the climatology is per calendar MONTH, so a
+                          # quarter or a 10-day slice cannot be scored against it
+max_cloud_percent: 80
+draw_region: true
+
+anomaly: climatology
+baseline_years: [2014, 2024]   # L8/L9 era only, so the normal is not biased by
+                               # mixing TM/ETM+ thermal into the same statistic
+
+metadata: true            # inside/outside mean + p10/p90 of the ANOMALY itself
+
+# no viz block: anomaly picks its diverging default (-3..+3 sigma)
+
+render:
+  fps: 4
+  interpolate: 5
+  interpolate_mode: auto  # data-space: z-scores blend meaningfully
+  scale: 30
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: "16:9"
+  upscale: lanczos
+  region_line_width: 5
+  quality: 8

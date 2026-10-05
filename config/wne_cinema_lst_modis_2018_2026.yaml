@@ -1,0 +1,57 @@
+# MODIS daily land surface temperature (MOD11A1 Terra, 1 km) over Grumsin.
+#
+# The complement to the Landsat thermal runs, not a replacement. MODIS
+# acquires DAILY, so the cloud-locked months that leave Landsat with holes
+# (only 69 of 103 months survived without gap-filling) are almost always
+# covered. The cost is resolution: at 1 km this 22.2 x 9.35 km frame is
+# 22 x 9 pixels, so the reserve spans ~10 mixed pixels and the 2-3 C
+# forest/field contrast is averaged away. Use this for WHEN it was warm;
+# use the Landsat runs for WHERE.
+#
+# Terra overpasses ~10:30 local, so this misses peak afternoon heating.
+# upscale: nearest keeps the 1 km cells honest instead of smoothing them
+# into detail the data does not have.
+#
+# NO gap-filling: MODIS's daily revisit is the whole claim, so borrowing
+# another year's imagery would hide whether it actually delivers. The
+# observed-month count this run reports is the measurement -- compare it
+# against Landsat's 69 of 103.
+name: wne_cinema_lst_modis_2018_2026
+project: hnee-331218
+title: Grumsin Beech Forest
+subtitle: "Daily MODIS thermal, 1 km \xB7 UNESCO World Heritage site, Brandenburg"
+aoi:
+  frame:
+    bbox:
+    - 13.7311
+    - 52.944
+    - 14.0623
+    - 53.028
+  region:
+    shapefile: docs/aoi/wne/wne.shp
+  region_max_cloud_percent: 20
+start: '2018-01-01'
+end: '2026-08-01'
+sensor: modis_lst
+index: lst_modis
+cadence: monthly
+max_cloud_percent: 100
+draw_region: true
+viz:
+  min: -3
+  max: 46
+render:
+  fps: 2
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 1000
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: '16:9'
+  upscale: nearest
+  region_line_width: 5
+  quality: 8
+  raw_frames: true
+  geotiffs: true
+metadata: true

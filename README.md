@@ -46,11 +46,15 @@ PNG per month. Bands below are canonical roles (NIR/Red/Green/Blue/SWIR1/Thermal
 | EVI   | Sentinel-2 | `2.5·(NIR − Red) / (NIR + 6·Red − 7.5·Blue + 1)` — enhanced vegetation | `config/evi.example.yaml` (`wne_evi`) |
 | NDWI  | Sentinel-2 | `(Green − NIR) / (Green + NIR)` — open water (McFeeters) | `config/ndwi.example.yaml` (`wne_ndwi`) |
 | NDMI  | Sentinel-2 | `(NIR − SWIR1) / (NIR + SWIR1)` — canopy/soil moisture | `config/ndmi.example.yaml` (`wne_ndmi`) |
+| NBR   | Sentinel-2 | `(NIR − SWIR2) / (NIR + SWIR2)` — burn/disturbance ratio; drops when canopy is removed (fire, windthrow, logging) | `config/nbr.example.yaml` (`wne_nbr`) |
+| NDRE  | Sentinel-2 | `(NIR − RedEdge) / (NIR + RedEdge)` — chlorophyll/nitrogen, slower to saturate than NDVI | `config/ndre.example.yaml` (`wne_ndre`) |
 | RGB   | any | true colour composite: R=Red, G=Green, B=Blue | `config/rgb.example.yaml` (`wne_rgb`) |
 | CIR   | any | false-colour infrared: R←NIR, G←Red, B←Green (vegetation reads red) | `config/cir.example.yaml` (`wne_cir`) |
 | LST   | Landsat | `ST_B × 0.00341802 + 149.0 − 273.15` °C — USGS C2 L2 ST band | `config/lst.example.yaml` (`wne_lst`) |
 | LST (SMW) | Landsat | `A·Tb/ε + B/ε + C` — Ermida (2020) Statistical Mono-Window from TOA brightness temp, ASTER-GED emissivity ε, NCEP water vapour | `config/lst_smw.example.yaml` (`wne_lst_smw`) |
 | LST-sharp | Landsat | `LST − 16·(NDVI − NDVI₁₀₀ₘ)` — NDVI-sharpened LST (approximation) | `config/lst_sharp.example.yaml` (`wne_lst_sharp`) |
+| LST-RF (experimental) | Landsat + Sentinel-2 | random forest `LST₁₀₀ₘ ~ NDVI, NIRv, NDBI, MNDWI, DEM`, applied at 20 m, coarse residual added back | `config/lst_rf.example.yaml` (`wne_lst_rf`) |
+| Land cover | Dynamic World | 9-class map (Google/WRI, 10 m); categorical — swatch legend, no interpolation | `config/wne_landcover.example.yaml` (`wne_landcover`) |
 | NDVI  | MODIS | `(NIR − Red) / (NIR + Red)` on MOD09A1 (500 m) | `config/modis.example.yaml` (`wne_modis_ndvi`) |
 
 Two Landsat LST methods are available: `lst` = the USGS Collection-2 Level-2
@@ -65,20 +69,26 @@ rides the ISS — its coverage edge sits at ~53° N, right at this AOI's latitud
 Grumsin would be edge-of-swath at best. Watch the EE catalog release notes for wider
 ingest.)
 
-Every frame is annotated: an info bar (top) with the formula and bands used, a
-value colorbar (indices only), the region outline, a ground-distance scale bar,
-and the month.
+Every frame is annotated for a general audience: a title header (your `title`/
+`subtitle`, or the product's plain-language name), a legend naming the variable
+with numeric ticks, word anchors ("water" → "dense vegetation") and a no-data
+swatch, the region outline, a scale bar and north arrow, the automatic data
+credit (Copernicus/USGS/NASA), and a plain-language status line per frame —
+"May 2022 · 3 passes", "January 2021 · image from 2023 · 1 pass" for gap-filled
+frames, "between May and June 2022 · 36%" with a hollow marker dot for
+interpolation-generated ones.
 
 ### Example frames
 
-The full output in motion — a Sentinel-2 **NDVI timelapse** (monthly medians over
-2022) of the WNE / Grumsin beech-forest AOI, showing spring green-up and autumn
-senescence:
+The full output in motion — the Sentinel-2 **NDVI timelapse** (monthly medians,
+2021–2022) of the WNE / Grumsin beech-forest AOI, showing spring green-up and
+autumn senescence:
 
-<p align="center"><img src="docs/images/example_ndvi_timelapse.gif" width="480" alt="Animated NDVI timelapse over the WNE / Grumsin AOI, 2022"></p>
+<p align="center"><img src="docs/images/example_ndvi_timelapse.gif" width="480" alt="Animated NDVI timelapse over the WNE / Grumsin AOI, 2021-2022"></p>
 
-And one representative still frame per product (July 2022), rendered at the **4K
-16:9** screen preset (`preset: 4k`, `aspect: 16:9`) and shown downscaled here:
+And one representative still frame per product (July 2022), taken from the
+five-year showcase renders (`config/wne_cinema_*_5yr.yaml` — 1080p, 16:9,
+cross-year gap-fill, cinema-paced interpolation) and shown downscaled here:
 
 <table>
 <tr>
@@ -98,7 +108,12 @@ And one representative still frame per product (July 2022), rendered at the **4K
 <td align="center"><b>LST (SMW)</b> Ermida 2020 (Landsat)<br><img src="docs/images/example_lst_smw.png" width="360"></td>
 </tr>
 <tr>
-<td align="center" colspan="2"><b>LST-sharp</b> NDVI-sharpened LST (Landsat)<br><img src="docs/images/example_lst_sharp.png" width="360"></td>
+<td align="center"><b>LST-sharp</b> NDVI-sharpened LST (Landsat)<br><img src="docs/images/example_lst_sharp.png" width="360"></td>
+<td align="center"><b>NDVI</b> (MODIS, 500 m)<br><img src="docs/images/example_modis_ndvi.png" width="360"></td>
+</tr>
+<tr>
+<td align="center"><b>LST-RF</b> forest-sharpened LST to 20 m, experimental (Landsat + Sentinel-2)<br><img src="docs/images/example_lst_rf.png" width="360"></td>
+<td align="center"><b>LST-RF Δ</b> reserve only, departure from the reserve mean<br><img src="docs/images/example_lst_rf_delta.png" width="360"></td>
 </tr>
 </table>
 
@@ -107,8 +122,15 @@ Generate them all in one go:
 ```bash
 for c in example evi.example ndwi.example ndmi.example rgb.example cir.example \
          lst.example lst_smw.example lst_sharp.example modis.example; do
-  gee-animation --config "config.$c.yaml"
+  gee-animation --config "config/$c.yaml"
 done
+```
+
+For the presentation-grade five-year videos of every product (the frames above,
+in motion — YouTube/slide-ready, ~5½ min each):
+
+```bash
+for c in config/wne_cinema_*_5yr.yaml; do gee-animation --config "$c"; done
 ```
 
 Any reflectance product (`ndvi`, `evi`, `ndwi`, `ndmi`, `rgb`, `cir`) runs on any
@@ -133,6 +155,18 @@ click *Generate*. The MP4 plays inline with a GIF download, a **frame gallery**
 previews each month with a **ZIP of the single PNGs** to download, and a **region
 time-series chart** (the index averaged over the AOI, one point per month) is
 shown alongside it.
+
+Two accordions expose the thermal work: **Thermal sharpening & region focus**
+(train the `lst_rf` forest locally, show the region only, render each frame
+relative to its own region mean, draw the pixel grid, choose the upscaling filter)
+and **Seasonal model & anomaly** (harmonic smoothing with its number of harmonics,
+the anomaly mode and its baseline years). They map one-to-one onto the config keys
+`sharpen`, `region_only`, `relative`, `render.pixel_grid`, `render.upscale`,
+`smooth`/`harmonics` and `anomaly`/`baseline_years`, run through the same steps
+in the same order as the CLI, and the combinations the config refuses are
+reported as messages, not tracebacks. Locally sharpened runs skip the
+inside/outside chart (their frames are local rasters, not Earth Engine images)
+and report where the per-frame models and their out-of-bag scores were written.
 
 ## Docker
 
@@ -194,8 +228,18 @@ See `config/example.yaml` (Sentinel-2 NDVI) or `config/lst.example.yaml` (Landsa
   - **`frame`**: the animation extent (rectangle); aspect ratio is preserved when rendering.
   - **`region`**: the important region (polygon); only scenes where cloud coverage over this region is less than `region_max_cloud_percent` (default: 10%) are included, and its outline is drawn on each frame when `draw_region` is set.
 - **`start`/`end`**: ISO dates (end exclusive).
+- **`cadence`** (default `monthly`): how much time each frame composites — `monthly`, `semimonthly`, `10day`, or `quarterly` (whole calendar quarters, labelled "January–March 2022"; the widest bin, so even winter Landsat thermal composites come out nearly hole-free). Sub-monthly cadences warn for `landsat` (its 16-day repeat leaves most fine bins empty).
+- **`title`** / **`subtitle`** (optional): the frame header. `title` is the large first line (defaults to the index's plain-language name, e.g. "Vegetation greenness (NDVI)"); `subtitle` shares line 2 with the provenance notices (pooling/interpolation), which always win the space — the run warns if the subtitle had to be dropped.
+- **`credit`** (optional): the bottom-right attribution line. Omit the key for the automatic sensor credit (Copernicus/USGS/NASA — for Sentinel-2 the Copernicus notice is licence-required on published products); any string overrides it verbatim; an explicit `""` omits the line (the run warns for Sentinel-2).
+- **`mask_clouds`** (default `true`): per-pixel QA cloud masking. `false` keeps real clouds in the imagery instead of grey no-data cutouts — allowed only for the composites (`rgb`/`cir`), where a cloud looks like a cloud; palette indices always mask, because a colorized cloud would read as a real low value. Scene-level cloud filters apply either way.
+- **`pool_years`** / **`pool_strategy`** (optional): cross-year pooling `[firstYear, lastYear]`. `gap_fill` keeps the requested year wherever it has data and borrows another year's same calendar period only for empty ones (every borrowed frame is labelled "image from <year>"); `least_cloudy` re-picks every frame from the clearest pooled year (cosmetic, not a time series); `median` blends all pooled years.
 - **`sensor`**: `sentinel2`, `landsat` (Collection-2 L2, missions 4/5/7/8/9 harmonized — ~1984→present), or `modis` (MOD09A1, 8-day 500 m).
-- **`index`**: `ndvi`, `evi`, `ndwi` (McFeeters, open water), `ndmi` (moisture) — all sensors; or `lst` (USGS C2 L2 ST), `lst_smw` (Ermida et al. 2020 Statistical Mono-Window), or `lst_sharp` (Landsat only). `lst_sharp` is an NDVI-sharpened LST (an approximation — **not** the real ECOSTRESS mission; that product exists in EE as `NASA/ECOSTRESS/L2T_LSTE/V2` but is LA-only for now and its ISS orbit barely reaches this AOI's latitude).
+- **`index`**: `ndvi`, `evi`, `ndwi` (McFeeters, open water), `ndmi` (moisture) — all sensors; `ndre` (red-edge/chlorophyll, Sentinel-2 only, uses the 20 m B5 band); or `lst` (USGS C2 L2 ST), `lst_smw` (Ermida et al. 2020 Statistical Mono-Window), or `lst_sharp` (Landsat only). `lst_sharp` is an NDVI-sharpened LST (an approximation — **not** the real ECOSTRESS mission; that product exists in EE as `NASA/ECOSTRESS/L2T_LSTE/V2` but is LA-only for now and its ISS orbit barely reaches this AOI's latitude).
+- **`sharpen: local`** (optional; `index: lst_rf` only): train the sharpening forest on your machine instead of in Earth Engine. EE then only exports two cached 20 m GeoTIFFs per frame (the LST composite and the Sentinel-2 predictors); **one scikit-learn forest per frame** is trained on that frame's own 100 m cells, scored out-of-bag (`<out_dir>/<name>_models.csv`: cells, OOB R², RMSE) and saved with joblib under `<out_dir>/models/<name>/<label>.joblib`. Pooling frames across years was tried and rejected: the index→temperature relation does not transfer between dates and the pooled field carried three times the high-frequency noise. Needs the `ml` extra (`pip install -e ".[ml]"`). Not combinable with `metadata` or `anomaly`.
+- **`region_only`** (optional, default false): mask imagery outside `aoi.region` (rendered as the no-data grey), so the colour range can be spent on the subject alone. **`relative: region_mean`** (optional): each frame becomes value − its own region mean, in the index's units (K for a thermal index); defaults to a symmetric ±4 diverging `viz`. Absolute levels differ between years, the within-region contrast stays comparable. Both change the pixels (not cache hits).
+- **`overlay`** (optional): iso-lines of an external single-band GeoTIFF drawn over every frame, e.g. the density of fallen stems from a drone stem map: `overlay: {raster: docs/aoi/r12/r12_stem_density_20m.tif, levels: [20, 60], colors: ["#ffb000", "#ff2a2a"], line_px: 2}` outlines every cell at or above each level (one colour per level) in the frame's projection, under the region outline. `mode: fill` paints the band between consecutive levels instead — the form for a continuous surface such as a kernel density (`docs/experiments/windthrow/stem_density_raster.py --kde 40` on the experiment branch writes one in m per ha) — and `label:` adds a legend row with the level swatches. Any CRS; nearest-neighbour, so cells stay blocks. Drawn locally (a cache hit); needs the `ml` extra for rasterio.
+- **`smooth: harmonic`** / **`harmonics`** (optional; single-band indices, not `lst_rf`, not with `metadata`): fit a seasonal model per pixel over the whole run (1–5 harmonics, default 2) and evaluate it at each frame's date — hole-free winters for thermal products, at the price that every frame is model output rather than an observation (the header says so).
+- **`allow_slc_off`** (optional; Landsat only, default false): Landsat 7 scenes after 2003-05-31 carry the scan-line-corrector stripes and are dropped by default (the run logs a note); set `true` to keep them, e.g. to bridge the 2012–2013 gap between L5 and L8.
 - **`missions`** (optional; Landsat only): whitelist of missions, e.g. `[L8, L9]`. Thermal indices (`lst`, `lst_smw`, `lst_sharp`) default to **L8/L9** — Landsat 7's SLC-off gaps and the coarse TM/ETM+ thermal band otherwise stripe a few-scene median. Reflectance indices default to all missions (4/5/7/8/9).
 - **`min_scenes`** (default `1`): minimum scenes per monthly median; months with fewer are skipped. Every frame is annotated with its scene count (`n=<count>`) — a median of 1–2 scenes says more about that morning's weather than the land, so raise this to reject thin composites.
 - **`max_cloud_percent`**: scene-level pre-filter threshold (Sentinel-2/Landsat only; MODIS has no per-scene cloud metadata, so this is ignored and only the region filter applies).
@@ -207,6 +251,9 @@ See `config/example.yaml` (Sentinel-2 NDVI) or `config/lst.example.yaml` (Landsa
 - **`render`** (fps/scale/dimensions/crs/preset/aspect/upscale): rendering parameters.
   - `render.crs` sets the output projection — omit for EPSG:4326 (plate carrée; at 53° N the x-axis is compressed by `cos(lat)`, so pixels are non-square), or set `auto` for the UTM zone from the AOI centroid (square pixels; the scale bar is then correct on both axes), or an explicit code like `EPSG:25833`.
   - **Screen output:** `render.preset` (`4k` / `1440p` / `1080p` / `720p`, or an integer long-edge) upscales the animation to a display resolution — the imagery is still *fetched* at the honest native resolution, then enlarged with `render.upscale` (`lanczos` default / `bicubic` / `bilinear` / `nearest`) while annotations are redrawn crisp at the output size. `render.aspect` (`match` default / `16:9` / `4:3` / `1:1` / `21:9` / …) letterboxes the frame to a target aspect. The MP4 is full resolution; the GIF is capped to ≤1280 px so it stays preview-sized.
+  - **Smooth playback:** `render.interpolate: N` generates N blended frames between consecutive observations (a skipped period gets proportionally more, so playback speed tracks elapsed time). Generated frames are labelled ("between May and June 2022 · 36%") and marked with a hollow dot — they are for watching, not citing. `render.interpolate_mode` is `auto` (data-space for single-band indices, crossfade for `rgb`/`cir`).
+  - **Output knobs:** `render.quality` (1–10, ffmpeg MP4 quality; default ≈5), `render.gif: false` skips the slow GIF preview (interpolated runs default it off), `render.frames: false` skips per-frame PNGs, `render.workers` parallelizes the thumbnail fetches, `render.region_line_width` widens the region outline, and `render.pixel_grid: true` traces the fetched raster's cell edges over the imagery (the product's native pixels, e.g. ~100 m for Landsat LST; pair with `upscale: nearest` for flat blocks).
+  - **Caching:** raw thumbnails are cached on disk (platform cache dir; override with `render.cache_dir` or `$GEE_ANIMATION_CACHE_DIR`), so re-renders that only change client-side settings — fps, interpolation, titles, palette, quality, preset/aspect — skip every download.
 - **`out_dir`**: output directory (default `out`).
 
 Default GEE project is `hnee-331218`.
@@ -216,6 +263,10 @@ fixed `viz` range (or per-index default) so colour is comparable across frames, 
 the month label and a shared index colorbar. Cloud/no-data pixels are rendered in
 a neutral grey rather than an index colour.
 
+**How each product is computed** — formulas, per-sensor cloud screening, native
+resolutions, viz defaults, the per-frame statistics table and what a re-render
+costs: [`docs/rendering-products.md`](docs/rendering-products.md).
+
 **Adding new sensors/indices:** register them in `gee_animation/products.py` (define a `Sensor` subclass and an `Index` function, then add both to the registry).
 
 ## Notes / limitations (v1)
@@ -224,8 +275,7 @@ a neutral grey rather than an index colour.
   render is never finer than the data (Landsat thermal 100 m, MODIS 500 m,
   Sentinel-2 10/20 m, Landsat reflectance 30 m); set `allow_upsample: true` to render
   finer anyway (a warning names the true native GSD). `render.scale` is informational.
-- Sensors: Sentinel-2 and Landsat. One cadence (monthly) is supported; config
-  is structured to add more.
+- Cadences: `monthly` (default), `semimonthly`, `10day`, `quarterly`.
 - Sensors: Sentinel-2, Landsat, MODIS. Indices: NDVI, EVI, NDWI, NDMI (all
   sensors), LST, `lst_smw` and `lst_sharp` (Landsat only). Adding new indices/sensors
   requires registry changes in `products.py`.
@@ -243,6 +293,17 @@ a neutral grey rather than an index colour.
   texture — the conservation is unit-tested in `imaging.distrad_sharpen`). NIRv is the
   predictor because NDVI saturates in a closed canopy. It is **not** the real ECOSTRESS
   mission (`NASA/ECOSTRESS/L2T_LSTE/V2` is in EE but LA-only and edge-of-coverage here).
+- `lst_rf` (experimental) sharpens the same 100 m LST to the Sentinel-2 **20 m** grid with a
+  random forest `LST₁₀₀ₘ ~ NDVI, NIRv, NDBI, MNDWI, DEM` (Sentinel-2 SR median over the
+  frame's month ± 30 days, Copernicus DEM), applied at 20 m with the coarse residual added
+  back so every 100 m cell still averages to the observed temperature. Honest resolution is
+  20 m because NDBI and MNDWI need the 20 m SWIR band. A pre-registered degrade-and-recover
+  test (300 m → 100 m) showed it does **not** beat "no sharpening" on measured data — the
+  Landsat thermal field has almost no variance below ~300 m — so treat the 20 m detail as
+  index texture carrying the observed coarse temperature, and use only the within-frame
+  contrast quantitatively (`region_only` + `relative: region_mean`). `sharpen: local`
+  moves the training off Earth Engine; see the decision log in
+  `docs/superpowers/plans/2026-09-17-lst-rf-sharpening.md`.
 - **MODIS is being decommissioned.** Terra & Aqua begin shutting down in late
   2026 / early 2027 (exact dates vary by NASA source — treat as imminent), and both
   platforms are already drifting from their designed orbits, shifting equatorial

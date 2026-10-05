@@ -28,10 +28,19 @@ class _FakeDict:
         return {k: v.getInfo() for k, v in self.mapping.items()}
 
 
+class _FakeReducer(str):
+    """A reducer token that can be combined, mirroring ee.Reducer's fluent API."""
+    def combine(self, other, sharedInputs=False):
+        return _FakeReducer(f"{self}+{other}")
+
+
 def _fake_ee(calls=None, max_keys=None):
     calls = [] if calls is None else calls
     return types.SimpleNamespace(
-        Reducer=types.SimpleNamespace(min=lambda: "MIN", mean=lambda: "MEAN"),
+        Reducer=types.SimpleNamespace(
+            min=lambda: _FakeReducer("MIN"),
+            mean=lambda: _FakeReducer("MEAN"),
+            percentile=lambda ps: _FakeReducer(f"P{list(ps)}")),
         Dictionary=lambda mapping: _FakeDict(mapping, calls, max_keys))
 
 
@@ -68,17 +77,35 @@ def _legacy_frame_stats(frames, region_geom, scale, mean_band, ee_module):
 
 
 class _Band:
-    """image.select(band): its reduceRegion mean over the AOI -> `mean`."""
-    def __init__(self, mean): self.mean = mean
-    def reduceRegion(self, reducer, **kw): return _rr(self.mean)
+    """image.select(band): reduceRegion with the combined reducer -> {mean,p10,p90}.
+
+    Returns the reduceRegion object itself (a deferred DICT), matching
+    `metadata._stats_expr`, rather than the single deferred value the
+    clear-fraction path takes through `_reduce_expr`.
+    """
+    def __init__(self, mean, p10=None, p90=None):
+        self.mean, self.p10, self.p90 = mean, p10, p90
+
+    def reduceRegion(self, reducer, **kw):
+        stats = (None if self.mean is None else
+                 {"INDEX_mean": self.mean, "INDEX_p10": self.p10,
+                  "INDEX_p90": self.p90})
+        # Serves both callers: .getInfo() -> the stats dict (metadata._stats_expr,
+        # the current path) and .values().get(0) -> the bare mean (the legacy
+        # single-value path the parity reference still exercises).
+        return types.SimpleNamespace(
+            getInfo=lambda: stats,
+            values=lambda: types.SimpleNamespace(
+                get=lambda i: types.SimpleNamespace(getInfo=lambda: self.mean)))
 
 
 class _Img:
-    """Fakes mask().reduce(min).reduceRegion(mean) -> clear, and select(b).reduceRegion -> mean."""
-    def __init__(self, clear, mean=None): self.clear, self.mean = clear, mean
+    """mask().reduce(min).reduceRegion(mean) -> clear; select(b) -> a _Band."""
+    def __init__(self, clear, mean=None, p10=None, p90=None):
+        self.clear, self.mean, self.p10, self.p90 = clear, mean, p10, p90
     def mask(self): return self
     def reduce(self, r): return self
-    def select(self, band): return _Band(self.mean)
+    def select(self, band): return _Band(self.mean, self.p10, self.p90)
     def reduceRegion(self, reducer, **kw): return _rr(self.clear)
 
 
@@ -87,8 +114,8 @@ def test_frame_stats_reports_cloud_and_mean_over_aoi():
               Frame("2022-09", _Img(None, None), 1)]
     rows = metadata.frame_stats(frames, "REGION", 30, mean_band="INDEX", ee_module=_fake_ee())
     # cloud fraction = 1 - clear over the AOI; aoi_mean = mean index value over the AOI
-    assert rows == [("2022-07", 3, 0.1, 22.5), ("2022-08", 4, 0.0, 25.0),
-                    ("2022-09", 1, 1.0, None)]
+    assert rows == [("2022-07", 3, 0.1, 22.5, None, None, None, None, None), ("2022-08", 4, 0.0, 25.0, None, None, None, None, None),
+                    ("2022-09", 1, 1.0, None, None, None, None, None, None)]
 
 
 def test_frame_stats_uses_the_clean_period_key_for_a_pooled_frame():
@@ -98,7 +125,7 @@ def test_frame_stats_uses_the_clean_period_key_for_a_pooled_frame():
     # (name, month), so an arrow-bearing month would desync pooled vs. non-pooled runs.
     frames = [Frame("2022-05", _Img(0.9, 22.5), 1, 2021)]
     rows = metadata.frame_stats(frames, "REGION", 30, mean_band="INDEX", ee_module=_fake_ee())
-    assert rows == [("2022-05", 1, 0.1, 22.5)]
+    assert rows == [("2022-05", 1, 0.1, 22.5, None, None, None, None, None)]
     assert "←" not in rows[0][0]
 
 
@@ -106,7 +133,7 @@ def test_frame_stats_omits_mean_when_no_band():
     # composites (rgb/cir) pass mean_band=None -> aoi_mean is null
     rows = metadata.frame_stats([Frame("2022-07", _Img(0.9, 22.5), 3)],
                                 "REGION", 30, mean_band=None, ee_module=_fake_ee())
-    assert rows == [("2022-07", 3, 0.1, None)]
+    assert rows == [("2022-07", 3, 0.1, None, None, None, None, None, None)]
 
 
 def _frames(n, clear=0.9, mean=22.5):
@@ -163,7 +190,8 @@ def test_frame_stats_halves_the_chunk_when_a_request_hits_the_memory_limit():
     # only requests of <= 8 keys (4 frames) survive — forces two halvings from 16
     rows = metadata.frame_stats(frames, "REGION", 30, mean_band="INDEX",
                                 ee_module=_fake_ee(calls, max_keys=8))
-    assert rows == [(f"2022-{i:02d}", i, 0.1, float(i)) for i in range(1, n + 1)]
+    assert rows == [(f"2022-{i:02d}", i, 0.1, float(i), None, None, None, None, None)
+                    for i in range(1, n + 1)]
     # it backed off to a surviving chunk and stayed there rather than re-failing
     assert max(len(c) for c in calls[-3:]) <= 8
     assert len(calls) < n                       # still not one round trip per frame
@@ -191,7 +219,9 @@ def test_frame_stats_reraises_an_unrelated_ee_error_without_retrying():
         raise ee.EEException("Image.select: Pattern 'INDEX' did not match any bands.")
 
     fake = types.SimpleNamespace(
-        Reducer=types.SimpleNamespace(min=lambda: "MIN", mean=lambda: "MEAN"),
+        Reducer=types.SimpleNamespace(
+            min=lambda: _FakeReducer("MIN"), mean=lambda: _FakeReducer("MEAN"),
+            percentile=lambda ps: _FakeReducer(f"P{list(ps)}")),
         Dictionary=lambda mapping: types.SimpleNamespace(getInfo=lambda: boom(mapping)))
     with pytest.raises(ee.EEException, match="did not match any bands"):
         metadata.frame_stats(_frames(30), "REGION", 30, mean_band="INDEX", ee_module=fake)
@@ -236,8 +266,11 @@ def test_frame_stats_matches_the_pre_batching_implementation(mean_band, chunk_si
               Frame("2022-11", _Img(0.5, None), 0),         # mean reduces to null
               Frame("2022-12", _Img(0.7, 19.0), 2, 2021)]   # pooled frame
     args = (frames, "REGION", 30, mean_band)
-    assert (metadata.frame_stats(*args, ee_module=_fake_ee(), chunk_size=chunk_size)
-            == _legacy_frame_stats(*args, ee_module=_fake_ee()))
+    rows = metadata.frame_stats(*args, ee_module=_fake_ee(), chunk_size=chunk_size)
+    # The legacy reference predates the distribution columns, so it pins the four
+    # fields it computed. p10/p90 and the outside area are covered separately by
+    # test_frame_stats_collects_quantiles_inside_and_outside.
+    assert [r[:4] for r in rows] == _legacy_frame_stats(*args, ee_module=_fake_ee())
 
 
 def test_frame_stats_keeps_frames_distinct_across_chunk_boundaries(mean_band="INDEX"):
@@ -247,20 +280,21 @@ def test_frame_stats_keeps_frames_distinct_across_chunk_boundaries(mean_band="IN
     frames = [Frame(f"f{i}", _Img(i / 100.0, float(i)), i) for i in range(n)]
     rows = metadata.frame_stats(frames, "REGION", 30, mean_band="INDEX",
                                 ee_module=_fake_ee())
-    assert rows == [(f"f{i}", i, round(1.0 - i / 100.0, 4), float(i)) for i in range(n)]
+    assert rows == [(f"f{i}", i, round(1.0 - i / 100.0, 4), float(i),
+                     None, None, None, None, None) for i in range(n)]
 
 
 def test_write_db_roundtrip_and_upsert(tmp_path):
     db = tmp_path / "metadata.db"
     run = {"name": "wne_lst", "sensor": "landsat", "index": "lst"}
-    metadata.write_db(db, run, [("2022-07", 3, 0.1, 22.5), ("2022-08", 4, 0.0, 25.0)])
+    metadata.write_db(db, run, [("2022-07", 3, 0.1, 22.5, None, None, None, None, None), ("2022-08", 4, 0.0, 25.0, None, None, None, None, None)])
     con = sqlite3.connect(db)
     rows = con.execute("SELECT month, n_scenes, aoi_cloud_fraction, aoi_clear_fraction, "
                        "aoi_mean FROM frame_clouds ORDER BY month").fetchall()
     con.close()
     assert rows == [("2022-07", 3, 0.1, 0.9, 22.5), ("2022-08", 4, 0.0, 1.0, 25.0)]
     # re-running the same (name, month) replaces the row rather than duplicating
-    metadata.write_db(db, run, [("2022-07", 5, 0.25, 20.0)])
+    metadata.write_db(db, run, [("2022-07", 5, 0.25, 20.0, None, None, None, None, None)])
     con = sqlite3.connect(db)
     got = con.execute("SELECT n_scenes, aoi_cloud_fraction, aoi_mean FROM frame_clouds "
                       "WHERE month='2022-07'").fetchone()
@@ -280,8 +314,66 @@ def test_write_db_migrates_pre_aoi_mean_schema(tmp_path):
     con.commit()
     con.close()
     metadata.write_db(db, {"name": "new", "sensor": "landsat", "index": "lst"},
-                      [("2022-06", 4, 0.1, 21.0)])
+                      [("2022-06", 4, 0.1, 21.0, None, None, None, None, None)])
     con = sqlite3.connect(db)
     rows = con.execute("SELECT month, aoi_mean FROM frame_clouds ORDER BY month").fetchall()
     con.close()
     assert rows == [("2021-06", None), ("2022-06", 21.0)]
+
+
+def test_frame_stats_collects_quantiles_inside_and_outside():
+    # The point of the distribution columns: a forest's coolest tenth against the
+    # surrounding fields' hottest tenth is the contrast the animation shows, and it
+    # moves differently from the mean. Inside and outside are reduced separately.
+    inside = _Img(0.9, mean=22.5, p10=18.0, p90=27.0)
+    frames = [Frame("2022-07", inside, 3)]
+    rows = metadata.frame_stats(frames, "REGION", 30, mean_band="INDEX",
+                                ee_module=_fake_ee(), outside_geom="OUTSIDE")
+    label, n, cloud, a_mean, a_p10, a_p90, o_mean, o_p10, o_p90 = rows[0]
+    assert (label, n, cloud) == ("2022-07", 3, 0.1)
+    assert (a_mean, a_p10, a_p90) == (22.5, 18.0, 27.0)
+    # the same fake image backs both areas here, so outside mirrors inside —
+    # what this pins is that the outside reducers RAN and were unpacked
+    assert (o_mean, o_p10, o_p90) == (22.5, 18.0, 27.0)
+
+
+def test_frame_stats_leaves_outside_null_when_no_outside_geometry():
+    # A run without a frame geometry (or an api caller that omits it) must still
+    # produce rows — with the outside columns null, not missing.
+    frames = [Frame("2022-07", _Img(0.9, mean=22.5, p10=18.0, p90=27.0), 3)]
+    rows = metadata.frame_stats(frames, "REGION", 30, mean_band="INDEX",
+                                ee_module=_fake_ee())
+    assert rows[0][3:6] == (22.5, 18.0, 27.0)
+    assert rows[0][6:] == (None, None, None)
+
+
+def test_stats_expr_combines_percentiles_into_one_reduction():
+    # One reduceRegion per area per frame, not three: the percentiles share the
+    # mean's pixel scan, so the batching in frame_stats is unaffected.
+    seen = {}
+    class _Probe:
+        def reduceRegion(self, reducer, **kw):
+            seen["reducer"] = str(reducer)
+            seen["geometry"] = kw.get("geometry")
+            return "EXPR"
+    ee_fake = _fake_ee()
+    assert metadata._stats_expr(_Probe(), "GEOM", 30, ee_fake) == "EXPR"
+    assert seen["geometry"] == "GEOM"
+    assert seen["reducer"] == "MEAN+P[10, 90]"      # combined, single reduction
+
+
+def test_write_db_stores_and_migrates_the_distribution_columns(tmp_path):
+    db = tmp_path / "metadata.db"
+    run = {"name": "wne_lst", "sensor": "landsat", "index": "lst"}
+    # an old DB written before the distribution columns existed
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE frame_clouds (name TEXT, sensor TEXT, index_name TEXT, "
+                "month TEXT, n_scenes INTEGER, aoi_cloud_fraction REAL, "
+                "aoi_clear_fraction REAL, aoi_mean REAL, PRIMARY KEY (name, month))")
+    con.commit(); con.close()
+    metadata.write_db(db, run, [("2022-07", 3, 0.1, 22.5, 18.0, 27.0, 25.1, 20.0, 31.0)])
+    con = sqlite3.connect(db)
+    got = con.execute("SELECT aoi_mean, aoi_p10, aoi_p90, outside_mean, outside_p10, "
+                      "outside_p90 FROM frame_clouds WHERE month='2022-07'").fetchone()
+    con.close()
+    assert got == (22.5, 18.0, 27.0, 25.1, 20.0, 31.0)

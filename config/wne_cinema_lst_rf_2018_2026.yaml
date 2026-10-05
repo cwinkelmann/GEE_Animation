@@ -1,0 +1,38 @@
+# Cinema set, full archive: RF-sharpened Landsat surface temperature (lst_rf),
+# same frame, look and viz as wne_cinema_lst_2018_2026. EXPERIMENTAL product: the
+# 20 m detail is Sentinel-2 texture carrying the observed 100 m temperature
+# (docs/superpowers/plans/2026-09-17-lst-rf-sharpening.md). One forest per month.
+name: wne_cinema_lst_rf_2018_2026
+project: hnee-331218
+title: Grumsin Beech Forest
+subtitle: UNESCO World Heritage site, Brandenburg, Germany
+aoi:
+  frame: { bbox: [13.7311, 52.9440, 14.0623, 53.0280] }  # 22.2 x 9.35 km fills the 16:9 place box
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 20
+start: "2018-01-01"
+end: "2026-08-01"
+sensor: landsat
+index: lst_rf
+sharpen: local                 # forest trained on this machine; EE only exports composites
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+missions: [L8, L9]
+pool_years: [2018, 2026]
+pool_strategy: gap_fill
+viz: { min: -3, max: 46 }      # measured 2-yr p1/p99
+render:
+  fps: 2
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 20                      # native grid of the sharpened product (Sentinel-2 SWIR)
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: "16:9"
+  upscale: lanczos
+  region_line_width: 5
+  quality: 8
+  raw_frames: true               # keep the map-only image per observed month
+  geotiffs: true                 # georeferenced float export per observed month

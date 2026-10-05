@@ -30,7 +30,8 @@ def _fake_deps(tmp_path, captured, frames=None):
         build=lambda cfg, f, r: captured.update(cfg=cfg) or "COLL",
         monthly_median=lambda coll, cfg: frames,
         anomaly=lambda frames_, cfg, f, r, build: frames_,
-        metadata=lambda frames_, cfg, region: str(tmp_path / "metadata.db"),
+        metadata=lambda frames_, cfg, region, frame_geom=None: str(
+            tmp_path / "metadata.db"),
         render=render,
         timeseries=lambda frames_, region, frame, scale: [(f.label, 0.7, 0.4) for f in frames_],
         render_chart=render_chart,
@@ -68,7 +69,8 @@ def test_animation_metadata_reads_db(tmp_path):
     from gee_animation import metadata
     db = tmp_path / "metadata.db"
     metadata.write_db(db, {"name": "landsat_lst", "sensor": "landsat", "index": "lst"},
-                      [("2023-06", 3, 0.1, 22.0), ("2023-07", 4, 0.0, 25.0)])
+                      [("2023-06", 3, 0.1, 22.0, 19.0, 26.0, 24.0, 21.0, 28.0),
+                       ("2023-07", 4, 0.0, 25.0, 22.0, 29.0, 27.0, 24.0, 31.0)])
     anim = api.Animation(name="landsat_lst", mp4=None, gif=None, frames=[],
                          metadata_db=str(db), status="")
     rows = anim.metadata()

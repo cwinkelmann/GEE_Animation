@@ -20,7 +20,14 @@ from .products import INDICES
 log = logging.getLogger(__name__)
 
 _COLUMNS = ("name", "sensor", "index_name", "month", "n_scenes",
-            "aoi_cloud_fraction", "aoi_clear_fraction", "aoi_mean")
+            "aoi_cloud_fraction", "aoi_clear_fraction", "aoi_mean",
+            "aoi_p10", "aoi_p90", "outside_mean", "outside_p10", "outside_p90")
+
+#: Distribution stats collected per frame, per area. The mean alone hides the
+#: thing these animations are usually about: a forest's COOLEST tenth versus the
+#: surrounding fields' HOTTEST tenth is the contrast a viewer sees, and it moves
+#: differently from the mean in a drought year.
+_PCTILES = (10, 90)
 
 #: Frames resolved per `getInfo()` round trip. Neither extreme works: one request per
 #: frame cost ~5 s each (110 s for a 22-frame run), while ONE request for every frame
@@ -58,7 +65,8 @@ def _reduce_expr(image, reducer, region_geom, scale):
         bestEffort=True, maxPixels=int(1e9)).values().get(0)
 
 
-def _chunk_exprs(frames, offset, region_geom, scale, mean_band, ee_module):
+def _chunk_exprs(frames, offset, region_geom, scale, mean_band, ee_module,
+                 outside_geom=None):
     """The UNEVALUATED reducers for `frames`, keyed by their GLOBAL frame index
     (`offset + j`) so keys stay unique and unambiguous across chunks.
 
@@ -71,13 +79,29 @@ def _chunk_exprs(frames, offset, region_geom, scale, mean_band, ee_module):
         valid = f.image.mask().reduce(ee_module.Reducer.min())   # 1 where all bands valid
         exprs[f"clear{i}"] = _reduce_expr(valid, ee_module.Reducer.mean(), region_geom, scale)
         if mean_band is not None:
-            exprs[f"mean{i}"] = _reduce_expr(f.image.select(mean_band),
-                                             ee_module.Reducer.mean(), region_geom, scale)
+            band = f.image.select(mean_band)
+            exprs[f"in{i}"] = _stats_expr(band, region_geom, scale, ee_module)
+            if outside_geom is not None:
+                exprs[f"out{i}"] = _stats_expr(band, outside_geom, scale, ee_module)
     return exprs
 
 
+def _stats_expr(image, geom, scale, ee_module):
+    """UNEVALUATED {band_mean, band_p10, band_p90} over `geom`.
+
+    ONE reduceRegion carrying a combined reducer, not three: the percentiles share
+    the mean's pixel scan (`sharedInputs=True`), so distribution stats cost the same
+    round trip as the mean did and `frame_stats`' chunking is unaffected.
+    """
+    reducer = ee_module.Reducer.mean().combine(
+        ee_module.Reducer.percentile(list(_PCTILES)), sharedInputs=True)
+    return image.reduceRegion(
+        reducer, geometry=geom, scale=scale,
+        bestEffort=True, maxPixels=int(1e9))
+
+
 def frame_stats(frames, region_geom, scale, mean_band=None, ee_module=ee,
-                chunk_size=FRAME_STATS_CHUNK):
+                chunk_size=FRAME_STATS_CHUNK, outside_geom=None):
     """[(month, n_scenes, aoi_cloud_fraction, aoi_mean)] for each frame.
 
     aoi_cloud_fraction is the share of AOI pixels with no valid (cloud-free) value in
@@ -108,7 +132,8 @@ def frame_stats(frames, region_geom, scale, mean_band=None, ee_module=ee,
         i = 0
         while i < len(frames):
             batch = frames[i:i + chunk]
-            exprs = _chunk_exprs(batch, i, region_geom, scale, mean_band, ee_module)
+            exprs = _chunk_exprs(batch, i, region_geom, scale, mean_band, ee_module,
+                                 outside_geom)
             try:
                 data.update(ee_module.Dictionary(exprs).getInfo())
             except Exception as exc:
@@ -127,15 +152,23 @@ def frame_stats(frames, region_geom, scale, mean_band=None, ee_module=ee,
                 "reduced the batch from %d to %d frame(s) per request "
                 "(slower, but the run completes)", requested, chunk)
 
+    def _unpack(stats, band):
+        """(mean, p10, p90) from one reduceRegion dict; all None when it is empty."""
+        if not stats:
+            return (None, None, None)
+        def _get(suffix):
+            v = stats.get(f"{band}_{suffix}")
+            return None if v is None else round(float(v), 4)
+        return (_get("mean"), _get(f"p{_PCTILES[0]}"), _get(f"p{_PCTILES[1]}"))
+
     rows = []
     for i, f in enumerate(frames):
         clear = data.get(f"clear{i}")
         clear = 0.0 if clear is None else float(clear)
-        mean = None
-        if mean_band is not None:
-            mv = data.get(f"mean{i}")
-            mean = None if mv is None else round(float(mv), 4)
-        rows.append((f.label, getattr(f, "n_scenes", None), round(1.0 - clear, 4), mean))
+        inside = _unpack(data.get(f"in{i}") if mean_band else None, mean_band)
+        outside = _unpack(data.get(f"out{i}") if mean_band else None, mean_band)
+        rows.append((f.label, getattr(f, "n_scenes", None), round(1.0 - clear, 4),
+                     *inside, *outside))
     return rows
 
 
@@ -152,30 +185,47 @@ def write_db(db_path, run, rows) -> str:
             "CREATE TABLE IF NOT EXISTS frame_clouds ("
             "name TEXT, sensor TEXT, index_name TEXT, month TEXT, n_scenes INTEGER, "
             "aoi_cloud_fraction REAL, aoi_clear_fraction REAL, aoi_mean REAL, "
-            "PRIMARY KEY (name, month))")
-        # migrate a pre-aoi_mean DB in place so old and new runs share one file
+            "aoi_p10 REAL, aoi_p90 REAL, outside_mean REAL, outside_p10 REAL, "
+            "outside_p90 REAL, PRIMARY KEY (name, month))")
+        # Migrate an older DB in place so runs from every version share one file:
+        # each column is added only if absent, so this is safe to re-run.
         cols = {r[1] for r in con.execute("PRAGMA table_info(frame_clouds)")}
-        if "aoi_mean" not in cols:
-            con.execute("ALTER TABLE frame_clouds ADD COLUMN aoi_mean REAL")
+        for col in ("aoi_mean", "aoi_p10", "aoi_p90",
+                    "outside_mean", "outside_p10", "outside_p90"):
+            if col not in cols:
+                con.execute(f"ALTER TABLE frame_clouds ADD COLUMN {col} REAL")
+        placeholders = ",".join("?" * len(_COLUMNS))
         con.executemany(
-            f"INSERT OR REPLACE INTO frame_clouds ({','.join(_COLUMNS)}) VALUES (?,?,?,?,?,?,?,?)",
+            f"INSERT OR REPLACE INTO frame_clouds ({','.join(_COLUMNS)}) "
+            f"VALUES ({placeholders})",
             [(run["name"], run["sensor"], run["index"], month, n, cloud,
-              (None if cloud is None else round(1.0 - cloud, 4)), mean)
-             for month, n, cloud, mean in rows])
+              (None if cloud is None else round(1.0 - cloud, 4)),
+              a_mean, a_p10, a_p90, o_mean, o_p10, o_p90)
+             for month, n, cloud, a_mean, a_p10, a_p90, o_mean, o_p10, o_p90 in rows])
         con.commit()
     finally:
         con.close()
     return db_path
 
 
-def write_frame_metadata(frames, cfg, region_geom, ee_module=ee) -> str:
-    """Compute per-frame AOI stats and write them to <out_dir>/metadata.db.
+def write_frame_metadata(frames, cfg, region_geom, ee_module=ee,
+                         frame_geom=None) -> str:
+    """Compute per-frame stats and write them to <out_dir>/metadata.db.
 
-    The mean is taken over the index band ("INDEX") for single-band indices; composites
-    (rgb/cir) have no single meaningful value so their aoi_mean is left null.
+    Stats are taken over the index band ("INDEX") for single-band indices;
+    composites (rgb/cir) have no single meaningful value, so theirs stay null.
+
+    Each area yields a mean plus the 10th/90th percentiles, and when `frame_geom`
+    is given the same three are computed for the frame MINUS the region — the
+    "outside" comparison that turns a pretty loop into a measurement: a forest
+    running cooler than its surroundings shows up as a gap between the two means,
+    and a drought shows up first in the tails.
     """
     spec = INDICES.get(cfg.index)
     mean_band = None if (spec and spec.composite) else "INDEX"
-    rows = frame_stats(frames, region_geom, cfg.scale, mean_band, ee_module)
+    outside = (frame_geom.difference(region_geom)
+               if frame_geom is not None else None)
+    rows = frame_stats(frames, region_geom, cfg.scale, mean_band, ee_module,
+                       outside_geom=outside)
     run = {"name": cfg.name, "sensor": cfg.sensor, "index": cfg.index}
     return write_db(Path(cfg.out_dir) / "metadata.db", run, rows)
