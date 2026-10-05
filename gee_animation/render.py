@@ -2129,6 +2129,8 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     region_masks = None   # (casing_mask, core_mask); built once below, then reused
     pixel_grid = bool(getattr(cfg, "pixel_grid", False))
     grid_mask = None      # built once on the first frame (sizes never change)
+    overlay_spec = getattr(cfg, "overlay", None) if bounds is not None else None
+    overlay_masks = None  # [(mask, rgb)] per level; built once on the first frame
     workers = max(1, int(getattr(cfg, "workers", DEFAULT_WORKERS) or DEFAULT_WORKERS))
     if getattr(cfg, "gif", None) is None:
         # `render.gif` unconfigured: on for a normal run (unchanged), but an
@@ -2155,7 +2157,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         a bounded lookahead; everything here stays strictly ordered and single-threaded,
         so output is identical to workers=1.
         """
-        nonlocal output, region_masks, checked_subtitle, grid_mask
+        nonlocal output, region_masks, checked_subtitle, grid_mask, overlay_masks
         # Observed frames are written out in small batches rather than one at a time
         # (`_write_frames` encodes a batch across `workers` threads — a real ~2.8x, zlib
         # releases the GIL) or all at the end (which would retain every frame, the very
@@ -2204,6 +2206,17 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                                     rgb.shape[1], rgb.shape[0], native_hw[1], native_hw[0])
                 if grid_mask.any():
                     rgb = _composite_alpha(rgb, grid_mask, GRID_RGB, GRID_ALPHA)
+            if overlay_spec:
+                # Iso-lines of an external raster (e.g. fallen-stem density), on the
+                # projected frame bounds like the region outline and under it. The
+                # masks depend only on the frame and output size: built once.
+                if overlay_masks is None:
+                    from . import overlay as _overlay
+                    overlay_masks = _overlay.level_masks(overlay_spec, proj_bounds, cfg.crs,
+                                                         rgb.shape[:2])
+                for level_mask, level_rgb in overlay_masks:
+                    if level_mask.any():
+                        rgb = _composite_alpha(rgb, level_mask, level_rgb, overlay_spec["alpha"])
             if draw_overlay:
                 # The rings, bounds and frame size are identical every frame, so the
                 # (comparatively expensive) supersampled masks are built once here on

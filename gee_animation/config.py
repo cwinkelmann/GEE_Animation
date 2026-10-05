@@ -23,6 +23,14 @@ POOL_STRATEGIES = {"least_cloudy", "median", "gap_fill"}
 INTERPOLATE_MODES = {"auto", "crossfade", "data"}
 
 
+def _parse_overlay(raw):
+    """Delegate to overlay.parse (imported lazily: overlay imports ConfigError from here)."""
+    if raw is None:
+        return None
+    from .overlay import parse
+    return parse(raw)
+
+
 class ConfigError(ValueError):
     """Raised when a run configuration is invalid."""
 
@@ -198,6 +206,10 @@ class RunConfig:
     # sharpen); "local" => EE exports composites, scikit-learn does the rest
     # (sharpen_local). In the cache key: the exported inputs are keyed by it.
     sharpen: str = None
+    # Raster overlay (top-level `overlay:` mapping, see overlay.py): iso-lines of an
+    # external GeoTIFF — e.g. fallen-stem density — drawn locally over every frame.
+    # Client-side (cache hit). None => no overlay.
+    overlay: dict = None
     # By default render is capped to the product's native resolution (no upsampling);
     # set True to allow a finer render (a warning still names the true native GSD).
     allow_upsample: bool = False
@@ -313,6 +325,7 @@ class RunConfig:
                                    if render.get("region_line_width") is not None else None),
                 anomaly=anomaly,
                 baseline_years=raw.get("baseline_years"),
+                overlay=_parse_overlay(raw.get("overlay")),
                 pool_years=raw.get("pool_years"),
                 pool_strategy=str(raw.get("pool_strategy") or "least_cloudy"),
                 metadata=_flag(raw, "metadata", default=False, scope=""),

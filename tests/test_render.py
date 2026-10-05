@@ -3111,6 +3111,48 @@ def test_render_skips_pixel_grid_when_unset(tmp_path, monkeypatch):
     render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
 
 
+# --- raster overlay (overlay: {raster, levels, colors}) ------------------------------
+
+def test_render_draws_the_raster_overlay_once_under_the_region_outline(tmp_path, monkeypatch):
+    # Iso-lines of an external raster (fallen-stem density) are georeferenced
+    # overlays like the region outline: built once from the projected frame bounds
+    # and output size, composited on every frame BEFORE the outline so the amber
+    # outline stays on top, and only where the mask is set (other pixels bit-exact).
+    rasterio = pytest.importorskip("rasterio")
+    from rasterio.transform import from_bounds
+    import gee_animation.render as r
+    from gee_animation import overlay as ov
+    tif = tmp_path / "dens.tif"
+    a = np.zeros((10, 10), "float32"); a[3:7, 3:7] = 50
+    with rasterio.open(tif, "w", driver="GTiff", height=10, width=10, count=1, dtype="float32",
+                       crs="EPSG:4326", transform=from_bounds(0, 0, 1, 1, 10, 10)) as d:
+        d.write(a, 1)
+    cfg = _cfg(tmp_path)
+    cfg.preset = "240"
+    cfg.draw_region = True
+    cfg.region_aoi = {"bbox": [0.25, 0.25, 0.75, 0.75]}
+    cfg.overlay = ov.parse({"raster": str(tif), "levels": [20], "colors": ["#ff2a2a"], "line_px": 1})
+    built, order = [], []
+    real_masks, real_alpha, real_region = ov.level_masks, r._composite_alpha, r._composite_region
+    monkeypatch.setattr(ov, "level_masks", lambda spec, b, crs, hw: (built.append((b, crs, hw)) or real_masks(spec, b, crs, hw)))
+    monkeypatch.setattr(r, "_composite_alpha", lambda *a_, **k: (order.append("overlay") or real_alpha(*a_, **k)))
+    monkeypatch.setattr(r, "_composite_region", lambda *a_, **k: (order.append("region") or real_region(*a_, **k)))
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
+
+    frames = [Frame("2022-01", object()), Frame("2022-02", object())]
+    paths = render(frames, cfg, fetch=fake_fetch, geometry=None)
+    assert built == [((0.0, 0.0, 1.0, 1.0), None, (240, 240))]
+    assert order == ["overlay", "region"] * 2
+    # the raw map image carries the red outline of the block, nothing else is red
+    from PIL import Image
+    raw = next(p for p in paths if p.name.endswith("_2022-01.png"))
+    px = np.asarray(Image.open(raw).convert("RGB"))
+    red = (px[..., 0] > 200) & (px[..., 1] < 80) & (px[..., 2] < 80)
+    assert red.any()
+
+
 def test_colorbar_units_are_kelvin_deltas_for_a_relative_run():
     from gee_animation.render import _colorbar_units, _index_display_name
     base = dict(index="lst", anomaly=None, relative=None)

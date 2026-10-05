@@ -170,6 +170,9 @@ def test_frame_label_is_part_of_the_key(tmp_path, urlopen_counter):
     # the pixel-grid overlay traces the fetched raster's own cell edges, drawn
     # locally over pixels already in hand — a grid variant of a run is a cache hit
     ("pixel_grid", True),
+    # the raster overlay (e.g. fallen-stem density iso-lines) is drawn locally over
+    # the fetched pixels; adding or changing it must not refetch a single thumbnail
+    ("overlay", {"raster": "dens.tif", "levels": [20.0], "colors": ["#ff2a2a"], "line_px": 2, "alpha": 0.9}),
 ])
 def test_client_side_change_still_hits_the_cache(tmp_path, urlopen_counter, field, value):
     _fetch_thumbnail(_FakeImage(), _cfg(tmp_path), "GEOM")
