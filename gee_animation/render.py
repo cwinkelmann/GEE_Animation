@@ -670,11 +670,21 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
             tw = draw.textbbox((0, 0), text, font=font)[2]
             ov_items.append((xcur, ov_y, sw, _hex_to_rgb(color), text))
             xcur += sw + max(3, lw * 2) + tw + max(8, lw * 5)
+        row_h = max(sw, line_h)
+        panel_bottom = ov_y + row_h
         if ov.get("label"):
-            ov_items.append((xcur, ov_y, 0, None, str(ov["label"])))
-            xcur += draw.textbbox((0, 0), str(ov["label"]), font=font)[2]
-        right = max(right, xcur)
-        panel_bottom = ov_y + max(sw, line_h)
+            label = str(ov["label"])
+            label_w = draw.textbbox((0, 0), label, font=font)[2]
+            if xcur + label_w <= x_offset + w - pad:
+                ov_items.append((xcur, ov_y, 0, None, label))
+                xcur += label_w
+            else:
+                # does not fit beside the swatches: its own line under them, never
+                # past the right edge of the imagery
+                ov_items.append((x0, ov_y + row_h + max(2, lw), 0, None, label))
+                panel_bottom = ov_y + row_h + max(2, lw) + line_h
+                xcur = max(xcur, x0 + label_w)
+        right = max(right, min(xcur, x_offset + w - pad))
     # Top overhang clamped to 4 px: render() places the legend 4 px below the
     # header bar, and on ≥1730 px canvases pad (lw*2 = 8+) would otherwise reach
     # up past that gap and tint the header's bottom rows.
