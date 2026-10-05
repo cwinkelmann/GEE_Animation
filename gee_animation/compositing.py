@@ -186,7 +186,8 @@ def _fetch_scene_arrays(pooled, start: str, end: str, want_clouds: bool,
 def _has_reducer(cfg) -> bool:
     """True when the configured index owns its own period reduction."""
     spec = INDICES.get(getattr(cfg, "index", None))
-    return bool(spec and getattr(spec, "reduce_period", None))
+    return bool(spec and (getattr(spec, "reduce_period", None)
+                          or getattr(spec, "reduce_period_cfg", None)))
 
 
 def _period_image(coll, cfg):
@@ -199,6 +200,10 @@ def _period_image(coll, cfg):
     therefore supply `reduce_period` (see products.Index) and own the reduction.
     """
     spec = INDICES.get(getattr(cfg, "index", None))
+    with_cfg = getattr(spec, "reduce_period_cfg", None) if spec else None
+    if with_cfg:
+        # lst_rf: the reduction needs the run config (frame AOI to train on).
+        return with_cfg(coll, cfg)
     reducer = getattr(spec, "reduce_period", None) if spec else None
     return reducer(coll) if reducer else coll.median()
 

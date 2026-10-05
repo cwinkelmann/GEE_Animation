@@ -23,12 +23,36 @@ POOL_STRATEGIES = {"least_cloudy", "median", "gap_fill"}
 INTERPOLATE_MODES = {"auto", "crossfade", "data"}
 
 
+def _parse_overlay(raw):
+    """Delegate to overlay.parse (imported lazily: overlay imports ConfigError from here)."""
+    if raw is None:
+        return None
+    from .overlay import parse
+    return parse(raw)
+
+
 class ConfigError(ValueError):
     """Raised when a run configuration is invalid."""
 
 
 #: Optional render flags that must be real YAML booleans (see _flag / validate).
 _RENDER_FLAGS = ("gif", "frames", "pixel_grid")
+
+
+def _top_int(raw: dict, key: str, default: int) -> int:
+    """A top-level integer key with a default — the `_opt_int` rule for keys outside
+    `render:` (`harmonics`, `min_scenes`): a YAML string or bool gives the one-line
+    config error, and 0 is passed through for `validate()` to reject rather than
+    being silently replaced by the default."""
+    value = raw.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ConfigError(f"{key} must be a whole number, got {value!r}")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{key} must be a whole number, got {value!r}") from exc
 
 
 def _opt_int(render: dict, key: str):
@@ -189,6 +213,19 @@ class RunConfig:
     # compositing and read as rendering artefacts. Set True only when L7 is the
     # only available bridge (e.g. the 2012-2013 gap between L5 and L8).
     allow_slc_off: bool = False
+    # Focus on the region (from top-level `region_only` / `relative`, see focus.py):
+    # mask imagery outside `aoi.region`; express each frame as value − its own
+    # region mean ("region_mean"). Both change the pixels, so both are in the cache key.
+    region_only: bool = False
+    relative: str = None
+    # lst_rf only: where the forest trains. None => in Earth Engine (products.
+    # sharpen); "local" => EE exports composites, scikit-learn does the rest
+    # (sharpen_local). In the cache key: the exported inputs are keyed by it.
+    sharpen: str = None
+    # Raster overlay (top-level `overlay:` mapping, see overlay.py): iso-lines of an
+    # external GeoTIFF — e.g. fallen-stem density — drawn locally over every frame.
+    # Client-side (cache hit). None => no overlay.
+    overlay: dict = None
     # By default render is capped to the product's native resolution (no upsampling);
     # set True to allow a finer render (a warning still names the true native GSD).
     allow_upsample: bool = False
@@ -230,9 +267,14 @@ class RunConfig:
             viz = dict(raw.get("viz") or {})
             spec = INDICES.get(index)
             anomaly = raw.get("anomaly")
+            relative = raw.get("relative")
             if anomaly and not raw.get("viz"):        # diverging default (subsumes P0-5)
                 from .anomaly import ANOMALY_VIZ
                 d_min, d_max, d_pal = ANOMALY_VIZ.get(anomaly, (-3.0, 3.0, ["#000000", "#ffffff"]))
+            elif relative and not raw.get("viz"):
+                # a departure from the region mean: symmetric, diverging, ±4 units
+                from .anomaly import _DIVERGING
+                d_min, d_max, d_pal = -4.0, 4.0, list(_DIVERGING)
             else:
                 d_min, d_max, d_pal = spec.default_viz if spec else (0.0, 1.0, ["#000000", "#ffffff"])
             # Unlike title/subtitle, an explicit "" must survive as "" (not collapse
@@ -290,17 +332,21 @@ class RunConfig:
                 draw_region=_flag(raw, "draw_region", scope=""),
                 mask_clouds=_flag(raw, "mask_clouds", scope=""),
                 allow_slc_off=_flag(raw, "allow_slc_off", default=False, scope=""),
+                region_only=_flag(raw, "region_only", default=False, scope=""),
+                relative=(str(relative) if relative else None),
+                sharpen=(str(raw["sharpen"]) if raw.get("sharpen") else None),
                 smooth=(str(raw["smooth"]) if raw.get("smooth") else None),
-                harmonics=int(raw.get("harmonics", 2) or 2),
+                harmonics=_top_int(raw, "harmonics", 2),
                 region_line_width=(int(render["region_line_width"])
                                    if render.get("region_line_width") is not None else None),
                 anomaly=anomaly,
                 baseline_years=raw.get("baseline_years"),
+                overlay=_parse_overlay(raw.get("overlay")),
                 pool_years=raw.get("pool_years"),
                 pool_strategy=str(raw.get("pool_strategy") or "least_cloudy"),
                 metadata=_flag(raw, "metadata", default=False, scope=""),
                 missions=raw.get("missions"),
-                min_scenes=int(raw.get("min_scenes", 1)),
+                min_scenes=_top_int(raw, "min_scenes", 1),
                 allow_upsample=bool(raw.get("allow_upsample", False)),
                 debug_month=(str(raw["debug_month"]) if raw.get("debug_month") else None),
                 workers=int(render.get("workers", 4)),
@@ -380,6 +426,11 @@ class RunConfig:
                 raise ConfigError(
                     f"unknown smooth {self.smooth!r}; the only mode is 'harmonic'")
             spec = INDICES[self.index]
+            if self.index == "lst_rf":
+                raise ConfigError(
+                    "smooth: harmonic cannot be combined with lst_rf: the sharpened "
+                    "field is trained per period, and a seasonal curve through it is "
+                    "a separate experiment")
             if spec.composite:
                 raise ConfigError(
                     f"smooth: harmonic needs a single-band index; {self.index!r} is "
@@ -424,6 +475,31 @@ class RunConfig:
             if not isinstance(value, bool):
                 raise ConfigError(
                     f"render.{flag} must be true or false (got {value!r})")
+        if self.sharpen is not None:
+            if self.sharpen != "local":
+                raise ConfigError(f"unknown sharpen {self.sharpen!r}; the only mode is 'local'")
+            if self.index != "lst_rf":
+                raise ConfigError("sharpen: local applies to index lst_rf only")
+            if self.metadata:
+                raise ConfigError(
+                    "sharpen: local cannot be combined with metadata: true — the frames "
+                    "no longer live in Earth Engine, where the stats are computed")
+            if self.anomaly:
+                raise ConfigError(
+                    "sharpen: local cannot be combined with anomaly — the anomaly step "
+                    "runs first and rebuilds each frame without the Sentinel-2 window the "
+                    "local sharpener needs (and a sharpened z-score is not a temperature). "
+                    "Use relative: region_mean for a within-frame departure instead")
+        if self.relative is not None:
+            from .focus import RELATIVE_MODES
+            if self.relative not in RELATIVE_MODES:
+                raise ConfigError(
+                    f"unknown relative {self.relative!r}; use one of {sorted(RELATIVE_MODES)}")
+            spec = INDICES.get(self.index)
+            if spec is not None and (spec.composite or spec.classes):
+                raise ConfigError(
+                    f"relative: {self.relative} needs a single-band continuous index; "
+                    f"{self.index!r} has no INDEX band to take a mean of")
         if self.pixel_grid and not self.preset:
             raise ConfigError(
                 "render.pixel_grid needs render.preset: without an upscale the output "

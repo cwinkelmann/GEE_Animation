@@ -58,6 +58,10 @@ CLIENT_SIDE_FIELDS = frozenset({
     "name", "out_dir", "fps", "preset", "aspect", "upscale",
     "region_line_width", "draw_region", "metadata", "workers",
     "palette", "debug_month", "allow_upsample",
+    # raster overlay (iso-lines of an external GeoTIFF, e.g. fallen-stem density):
+    # drawn locally over the fetched pixels like the region outline — never
+    # changes what EE computes, so a run with or without it is the same fetch
+    "overlay",
     # MP4 encode quality: a ffmpeg writer setting, applied after the pixels are
     # already decided — never sent to EE and never changes what is fetched.
     "quality",

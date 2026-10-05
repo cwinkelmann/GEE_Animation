@@ -22,6 +22,7 @@ from PIL import Image, ImageDraw, ImageFont
 from . import cache, interpolate, labels
 from .aoi import _load_geojson_geometry, _read_shapefile_geometry
 from .imaging import colorize
+from .local_image import LocalImage
 from .products import INDICES, native_scale_m
 
 log = logging.getLogger(__name__)
@@ -225,7 +226,7 @@ def _geotiff_params(cfg, geometry) -> dict:
     return params
 
 
-def _export_geotiffs(frames, cfg, geometry) -> list:
+def _export_geotiffs(frames, cfg, geometry, bounds=None) -> list:
     """Write one georeferenced GeoTIFF per observed frame: ``{name}_{label}.tif``.
 
     Raw bytes are disk-cached exactly like thumbnails (the ``GEO_TIFF`` format
@@ -248,13 +249,26 @@ def _export_geotiffs(frames, cfg, geometry) -> list:
     out_dir.mkdir(parents=True, exist_ok=True)
     composite = _is_composite(cfg)
     params = _geotiff_params(cfg, geometry)
-    # Backstop for a frame so wide that even float32 exceeds the cap.
-    params["scale"] = _geotiff_fit_scale(
-        cfg, _aoi_bounds(getattr(cfg, "frame_aoi", None) or {}),
-        3 if composite else 1, params["scale"])
+    # Backstop for a frame so wide that even float32 exceeds the cap. `bounds` is
+    # render()'s already-resolved frame extent; callers without a frame_aoi (api/GUI
+    # paths) have no extent to fit, so the backstop is skipped instead of crashing
+    # on `_aoi_bounds({})`.
+    if bounds is None and getattr(cfg, "frame_aoi", None):
+        bounds = _aoi_bounds(cfg.frame_aoi)
+    if bounds is not None:
+        params["scale"] = _geotiff_fit_scale(cfg, bounds, 3 if composite else 1, params["scale"])
     failed: list[str] = []
 
     def one(frame):
+        if isinstance(frame.image, LocalImage):
+            import rasterio
+            li = frame.image
+            path = out_dir / f"{cfg.name}_{frame.label}.tif"
+            with rasterio.open(path, "w", driver="GTiff", height=li.values.shape[0],
+                               width=li.values.shape[1], count=1, dtype="float32",
+                               crs=li.crs, transform=li.transform, nodata=np.nan) as dst:
+                dst.write(li.values.astype("float32")[None])
+            return path
         with cache.frame_identity(getattr(frame, "label", None),
                                   getattr(frame, "source", None)):
             key = cache.thumb_key(cfg, params, composite)
@@ -367,6 +381,9 @@ def _fetch_thumbnail(image, cfg, geometry):
     to a fresh fetch. Anything wrong with a cached entry — unreadable file,
     truncated PNG — is downgraded to a miss; the cache can never break a run.
     """
+    if isinstance(image, LocalImage):
+        # the field was produced on this machine (sharpen: local): no EE, no cache
+        return image.thumbnail(int(getattr(cfg, "dimensions", 0) or 1024))
     composite = _is_composite(cfg)
     params = _thumb_params(cfg, geometry)
     key = cache.thumb_key(cfg, params, composite)
@@ -563,7 +580,7 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
     # Units: the index's own (e.g. "°C" for a thermal index); a climatology anomaly
     # renders z-scores instead, so its unit overrides whatever the index carries.
     meta = _index_meta(cfg)
-    units = "σ" if getattr(cfg, "anomaly", None) == "climatology" else (meta.units if meta else "")
+    units = _colorbar_units(cfg)
     ticks = _colorbar_ticks(vmin, vmax, units)
 
     def _x(v: float) -> float:
@@ -640,6 +657,44 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
     right = max([x0 + bar_w, swatch_x0 + swatch_size] + [hi for _lo, hi in shown])
     left = min([x0] + [lo for lo, _hi in shown])
     panel_bottom = anchor_y + line_h if (show_low or show_high) else text_y + text_h
+
+    # Overlay legend: one more row — a swatch per level with "≥ level", then the
+    # overlay's label — so the iso-lines / density bands drawn by `overlay.py` are
+    # explained on the frame ("what are the orange marks?"). Swatches are filled for
+    # mode "fill" and outlined for "lines", mirroring how the layer itself is drawn.
+    ov = getattr(cfg, "overlay", None)
+    ov_items = []
+    if ov:
+        from .overlay import _hex_to_rgb
+        ov_y = panel_bottom + max(3, lw * 2)
+        sw = max(6, text_h)
+        xcur = x0
+        levels = list(ov["levels"])
+        for i, (level, color) in enumerate(zip(levels, ov["colors"])):
+            # fill mode paints the band [level_i, level_i+1); say so, except for the
+            # open-ended top band. Lines mode outlines everything >= level.
+            if ov.get("mode", "lines") == "fill" and i + 1 < len(levels):
+                text = f"{level:g}–{levels[i + 1]:g}"
+            else:
+                text = f"≥ {level:g}"
+            tw = draw.textbbox((0, 0), text, font=font)[2]
+            ov_items.append((xcur, ov_y, sw, _hex_to_rgb(color), text))
+            xcur += sw + max(3, lw * 2) + tw + max(8, lw * 5)
+        row_h = max(sw, line_h)
+        panel_bottom = ov_y + row_h
+        if ov.get("label"):
+            label = str(ov["label"])
+            label_w = draw.textbbox((0, 0), label, font=font)[2]
+            if xcur + label_w <= x_offset + w - pad:
+                ov_items.append((xcur, ov_y, 0, None, label))
+                xcur += label_w
+            else:
+                # does not fit beside the swatches: its own line under them, never
+                # past the right edge of the imagery
+                ov_items.append((x0, ov_y + row_h + max(2, lw), 0, None, label))
+                panel_bottom = ov_y + row_h + max(2, lw) + line_h
+                xcur = max(xcur, x0 + label_w)
+        right = max(right, min(xcur, x_offset + w - pad))
     # Top overhang clamped to 4 px: render() places the legend 4 px below the
     # header bar, and on ≥1730 px canvases pad (lw*2 = 8+) would otherwise reach
     # up past that gap and tint the header's bottom rows.
@@ -670,7 +725,30 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
     draw.text((swatch_text_x, y0 + max(0, (swatch_size - text_h) // 2)), swatch_label,
               fill=(255, 255, 255, 255), font=font)
 
+    for xi, yi, sw, color, text in ov_items:
+        if color is not None:
+            if ov.get("mode", "lines") == "fill":
+                draw.rectangle([xi, yi, xi + sw, yi + sw], fill=tuple(color) + (255,))
+            else:
+                draw.rectangle([xi, yi, xi + sw, yi + sw], outline=tuple(color) + (255,), width=max(1, lw))
+            draw.text((xi + sw + max(3, lw * 2), yi), text, fill=(255, 255, 255, 255), font=font)
+        else:
+            draw.text((xi, yi), text, fill=(255, 255, 255, 255), font=font)
+
     return np.asarray(img)
+
+
+def _colorbar_units(cfg) -> str:
+    """The unit drawn on the colorbar's max tick: the index's own (e.g. "°C"), "σ"
+    for a climatology anomaly (z-scores), "K" for a `relative` run (a temperature
+    difference is kelvin, whatever the absolute scale) — else the index unit."""
+    if getattr(cfg, "anomaly", None) == "climatology":
+        return "σ"
+    meta = _index_meta(cfg)
+    units = meta.units if meta else ""
+    if getattr(cfg, "relative", None):
+        return "K" if units == "°C" else units
+    return units
 
 
 def _index_display_name(cfg) -> str:
@@ -681,7 +759,12 @@ def _index_display_name(cfg) -> str:
     """
     meta = _index_meta(cfg)
     name = getattr(meta, "display_name", "") if meta else ""
-    return name or str(getattr(cfg, "index", "") or "").upper()
+    name = name or str(getattr(cfg, "index", "") or "").upper()
+    if getattr(cfg, "relative", None) == "region_mean":
+        # a departure from the region mean is a different quantity: say so
+        # wherever the product is named (legend heading, header fallback)
+        name = f"{name} − region mean"
+    return name
 
 
 def _line2_prefix(cfg) -> str:
@@ -770,6 +853,8 @@ _SENSOR_CREDITS = {
     "landsat": "Landsat imagery courtesy of the U.S. Geological Survey",
     "modis": "MODIS data courtesy of NASA LP DAAC",
     "modis_lst": "MODIS data courtesy of NASA LP DAAC",
+    # Dynamic World is CC BY 4.0 (Google / World Resources Institute) on Sentinel-2.
+    "dynamicworld": "Dynamic World (Google, WRI; CC BY 4.0) — contains modified Copernicus Sentinel data",
 }
 
 
@@ -2098,6 +2183,8 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     region_masks = None   # (casing_mask, core_mask); built once below, then reused
     pixel_grid = bool(getattr(cfg, "pixel_grid", False))
     grid_mask = None      # built once on the first frame (sizes never change)
+    overlay_spec = getattr(cfg, "overlay", None) if bounds is not None else None
+    overlay_masks = None  # [(mask, rgb)] per level; built once on the first frame
     workers = max(1, int(getattr(cfg, "workers", DEFAULT_WORKERS) or DEFAULT_WORKERS))
     if getattr(cfg, "gif", None) is None:
         # `render.gif` unconfigured: on for a normal run (unchanged), but an
@@ -2124,7 +2211,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         a bounded lookahead; everything here stays strictly ordered and single-threaded,
         so output is identical to workers=1.
         """
-        nonlocal output, region_masks, checked_subtitle, grid_mask
+        nonlocal output, region_masks, checked_subtitle, grid_mask, overlay_masks
         # Observed frames are written out in small batches rather than one at a time
         # (`_write_frames` encodes a batch across `workers` threads — a real ~2.8x, zlib
         # releases the GIL) or all at the end (which would retain every frame, the very
@@ -2173,6 +2260,17 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                                     rgb.shape[1], rgb.shape[0], native_hw[1], native_hw[0])
                 if grid_mask.any():
                     rgb = _composite_alpha(rgb, grid_mask, GRID_RGB, GRID_ALPHA)
+            if overlay_spec:
+                # Iso-lines of an external raster (e.g. fallen-stem density), on the
+                # projected frame bounds like the region outline and under it. The
+                # masks depend only on the frame and output size: built once.
+                if overlay_masks is None:
+                    from . import overlay as _overlay
+                    overlay_masks = _overlay.level_masks(overlay_spec, proj_bounds, cfg.crs,
+                                                         rgb.shape[:2])
+                for level_mask, level_rgb in overlay_masks:
+                    if level_mask.any():
+                        rgb = _composite_alpha(rgb, level_mask, level_rgb, overlay_spec["alpha"])
             if draw_overlay:
                 # The rings, bounds and frame size are identical every frame, so the
                 # (comparatively expensive) supersampled masks are built once here on
@@ -2264,7 +2362,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     paths = assemble_stream(_produced(_finished()), cfg)
     # GeoTIFF export last: by now every frame's thumbnail fetch has already
     # warmed the EE session, and a mid-run failure here cannot cost the video.
-    tif_paths = (_export_geotiffs(frames, cfg, geometry)
+    tif_paths = (_export_geotiffs(frames, cfg, geometry, bounds=bounds)
                  if getattr(cfg, "geotiffs", False) else [])
     return paths + png_paths + tif_paths
 

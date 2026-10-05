@@ -660,3 +660,29 @@ def test_composite_stays_one_request_when_nothing_fails():
                                 pool_years=None, min_scenes=1)
     C.composite(FakeColl(), cfg)
     assert calls == ["system:time_start"]           # no splitting, no extra trips
+
+
+def test_period_image_prefers_a_cfg_aware_reducer_and_passes_cfg():
+    # An index whose period reduction needs the run config (lst_rf: the frame AOI
+    # for training) declares `reduce_period_cfg`; it wins over `reduce_period`
+    # and over the median, and `_has_reducer` sees it (so pooled least_cloudy
+    # frames reduce through it instead of mosaicking).
+    import types
+    import gee_animation.products as P
+    from gee_animation.compositing import _period_image, _has_reducer
+
+    class FakeColl:
+        def median(self):
+            return "MEDIAN"
+
+    cfg = types.SimpleNamespace(index="lst")
+    orig = P.INDICES["lst"].reduce_period_cfg
+    seen = []
+    object.__setattr__(P.INDICES["lst"], "reduce_period_cfg",
+                       lambda coll, c: seen.append((coll, c)) or "SHARPENED")
+    try:
+        assert _period_image(FakeColl(), cfg) == "SHARPENED"
+        assert seen and seen[0][1] is cfg
+        assert _has_reducer(cfg)
+    finally:
+        object.__setattr__(P.INDICES["lst"], "reduce_period_cfg", orig)

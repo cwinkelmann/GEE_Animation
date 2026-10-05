@@ -181,6 +181,339 @@ fine_m=100`. Lives in `scripts/`, integration-only (needs EE); no unit test.
    so the 20 m cells are visible) — the render that answers "does it look
    better than the 100 m blocks".
 
+## Results
+
+### Pass 1 — as first implemented (residual against a second coarse prediction)
+
+`out/lst_rf_validate_v1_coarse_residual.csv`, 2026-09-17 13:16–13:47. Frame-wide
+RMSE (K) of the recovered 100 m field against the real 100 m LST:
+
+| month | scenes | nearest | linear (TsHARP) | rf |
+|---|---|---|---|---|
+| 2018-05 | 2 | **1.308** | 1.610 | 1.434 |
+| 2018-08 | 1 | **1.219** | 1.592 | 1.991 |
+| 2019-10 | 1 | **0.493** | 0.582 | 0.686 |
+| 2020-03 | 1 | **0.700** | 0.711 | 0.875 |
+| 2022-06 | 1 | **1.577** | 1.826 | 1.635 |
+| 2023-09 | 2 | **0.876** | 1.059 | 0.958 |
+| 2025-02 | 1 | **0.667** | 0.705 | 0.848 |
+| 2026-07 | 1 | **1.295** | 1.477 | 1.432 |
+
+**Gate: FAIL** — rf beats linear by ≥ 0.2 K in 0/8 months, and is worse than
+*no sharpening* in 8/8. So is TsHARP. Doing nothing wins every month.
+
+A defect found while this ran, fixed before pass 2: the rf residual was taken
+against a second forest prediction at the coarse predictors, `f(mean x)`. A
+forest is nonlinear, so `mean f(x_fine) ≠ f(mean x)` and the sharpened field did
+not aggregate back to the observed cell means — the conservation the plan
+promised. Pass 2 takes the residual against the fine prediction aggregated to
+the coarse grid (`sharpen.rf_sharpen`, test
+`test_rf_sharpen_trains_a_regression_forest_on_lst_and_adds_the_coarse_residual`).
+The linear method is unaffected (exact for a linear fit).
+
+### Pass 2 — mean-conserving residual
+
+`out/lst_rf_validate_v2_conserving_residual.csv`, 2026-09-17 13:48–14:17.
+Same months, same inputs; only the rf residual changed.
+
+| month | scenes | nearest | linear (TsHARP) | rf |
+|---|---|---|---|---|
+| 2018-05 | 2 | **1.308** | 1.610 | 1.318 |
+| 2018-08 | 1 | **1.219** | 1.592 | 1.727 |
+| 2019-10 | 1 | **0.493** | 0.582 | 0.619 |
+| 2020-03 | 1 | **0.700** | 0.711 | 0.763 |
+| 2022-06 | 1 | 1.577 | 1.826 | **1.478** |
+| 2023-09 | 2 | 0.876 | 1.059 | **0.872** |
+| 2025-02 | 1 | **0.667** | 0.705 | 0.762 |
+| 2026-07 | 1 | 1.295 | 1.477 | **1.238** |
+
+**Gate: FAIL** — rf beats linear by ≥ 0.2 K in 3/8 months (need 6) and is
+worse than nearest in 5/8 (need 0). The conserving residual was worth up to
+0.26 K (2018-08: 1.99 → 1.73) and turned three summer months into wins over
+doing nothing, but the pre-registered bar is not met. TsHARP loses to nearest
+in every month in both passes.
+
+### Why sharpening cannot win this test here — measured
+
+Pearson r between the 100 m LST field and each predictor at 100 m and 300 m,
+and the LST standard deviation at both scales, over the frame:
+
+| month | sd(LST)@100 | sd(LST)@300 | ndbi | nirv | ndvi | mndwi |
+|---|---|---|---|---|---|---|
+| 2018-08 | 5.79 K | 5.87 K | 0.74 | −0.57 | −0.46 | 0.02 |
+| 2019-10 | 1.60 K | 1.53 K | 0.65 | −0.56 | −0.70 | 0.46 |
+| 2022-06 | 5.16 K | 4.92 K | 0.68 | −0.33 | −0.28 | −0.19 |
+
+(correlations at 100 m; at 300 m they are within ±0.07 of these.)
+
+Two facts decide the outcome:
+
+1. **There is almost no sub-300 m thermal variance to recover.** sd(LST) is
+   the same at 100 m and 300 m. The USGS C2 L2 ST field over Berlin is smooth
+   below ~300 m — TIRS is 100 m native and the product is resampled — so the
+   floor (nearest) is already within 0.5–1.6 K, and any detail a sharpener adds
+   is scored against a field that does not contain it.
+2. **The predictors carry the coarse structure, not the fine.** Their
+   correlation with LST barely changes between 100 m and 300 m, so a model fit
+   at 300 m has nothing extra to say at 100 m. NDBI (built-up) is the best
+   single predictor by a wide margin; NIRv — TsHARP's predictor — is weak in
+   summer, which is why the forest beat the linear method even while both lost
+   to doing nothing.
+
+The same reasoning applies one step down: the production ratio (100 m → 20 m)
+has **no independent truth at all**, and the 20 m detail an `lst_rf` frame
+shows is the predictors' texture with the coarse temperature painted on. It may
+look better than 100 m blocks; this experiment cannot show that it *is* better,
+and the test that could was failed at the only ratio where it can be run.
+
+### Verdict
+
+**Negative result, recorded.** `lst_rf` stays on this branch as an
+experimental product (registry entry, tests, example config, validation
+script) and is not merged into a showcase. One illustration frame
+(`out/r12_zoom_lst_rf_2024-07_2024-07.png`, July 2024, zoomed R12 frame) shows
+what the sharpened field looks like next to the 100 m blocks of
+`r12_zoom_lst_pretty_10yr_grid`. If a genuinely finer thermal truth ever exists
+for this site (an airborne TIR flight, or ECOSTRESS at 70 m), rerun
+`scripts/lst_rf_validate.py` against it before believing any 20 m frame.
+
+Steps 3–5 of the plan were executed ahead of the gate (the wiring is needed to
+render the illustration and costs nothing if unused); the harmonic-smoothing
+refusal and the `reduce_period_cfg` seam are the only touches outside the new
+module.
+
+## Spike: train on our own hardware instead of in Earth Engine (2026-09-17)
+
+Question: can the per-month training and prediction leave Earth Engine, so EE
+only serves composites (cheap exports) and the forest runs locally? Throwaway
+probe: `docs/experiments/spike_local_rf_training.py`, one month (2024-07), the
+R12 frame buffered by 3 km (10.7 km square).
+
+| step | Earth Engine version | local version |
+|---|---|---|
+| inputs from EE | trains + predicts server-side: **78 s**, and 1 of 116 frames timed out in the full run | two GeoTIFF exports (LST 1.8 MB, five predictors 5.6 MB): **42 s**, no model compute |
+| training (100 trees, 5,000 cells) | inside the 78 s | **0.2 s** (scikit-learn, 8 cores) |
+| prediction on the 20 m grid (549×552) | inside the 78 s | **0.3 s** |
+| residual conservation | exact by construction | exact: max |agg(sharp) − LST₁₀₀| = 0.0000 K |
+| agreement, local vs EE | — | RMSE **0.70 K**, bias 0.00 K; two local seeds differ by 0.59 K, so the gap is forest randomness |
+| feature importance (local) | not exposed | ndbi 0.65 · mndwi 0.26 · dem 0.04 · ndvi 0.03 · nirv 0.03 |
+
+Figure: `docs/experiments/spike_local_vs_ee_2024-07.png`.
+
+One trap found: `getDownloadURL` GeoTIFFs carry masked pixels as **0**, not
+NaN, unless a nodata value is set. Untreated, the ~1 % cloud/QA holes pulled
+their 100 m block means down and produced −12.8 K artefacts; treating 0 as
+no-data (or exporting with an explicit `noData`) fixes it, and a real
+implementation must reuse `render._geotiff_params` which already handles this.
+
+**Recommendation: yes, move training and prediction local.** It removes the
+heaviest EE compute (the forest), removes the timeout failure mode, cuts EE time
+per month roughly in half, and makes models persistable trivially (joblib) and
+inspectable (feature importance, held-out scores). EE keeps doing what it is
+good at — cloud-masked composites over an archive. Design for the real thing:
+
+- `sharpen.local`: `fetch_inputs(month) -> (lst_20m, predictors_20m)` via the
+  existing cached GeoTIFF path, then `train(pooled months per calendar month)`,
+  `predict(month)`, residual, written as a GeoTIFF the renderer can ingest.
+- The renderer needs one new input path: a frame whose pixels come from a local
+  GeoTIFF rather than an EE thumbnail (the upsampling branch's
+  `scripts/upsample_render.py` already does this — reuse).
+- Per-calendar-month models across years, leave-one-year-out score per model,
+  models under `docs/models/` with joblib; ~1 day with tests.
+
+**Implemented** the same day as `sharpen: local` (`gee_animation/sharpen_local.py`,
+`gee_animation/local_image.py`; branches in render/focus/geotiff export): approved
+with "the local one is awesome and good enough". The EE-trained delta render was
+stopped in favour of `config/r12_focus_lst_rf_delta_local_10yr.yaml`.
+
+## Windthrow test (2026-09-17) — the thermal profile does show where the trees fell
+
+Question (Christian): "my assumption would be that we can see where most trees
+fell by the thermal profile". Data: the tegel-unet stem predictions
+(`predictions_cw_2026/R12_stems_tegel-unet_2026-08.gpkg`, 8,323 stems from the
+2025 flight) rasterised to metres of stem per 20 m cell; the local lst_rf delta
+run (`r12_focus_lst_rf_delta_local_10yr`, 107 observed/gap-filled months); streets
+excluded via `steet_mask.gpkg`. Scripts and outputs: `docs/experiments/windthrow/`.
+
+**Time series** (windthrow cells with ≥ 20 m stem, n = 620, minus stem-free
+canopy, n = 9,110): within ±0.3 K for every month from 2017-01 to 2025-06, then
++1.36 K (2025-07), +1.75 (2025-08), +1.13 (2025-09), +1.50 (2026-04), +1.99
+(2026-05), +0.65 to +1.11 (2026-06 to 08). Every post-event month is a real
+observation, not a donor; the step is in the month the stems appear in the
+imagery. Pre-event summers with real observations (2018, 2019, 2022, 2023, 2024)
+sit at −0.3 to +0.3 K, so the signal is not the model "expecting" gaps to be
+warm — those cells were canopy then and looked like canopy.
+
+**Maps, post-event summers only (2025-07 → 2026-08):**
+
+| scale | Spearman ρ | top-10 % stem density vs stem-free |
+|---|---|---|
+| 20 m sharpened | +0.10 | +0.77 K vs −0.05 K → **+0.83 K** |
+| 100 m = observed Landsat | **+0.32** | +0.71 K vs −0.29 K → **+1.00 K** |
+
+The 100 m row is measured temperature, independent of the forest. The dense
+windthrow band across the north-centre of the footprint and the diagonal line
+of throws read as warm patches; the hottest cells remain the western buildings
+and the eastern edge, which are not windthrow — so the profile finds the dense
+clusters, not every stem.
+
+Caveats: gap-filled winter months repeat donor frames (identical values across
+years in the CSV are the same imagery); 2021-05 (+1.41 K) is a mostly-masked
+frame with 65 cells and should be ignored; the leave-one-year-out RMSE of the
+monthly forests is 1.7–5.2 K (`lst_rf_local_models_loyo.csv`), i.e. the
+absolute 20 m field is not accurate — only its within-cell contrast is used here.
+
+## Noise fix (2026-09-17 evening): one forest per frame, not per calendar month
+
+Christian, on the finished ten-year delta animation: "looks like some overfitted
+noise, in the end not even the street is visible". Measured on 2024-07, the same
+month two ways:
+
+| forest | sd of field | high-frequency noise (field − 3×3 median) |
+|---|---|---|
+| pooled July 2017–2026 (the run) | 2.21 K | **1.79 K** |
+| trained on that month alone (the trial) | 1.30 K | **0.60 K** |
+
+The two fields correlate at only 0.41; every summer of the pooled run sits at
+1.6–1.8 K noise; the predictors' own speckle is 7–35 % of their variance, so
+they are not the source. Root cause: the index→temperature relation does not
+transfer between dates (the LOYO 2–5 K said so already), and a forest fitted
+across ten Julys answers each 20 m pixel with a compromise that flips between
+leaves. Fix: `sharpen_local.train_frame_models` — one forest per frame, scored
+out-of-bag (R² 0.60–0.87 on 2025–2026 frames). On May 2025–Aug 2026 the
+high-frequency noise falls from 1.84 K to 0.65 K (ratio 0.38) and the warm
+patches become coherent blobs on the windthrow clusters.
+
+### Focused analysis, May 2025 – August 2026 (per-frame forests)
+
+Windthrow cells minus stem-free canopy: −0.12 K (2025-05, pre-event), then
++1.60 (07), +2.29 (08), +0.91 (09), −0.14 (11), +0.11 (2026-02), +0.66 (03),
++1.58 (04), +2.00 (05), +2.26 (06), +1.62 (07), +1.91 (08). Note 2025-06 has no
+Landsat pass and is a donor copy of 2026-06 (identical values). Maps, post-event
+summers: Spearman ρ **+0.25 at 20 m** (was +0.10 with the pooled forests) and
++0.30 at 100 m; top-10 % stem-density cells +1.22 K (20 m) / +0.99 K (100 m)
+above stem-free cells. Config: `config/r12_focus_lst_rf_delta_local_2025_2026.yaml`.
+
+### Heat islands vs detected fallen trees — object-level test (2026-09-17)
+
+`docs/experiments/windthrow/heat_islands.py`. Islands = connected patches ≥ 1 K
+above the footprint mean in the post-event summer mean (2025-07..2026-08, ≥ 3
+cells, footprint edge and streets excluded); "new" = not warm in the 2022–24
+summers. Windthrow clusters = ≥ 2 connected cells with ≥ 20 m predicted stem.
+
+| set | n | stem per cell | windthrow-dense share |
+|---|---|---|---|
+| footprint base rate (cells) | 10,485 | 3.3 m | 5 % |
+| all heat islands | 51 | 18.1 m | 39 % |
+| **new** islands (appeared after the storm) | 29 | **25.7 m** | **59 %** |
+| old islands (warm before too: paths, buildings) | 22 | 8.0 m | 14 % |
+
+Permutation null (500 random shifts of the stem map): new-island stem density
+0.7 ± 1.2 m vs observed 25.7 m, p < 0.002. From the other side: 78 windthrow
+clusters, mean post-event departure +1.12 K (pre-event 0.00 K), 56 % warmed
+by ≥ 1 K, 45 % sit inside a heat island. Cell-level Spearman between stem
+density and post−pre warming +0.24; windthrow-dense cells warmed +1.58 K,
+stem-free cells −0.11 K.
+
+Reading: the heat islands that appeared after the storm are the windthrow
+areas eight times more often than chance; about half of the predicted
+windthrow clusters produce a heat island, the other half (smaller or sparser
+throws, or gaps already closing by 2026) do not.
+
+### Could pre-storm warmth predict where trees fall? — no (2026-09-17)
+
+`docs/experiments/windthrow/pre_storm.py`, 26 observed pre-storm summer months
+(2017–2025-05) vs 8 post-storm months, per-frame forests, edge (< 40 m) and
+streets excluded. Future windthrow-dense cells (n = 531) vs stem-free (n = 7,678):
+
+| | windthrow cells | stem-free | difference | AUC as a predictor |
+|---|---|---|---|---|
+| pre-storm Δ | −0.02 K | −0.07 K | **+0.04 K** (p = 7e-8, but tiny) | **0.56** |
+| post-storm Δ | +1.67 K | −0.20 K | +1.87 K | 0.83 |
+| post − pre warming | | | | 0.84 |
+| distance to stand edge alone | | | | 0.57 |
+
+Windthrow-dense rate by pre-storm warmth quintile: 4.3, 4.1, 4.6, 5.2, 7.2 % —
+a 1.7× enrichment in the warmest fifth, about what edge distance alone gives
+(cells 40–200 m from the edge are +0.5 K warmer and have the highest windthrow
+rate). The thermal signal is a consequence of the throws, not a precursor;
+whatever weak pre-signal exists is the edge/thin-stand exposure that the
+temperature and the storm both respond to.
+
+### Revier 13 (Spandauer Forst) — the same analysis on the second footprint (2026-09-21)
+
+`docs/experiments/windthrow/r13/`, run with `WT_SITE=R13` on
+`r13_focus_lst_rf_delta_local_10yr` (107 months). 25,238 predicted stems over
+1,033 ha — three times R12's density — and **no street mask** exists for R13.
+
+Series (windthrow cells ≥ 20 m stem, n = 2,087, minus stem-free, n = 15,360):
+−0.1 to −0.6 K in every pre-storm month (the future windthrow stands were the
+*cooler*, denser ones), then +1.02 K (2025-08), +0.55 to +0.96 K (2026-04 → 08).
+Weaker than R12's +1.6 to +2.3 K, and 2025-07 (+0.13) and 2025-09 (−0.52) do
+not show it. 2025-10 is a 21-cell masked frame; ignore.
+
+| test | R12 | R13 |
+|---|---|---|
+| new post-storm heat islands: stem density vs base rate | 25.7 vs 3.3 m (8×), 59 % windthrow-dense | 30.4 vs 5.6 m (5×), 71 % windthrow-dense |
+| permutation p | < 0.002 | < 0.002 |
+| windthrow clusters that form a heat island | 45 % of 78 | **16 % of 264** |
+| cell-level Spearman(stem density, post−pre warming) | +0.24 | **+0.29** |
+| warming, windthrow-dense vs stem-free cells | +1.58 vs −0.11 K | +0.61 vs −0.14 K |
+| pre-storm AUC | 0.56 | 0.51 |
+
+Reading: the direction is the same and the new heat islands are again the
+windthrow clusters, but R13's damage is diffuse — 264 clusters spread over the
+whole footprint, most of them small — so the footprint mean itself contains a
+lot of windthrow and the *relative* signal per cluster is diluted (+0.6 K, not
++1.6 K). The cell-level warming test, which does not depend on the footprint
+mean, is actually stronger in R13. The 100 m comparison against "stem-free"
+cells is uninformative here (almost no 100 m cell is stem-free; the few that
+are sit on clearings). Edge exposure runs the other way in R13: windthrow
+rate 4 % within 100 m of the edge vs 10 % beyond 200 m.
+
+### Control: Grumsin vs Tegel R12 / R13 (2026-09-21)
+
+`docs/experiments/windthrow/site_comparison.py` on the three footprint-only
+delta runs (Grumsin `wne_focus_lst_rf_delta_2018_2026`, 95 months; R12/R13
+107 months). Site-neutral metrics, summers only; "pre" = 2022–24, "post" =
+2025-07 onward.
+
+| site | heat-island share of footprint, pre → post | spatial sd, pre → post | cells warmed ≥ 1 K |
+|---|---|---|---|
+| Grumsin (control, no known windthrow) | 4.5 % → 4.9 % | 1.07 → 1.23 K | **1.5 %** |
+| Tegel R12 | 1.9 % → **3.5 %** | 1.26 → 1.75 K | **7.5 %** |
+| Tegel R13 | 5.8 % → 6.1 % | 1.78 → 1.86 K | **4.7 %** |
+
+Grumsin's 1.5 % of cells warming by ≥ 1 K is the background one gets from
+different summers and forest randomness alone; R12 shows five times that, R13
+three times. R12's heat-island share nearly doubles after the storm; R13's
+barely moves because it was already the hottest, most heterogeneous footprint
+(diffuse damage, no street mask), which is the same dilution seen in its
+cluster statistics. The control holds: the 2025 step is a Tegel signal, not a
+weather or method artefact.
+
+### Do the vegetation indices show the same drop? — yes, more sharply (2026-09-21)
+
+`docs/experiments/windthrow/index_drops.py` on data-only, non-gap-filled runs
+(`config/r12_data_<index>.yaml`; NDRE's run failed, see below). Windthrow cells
+minus stem-free canopy, summer means before (2017–2025-05, 40 months) → after
+(2025-07 onward, 7 months):
+
+| product | before → after | change | sd of the pre-storm summers |
+|---|---|---|---|
+| lst_rf Δ | −0.01 → +1.80 K | +1.81 K | 0.16 K (≈ 11 σ) |
+| NDVI | +0.016 → −0.182 | −0.20 | 0.009 (≈ 22 σ) |
+| NDMI | −0.009 → −0.179 | −0.17 | 0.015 (≈ 11 σ) |
+| EVI | +0.040 → −0.175 | −0.22 | 0.021 (≈ 10 σ) |
+
+The optical drops are cleaner than the thermal step: they show a seasonal
+cycle before the storm (windthrow stands slightly greener in summer, less so
+in winter) and then a flat −0.2 that does not recover through 2026. The thermal
+signal needs a clear summer pass; the NDVI drop is visible in every month
+including winter. The SAR spike on `spike/sar-windthrow` adds VH backscatter:
+−1 dB at windthrow, AUC 0.88, independent of cloud (see that branch's
+`docs/experiments/sar/README.md`).
+
 ## Open questions for Christian
 
 - **Q1 — branch base.** The worktree branches from committed HEAD, so it lacks
@@ -204,3 +537,21 @@ fine_m=100`. Lives in `scripts/`, integration-only (needs EE); no unit test.
   invented. Out of scope until the RF result is known.
 - Per-scene (rather than per-month) training.
 - Any change to `lst_sharp`.
+
+## Detection upgrade (2026-09-21 evening, `detection_upgrade.py`)
+
+Asked to "try" the improvement ideas. Same cells/split as everything else,
+5-fold CV on 500 m blocks, logistic regression (class-balanced) unless noted.
+
+Detection AUC R12 / R13: temperature 0.82/0.73 · NDVI 0.92/0.70 · VH 12-month
+means 0.89/0.72 · **VH change-point t at storm month 0.93/0.84** · three sensors
+0.93/0.74 · +NDMI/NDRE/EVI 0.96/0.85 · +change-point 0.96/0.88 · +3×3 texture
+**0.97/0.90**. Transfer: train R13→test R12 0.92, train R12→test R13 0.73.
+Unsupervised break month within ±2 mo of 2025-07: 33 % of R12 windthrow cells,
+19 % R13, vs 3–4 % of canopy. Capture: top 10 % of R12 by fused score holds 65 %
+of predicted stem (25 % → 85 %); R13 42 % / 69 %.
+
+The ALS crown-segmentation fusion (`als_fusion.py`, prediction AUC 0.77 at R13 with
+2021 crown structure + satellite pre-storm features), the Berlin/Brandenburg point-cloud
+tiles, the 1 m DTM/DSM/CHM builder and the AMS3D diagnostics live on branch
+`als-ams3d-spike` (moved there 2026-09-22).

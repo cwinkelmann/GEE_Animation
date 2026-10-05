@@ -2878,7 +2878,7 @@ def test_render_returns_geotiff_paths_only_when_enabled(tmp_path, monkeypatch):
         return np.zeros((16, 16)), np.ones((16, 16), bool)
     called = []
     monkeypatch.setattr(R, "_export_geotiffs",
-                        lambda frames, cfg, geometry: called.append(1) or [])
+                        lambda frames, cfg, geometry, bounds=None: called.append(1) or [])
     render([Frame("2022-06", object())], cfg, fetch=fetch, geometry=None)
     assert not called                        # default off
     cfg = _cfg(tmp_path, name="tifgate2")
@@ -3111,6 +3111,112 @@ def test_render_skips_pixel_grid_when_unset(tmp_path, monkeypatch):
     render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
 
 
+def test_export_geotiffs_without_a_frame_aoi_does_not_crash(tmp_path):
+    # api/GUI callers may build a cfg without frame_aoi; the fit-scale backstop used
+    # to call _aoi_bounds({}) and raise KeyError before a single frame was exported.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.frame_aoi = None
+    cfg.geotiffs = True
+    assert r._export_geotiffs([], cfg, None) == []
+
+
+# --- raster overlay (overlay: {raster, levels, colors}) ------------------------------
+
+def test_colorbar_lists_the_overlay_levels_with_their_colours(tmp_path):
+    # An overlay without a legend is a riddle ("what are the orange marks?"): the
+    # legend panel gets one more row — a swatch per level with "≥ level" and the
+    # overlay's label — in the overlay's own colours.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.preset = None
+    base = np.full((400, 600, 3), 90, np.uint8)
+    plain = r.add_colorbar(base.copy(), cfg)
+    cfg.overlay = {"raster": "x.tif", "levels": [500.0, 1500.0], "colors": ["#ffb000", "#ff2a2a"],
+                   "line_px": 2, "alpha": 0.5, "mode": "fill", "label": "fallen stems, m per ha"}
+    with_legend = r.add_colorbar(base.copy(), cfg)
+    assert not np.array_equal(plain, with_legend)
+    px = with_legend.reshape(-1, 3)
+    assert ((px == (255, 176, 0)).all(axis=1)).any()      # first swatch colour appears
+    assert ((px == (255, 42, 42)).all(axis=1)).any()      # second swatch colour appears
+    # the extra row makes the translucent panel taller, never wider than the canvas
+    dark_rows_plain = (plain.mean(axis=(1, 2)) < 90).sum()
+    dark_rows_legend = (with_legend.mean(axis=(1, 2)) < 90).sum()
+    assert dark_rows_legend > dark_rows_plain
+
+def test_render_draws_the_raster_overlay_once_under_the_region_outline(tmp_path, monkeypatch):
+    # Iso-lines of an external raster (fallen-stem density) are georeferenced
+    # overlays like the region outline: built once from the projected frame bounds
+    # and output size, composited on every frame BEFORE the outline so the amber
+    # outline stays on top, and only where the mask is set (other pixels bit-exact).
+    rasterio = pytest.importorskip("rasterio")
+    from rasterio.transform import from_bounds
+    import gee_animation.render as r
+    from gee_animation import overlay as ov
+    tif = tmp_path / "dens.tif"
+    a = np.zeros((10, 10), "float32"); a[3:7, 3:7] = 50
+    with rasterio.open(tif, "w", driver="GTiff", height=10, width=10, count=1, dtype="float32",
+                       crs="EPSG:4326", transform=from_bounds(0, 0, 1, 1, 10, 10)) as d:
+        d.write(a, 1)
+    cfg = _cfg(tmp_path)
+    cfg.preset = "240"
+    cfg.draw_region = True
+    cfg.region_aoi = {"bbox": [0.25, 0.25, 0.75, 0.75]}
+    cfg.overlay = ov.parse({"raster": str(tif), "levels": [20], "colors": ["#ff2a2a"], "line_px": 1})
+    built, order = [], []
+    real_masks, real_alpha, real_region = ov.level_masks, r._composite_alpha, r._composite_region
+    monkeypatch.setattr(ov, "level_masks", lambda spec, b, crs, hw: (built.append((b, crs, hw)) or real_masks(spec, b, crs, hw)))
+    monkeypatch.setattr(r, "_composite_alpha", lambda *a_, **k: (order.append("overlay") or real_alpha(*a_, **k)))
+    monkeypatch.setattr(r, "_composite_region", lambda *a_, **k: (order.append("region") or real_region(*a_, **k)))
+
+    def fake_fetch(image, cfg, geometry=None):
+        return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
+
+    frames = [Frame("2022-01", object()), Frame("2022-02", object())]
+    paths = render(frames, cfg, fetch=fake_fetch, geometry=None)
+    assert built == [((0.0, 0.0, 1.0, 1.0), None, (240, 240))]
+    assert order == ["overlay", "region"] * 2
+    # the raw map image carries the red outline of the block, nothing else is red
+    from PIL import Image
+    raw = next(p for p in paths if p.name.endswith("_2022-01.png"))
+    px = np.asarray(Image.open(raw).convert("RGB"))
+    red = (px[..., 0] > 200) & (px[..., 1] < 80) & (px[..., 2] < 80)
+    assert red.any()
+
+
+def test_colorbar_units_are_kelvin_deltas_for_a_relative_run():
+    from gee_animation.render import _colorbar_units, _index_display_name
+    base = dict(index="lst", anomaly=None, relative=None)
+    assert _colorbar_units(types.SimpleNamespace(**base)) == "°C"
+    assert _colorbar_units(types.SimpleNamespace(**{**base, "anomaly": "climatology"})) == "σ"
+    assert _colorbar_units(types.SimpleNamespace(**{**base, "relative": "region_mean"})) == "K"
+    assert _index_display_name(types.SimpleNamespace(**{**base, "relative": "region_mean"})) \
+        == "Land surface temperature − region mean"
+
+
+def test_fetch_thumbnail_serves_a_local_image_without_earth_engine(tmp_path, monkeypatch):
+    from gee_animation.local_image import LocalImage
+    from gee_animation.render import _fetch_thumbnail
+    import gee_animation.render as r
+    monkeypatch.setattr(r.cache, "load", lambda *a, **k: pytest.fail("cache must not be touched"))
+    cfg = _cfg(tmp_path); cfg.dimensions = 30
+    vals = np.full((10, 20), 7.0, "float32"); vals[0, 0] = np.nan
+    arr, valid = _fetch_thumbnail(LocalImage(vals, (0, 0, 400, 200), "EPSG:32633", 20), cfg, None)
+    assert arr.shape == (15, 30) and arr[7, 15] == pytest.approx(7.0) and not valid[0, 0]
+
+
+def test_export_geotiffs_writes_a_local_image_directly(tmp_path):
+    from gee_animation.local_image import LocalImage
+    from gee_animation.render import _export_geotiffs
+    import rasterio
+    cfg = _cfg(tmp_path); cfg.crs = "EPSG:32633"
+    vals = np.full((10, 20), 7.0, "float32")
+    paths = _export_geotiffs([Frame("2022-07", LocalImage(vals, (0, 0, 400, 200), "EPSG:32633", 20))],
+                             cfg, None)
+    assert len(paths) == 1 and paths[0].name == "anim_2022-07.tif"
+    with rasterio.open(paths[0]) as ds:
+        assert ds.count == 1 and ds.res == (20.0, 20.0) and ds.read(1)[5, 5] == 7.0
+        assert ds.bounds.left == 0 and ds.bounds.top == 200
 def test_grid_mask_is_empty_when_cells_would_be_narrower_than_two_pixels():
     # Code review 2026-09-17: with no upscale every pixel is a cell edge, so the
     # mask was all ones and the frame washed 35 % white. A mesh only makes sense

@@ -238,6 +238,15 @@ def _ndmi(sensor, image, ee_module=ee):
             .set("system:time_start", image.get("system:time_start")))
 
 
+def _nbr(sensor, image, ee_module=ee):
+    # NBR = (nir − swir2)/(nir + swir2) — the standard disturbance index (dNBR):
+    # removing canopy exposes soil, dead wood and litter, which are bright in
+    # SWIR2 and dark in NIR, so fire, windthrow and logging all drive NBR down.
+    refl = sensor.reflectance(image, ee_module)
+    return (refl.normalizedDifference(["nir", "swir2"]).rename(INDEX_BAND)
+            .set("system:time_start", image.get("system:time_start")))
+
+
 def _ndre(sensor, image, ee_module=ee):
     # NDRE = (nir − red_edge)/(nir + red_edge) — chlorophyll/nitrogen-sensitive,
     # slower to saturate over dense canopy than NDVI. Sentinel-2 only: the red
@@ -338,6 +347,10 @@ class Index:
     # the numbering — so `landcover` averages class PROBABILITIES and takes the
     # argmax instead.
     reduce_period: Callable = None
+    # Optional (collection, cfg) -> Image: like `reduce_period` but handed the run
+    # config — for a reduction that needs the AOI (lst_rf trains its forest on the
+    # frame). Preferred over `reduce_period` when both are set.
+    reduce_period_cfg: Callable = None
     # Categorical products only: ((value, label, hex), ...) in legend order. Non-empty
     # marks the product as classified, which drives the swatch legend instead of a
     # colour ramp and forbids interpolation (blending two class colours invents a
@@ -464,12 +477,12 @@ _REFL = frozenset({"sentinel2", "landsat", "modis"})
 
 # Thermal (LST) indices. The Landsat ones drive the L8/L9 mission default and the
 # 100 m native scale; lst_modis is a MODIS product (its own sensor + 1 km native).
-THERMAL_INDICES = frozenset({"lst", "lst_smw", "lst_sharp", "lst_modis"})
+THERMAL_INDICES = frozenset({"lst", "lst_smw", "lst_sharp", "lst_modis", "lst_rf"})
 
 # Coarsest-relevant native ground sampling (metres) per sensor, with overrides.
 _SENSOR_NATIVE_M = {"sentinel2": 10, "landsat": 30, "modis": 500, "modis_lst": 1000,
                     "dynamicworld": 10}   # Sentinel-2 derived, so Sentinel-2's grid
-_S2_20M_INDICES = frozenset({"ndmi", "ndre"})   # ndmi: 20 m SWIR; ndre: 20 m red edge (B5)
+_S2_20M_INDICES = frozenset({"ndmi", "ndre", "nbr"})   # ndmi/nbr: 20 m SWIR (B11/B12); ndre: 20 m red edge (B5)
 
 
 def native_scale_m(sensor: str, index: str) -> int:
@@ -480,6 +493,8 @@ def native_scale_m(sensor: str, index: str) -> int:
     """
     if sensor == "landsat" and index == "lst_sharp":
         return 30    # sharpened to the fine NIRv (reflectance) grid
+    if sensor == "landsat" and index == "lst_rf":
+        return 20    # sharpened to the Sentinel-2 SWIR (B11) grid
     if sensor == "landsat" and index in THERMAL_INDICES:
         return 100
     if sensor == "sentinel2" and index in _S2_20M_INDICES:
@@ -552,6 +567,14 @@ INDICES = {
                   bands="NIR, SWIR1", formula="(NIR - SWIR1) / (NIR + SWIR1)",
                   display_name="Vegetation moisture (NDMI)",
                   low_label="dry", high_label="moist"),
+    # Range is a guess from the literature (closed canopy ~0.5–0.8, bare/burnt
+    # below 0), not a measured sweep like NDVI's — check against the AOI before
+    # publishing a styled render.
+    "nbr": Index("nbr", _REFL,
+                 (-0.5, 0.9, ["#7f3b08", "#fee0b6", "#2d6a4f"]), _nbr,
+                 bands="NIR, SWIR2", formula="(NIR - SWIR2) / (NIR + SWIR2)",
+                 display_name="Burn / disturbance ratio (NBR)",
+                 low_label="disturbed / bare", high_label="intact canopy"),
     "ndre": Index("ndre", frozenset({"sentinel2"}),
                   (-0.2, 1.0, ["#a1622f", "#f6e8c3", "#238b45"]), _ndre,
                   bands="NIR, Red Edge (B5)",
@@ -603,6 +626,20 @@ INDICES["lst_smw"] = Index("lst_smw", frozenset({"landsat"}),
 
 # MODIS LST (MOD11A1 Terra daily, 1 km) — coarse but ~daily, so it fills the
 # cloud-locked months Landsat's 16-day revisit misses.
+# "lst_rf": random-forest thermal sharpening with Sentinel-2 predictors + DEM.
+# Per-image compute is the plain C2 L2 ST → °C (same as `lst`); the sharpening is
+# a per-PERIOD reduction (sharpen.lst_rf_period) because it trains on the month's
+# composite. Experimental — see docs/superpowers/plans/2026-09-17-lst-rf-sharpening.md.
+from . import sharpen  # noqa: E402  (imports INDEX_BAND/_s2_mask_clouds from us)
+INDICES["lst_rf"] = Index("lst_rf", frozenset({"landsat"}),
+                          (-10.0, 40.0, _LST_PALETTE), _lst,
+                          reduce_period_cfg=sharpen.lst_rf_period,
+                          bands="Thermal(100m) + S2 NDVI/NIRv/NDBI/MNDWI(20m) + DEM(30m)",
+                          formula="RF(LST100 ~ predictors) at 20m + coarse residual",
+                          units="°C",
+                          display_name="Land surface temperature (RF-sharpened)",
+                          low_label="cooler", high_label="warmer")
+
 INDICES["lst_modis"] = Index("lst_modis", frozenset({"modis_lst"}),
                              (-10.0, 40.0, _LST_PALETTE), _lst_modis,
                              bands="MOD11A1 LST_Day_1km (1 km, daily)",

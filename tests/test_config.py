@@ -859,6 +859,85 @@ def test_render_pixel_grid_rejects_a_non_boolean(tmp_path, value):
         RunConfig.from_yaml(_write(tmp_path, body))
 
 
+def test_smooth_harmonic_refuses_lst_rf(tmp_path):
+    # The sharpened field is trained per month; fitting a seasonal curve through
+    # it is a second experiment, not this one.
+    body = _base("index: lst_rf\nsmooth: harmonic\n")
+    with pytest.raises(ConfigError, match="lst_rf"):
+        RunConfig.from_yaml(_write(tmp_path, body))
+
+
+def test_overlay_parses_and_defaults_to_none(tmp_path):
+    rasterio = pytest.importorskip("rasterio")
+    import numpy as np
+    from rasterio.transform import from_bounds
+    tif = tmp_path / "dens.tif"
+    with rasterio.open(tif, "w", driver="GTiff", height=4, width=4, count=1, dtype="float32",
+                       crs="EPSG:4326", transform=from_bounds(0, 0, 1, 1, 4, 4)) as d:
+        d.write(np.zeros((4, 4), "float32"), 1)
+    assert RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n"))).overlay is None
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+        f"index: ndvi\noverlay:\n  raster: {tif}\n  levels: [20, 60]\n  colors: ['#ffb000', '#ff2a2a']\n")))
+    assert cfg.overlay["raster"] == str(tif) and cfg.overlay["levels"] == [20.0, 60.0]
+    with pytest.raises(ConfigError, match="not found"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\noverlay: {raster: /nowhere.tif, levels: [1]}\n")))
+
+
+@pytest.mark.parametrize("key, value, match", [
+    ("harmonics", "abc", "harmonics must be a whole number"),
+    ("harmonics", "0", "harmonics must be between 1 and 5"),   # used to be silently coerced to 2
+    ("min_scenes", "x", "min_scenes must be a whole number"),
+])
+def test_top_level_integers_give_one_line_config_errors(tmp_path, key, value, match):
+    body = _base(f"index: lst\n{key}: {value}\n" + ("smooth: harmonic\n" if key == "harmonics" else ""))
+    with pytest.raises(ConfigError, match=match):
+        RunConfig.from_yaml(_write(tmp_path, body))
+
+
+def test_sharpen_local_refuses_anomaly(tmp_path):
+    # anomaly runs before sharpen_local in cli.run and rebuilds each frame with only
+    # its timestamp, dropping the s2_start/s2_end window the local sharpener needs;
+    # without this guard EE fails at export time with an opaque ee.Date(null) error.
+    body = _base("index: lst_rf\nsharpen: local\nanomaly: climatology\n")
+    with pytest.raises(ConfigError, match="anomaly"):
+        RunConfig.from_yaml(_write(tmp_path, body))
+
+
+def test_region_only_defaults_off_and_parses_a_boolean(tmp_path):
+    assert RunConfig.from_yaml(_write(tmp_path, _base("index: lst\n"))).region_only is False
+    assert RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nregion_only: true\n"))).region_only is True
+    with pytest.raises(ConfigError, match="region_only must be true or false"):
+        RunConfig.from_yaml(_write(tmp_path, _base('index: lst\nregion_only: "true"\n')))
+
+
+def test_relative_region_mean_parses_and_defaults_to_a_symmetric_diverging_viz(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nrelative: region_mean\n")))
+    assert cfg.relative == "region_mean"
+    assert (cfg.viz_min, cfg.viz_max) == (-4.0, 4.0)
+    assert cfg.palette[0].lower() != cfg.palette[-1].lower()     # diverging ends differ
+    # an explicit viz still wins
+    cfg2 = RunConfig.from_yaml(_write(tmp_path, _base(
+        "index: lst\nrelative: region_mean\nviz: {min: -2, max: 2}\n")))
+    assert (cfg2.viz_min, cfg2.viz_max) == (-2.0, 2.0)
+
+
+def test_relative_rejects_unknown_modes_and_composites(tmp_path):
+    with pytest.raises(ConfigError, match="relative"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nrelative: frame_mean\n")))
+    with pytest.raises(ConfigError, match="relative"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: rgb\nrelative: region_mean\n")))
+
+
+def test_sharpen_local_parses_and_is_lst_rf_only(tmp_path):
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base("index: lst_rf\nsharpen: local\n")))
+    assert cfg.sharpen == "local"
+    assert RunConfig.from_yaml(_write(tmp_path, _base("index: lst_rf\n"))).sharpen is None
+    with pytest.raises(ConfigError, match="sharpen"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nsharpen: local\n")))
+    with pytest.raises(ConfigError, match="sharpen"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: lst_rf\nsharpen: cloud\n")))
+    with pytest.raises(ConfigError, match="metadata"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: lst_rf\nsharpen: local\nmetadata: true\n")))
 def test_pixel_grid_requires_a_preset_to_upscale_into(tmp_path):
     # Without render.preset the output equals the fetched raster, every pixel is
     # a cell edge and the mesh degenerates into a 35 % white wash.

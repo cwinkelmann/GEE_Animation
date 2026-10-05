@@ -106,6 +106,11 @@ def build(cfg, frame_geom, region_geom, *, apply_cloud_filters: bool = True, ee_
         coll = coll.filter(ee_module.Filter.Or(
             ee_module.Filter.neq("mission", "L7"),
             ee_module.Filter.lt("system:time_start", SLC_OFF_MILLIS)))
+        if str(getattr(cfg, "end", "")) > "2003-05-31":
+            # Say so: a run that used to include post-2003 L7 now silently has fewer
+            # scenes, and `allow_slc_off` is the only way to get them back.
+            log.info("landsat: Landsat 7 scenes after 2003-05-31 (SLC-off stripes) are "
+                     "excluded; set allow_slc_off: true to keep them")
     # Landsat mission selection (thermal defaults to L8/L9); applied to either path.
     missions = effective_missions(cfg)
     if missions is not None:
