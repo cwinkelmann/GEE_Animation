@@ -665,8 +665,14 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
         ov_y = panel_bottom + max(3, lw * 2)
         sw = max(6, text_h)
         xcur = x0
-        for level, color in zip(ov["levels"], ov["colors"]):
-            text = f"≥ {level:g}"
+        levels = list(ov["levels"])
+        for i, (level, color) in enumerate(zip(levels, ov["colors"])):
+            # fill mode paints the band [level_i, level_i+1); say so, except for the
+            # open-ended top band. Lines mode outlines everything >= level.
+            if ov.get("mode", "lines") == "fill" and i + 1 < len(levels):
+                text = f"{level:g}–{levels[i + 1]:g}"
+            else:
+                text = f"≥ {level:g}"
             tw = draw.textbbox((0, 0), text, font=font)[2]
             ov_items.append((xcur, ov_y, sw, _hex_to_rgb(color), text))
             xcur += sw + max(3, lw * 2) + tw + max(8, lw * 5)

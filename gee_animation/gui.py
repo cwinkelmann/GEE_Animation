@@ -443,7 +443,6 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
     # container) so a GUI run survives the process and shows up in "Load a previous
     # animation"; a temp dir, the old default, vanished with the container.
     out_dir = out_dir or str(Path(OUTPUT_DIR) / f"{sensor}_{index}_{time.strftime('%Y%m%d-%H%M%S')}")
-    Path(out_dir).mkdir(parents=True, exist_ok=True)
 
     deps.init(project)
     region_geom = deps.parse(region_aoi)
@@ -514,7 +513,11 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
         baseline_years=_pool_years(baseline_start_year, baseline_end_year,
                                    what="the anomaly baseline"),
     )
-    return cfg, frame_geom, region_geom, _validate(cfg)
+    warnings = _validate(cfg)
+    # Only a validated run gets its folder — an auth or config error must not leave
+    # an empty timestamped directory under OUTPUT_DIR.
+    Path(cfg.out_dir).mkdir(parents=True, exist_ok=True)
+    return cfg, frame_geom, region_geom, warnings
 
 
 def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
@@ -938,7 +941,10 @@ def build_app():
         def _sync_index(s):
             choices = indices_for(s)
             return gr.update(choices=choices, value=choices[0])
-        sensor.change(_sync_index, sensor, index)
+        # `.input`, not `.change`: `.change` also fires on programmatic updates, so
+        # applying a preset (which sets sensor AND index) would have the index reset
+        # to the sensor's first choice a moment later.
+        sensor.input(_sync_index, sensor, index)
 
         # Every run-shaped callback returns the same widget tuple:
         # (video, gif, gallery, frames_zip, inventory_csv, status, chart).
