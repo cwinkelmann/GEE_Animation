@@ -33,6 +33,10 @@ from .config import ConfigError
 DEFAULT_COLORS = ["#ffb000", "#ff2a2a", "#8b0000", "#4a0000"]
 DEFAULT_LINE_PX = 2          # at 1080 px output height
 DEFAULT_ALPHA = 0.9
+#: "lines": outline the cells at or above each level (a cell-based definition, e.g.
+#: "windthrow cells"). "fill": paint the band between consecutive levels in that
+#: level's colour (a continuous surface, e.g. a kernel density in m per ha).
+MODES = ("lines", "fill")
 
 
 def parse(raw) -> dict | None:
@@ -71,7 +75,13 @@ def parse(raw) -> dict | None:
     alpha = float(raw.get("alpha", DEFAULT_ALPHA))
     if not 0 < alpha <= 1:
         raise ConfigError("overlay.alpha must be in (0, 1]")
-    return {"raster": raster, "levels": levels, "colors": colors, "line_px": line_px, "alpha": alpha}
+    mode = str(raw.get("mode", "lines"))
+    if mode not in MODES:
+        raise ConfigError(f"overlay.mode must be one of {sorted(MODES)}, got {mode!r}")
+    label = raw.get("label")
+    label = str(label) if label else None
+    return {"raster": raster, "levels": levels, "colors": colors, "line_px": line_px,
+            "alpha": alpha, "mode": mode, "label": label}
 
 
 def _hex_to_rgb(color: str) -> tuple:
@@ -115,9 +125,14 @@ def level_masks(spec: dict, bounds: tuple, crs, out_hw: tuple) -> list:
     or above the level, and the level's colour. Built once per run by `render`."""
     grid = _on_output_grid(spec, bounds, crs, out_hw)
     px = max(1, int(round(spec["line_px"] * out_hw[0] / 1080)))
+    levels, colors = spec["levels"], spec["colors"]
     masks = []
-    for level, color in zip(spec["levels"], spec["colors"]):
+    for i, (level, color) in enumerate(zip(levels, colors)):
         above = np.isfinite(grid) & (grid >= level)
+        if spec.get("mode", "lines") == "fill":
+            band = above if i + 1 == len(levels) else above & ~(grid >= levels[i + 1])
+            masks.append((band.astype(np.float32), _hex_to_rgb(color)))
+            continue
         edge = above & ~_erode(above)          # inner boundary: cells above whose 4-neighbourhood is not
         for _ in range(px - 1):
             edge = _dilate(edge)
