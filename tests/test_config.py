@@ -883,6 +883,17 @@ def test_overlay_parses_and_defaults_to_none(tmp_path):
         RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\noverlay: {raster: /nowhere.tif, levels: [1]}\n")))
 
 
+@pytest.mark.parametrize("key, value, match", [
+    ("harmonics", "abc", "harmonics must be a whole number"),
+    ("harmonics", "0", "harmonics must be between 1 and 5"),   # used to be silently coerced to 2
+    ("min_scenes", "x", "min_scenes must be a whole number"),
+])
+def test_top_level_integers_give_one_line_config_errors(tmp_path, key, value, match):
+    body = _base(f"index: lst\n{key}: {value}\n" + ("smooth: harmonic\n" if key == "harmonics" else ""))
+    with pytest.raises(ConfigError, match=match):
+        RunConfig.from_yaml(_write(tmp_path, body))
+
+
 def test_sharpen_local_refuses_anomaly(tmp_path):
     # anomaly runs before sharpen_local in cli.run and rebuilds each frame with only
     # its timestamp, dropping the s2_start/s2_end window the local sharpener needs;

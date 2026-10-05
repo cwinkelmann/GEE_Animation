@@ -2878,7 +2878,7 @@ def test_render_returns_geotiff_paths_only_when_enabled(tmp_path, monkeypatch):
         return np.zeros((16, 16)), np.ones((16, 16), bool)
     called = []
     monkeypatch.setattr(R, "_export_geotiffs",
-                        lambda frames, cfg, geometry: called.append(1) or [])
+                        lambda frames, cfg, geometry, bounds=None: called.append(1) or [])
     render([Frame("2022-06", object())], cfg, fetch=fetch, geometry=None)
     assert not called                        # default off
     cfg = _cfg(tmp_path, name="tifgate2")
@@ -3109,6 +3109,16 @@ def test_render_skips_pixel_grid_when_unset(tmp_path, monkeypatch):
         return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
 
     render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+
+
+def test_export_geotiffs_without_a_frame_aoi_does_not_crash(tmp_path):
+    # api/GUI callers may build a cfg without frame_aoi; the fit-scale backstop used
+    # to call _aoi_bounds({}) and raise KeyError before a single frame was exported.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.frame_aoi = None
+    cfg.geotiffs = True
+    assert r._export_geotiffs([], cfg, None) == []
 
 
 # --- raster overlay (overlay: {raster, levels, colors}) ------------------------------

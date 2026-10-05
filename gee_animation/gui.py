@@ -17,7 +17,7 @@ import zipfile
 from pathlib import Path
 
 from . import (anomaly, auth, aoi, charts, collection, compositing, focus, inventory,
-               presets, render, sharpen_local, smoothing)
+               metadata, presets, render, sharpen_local, smoothing)
 from .compositing import period_starts
 from .config import POOL_STRATEGIES, SUPPORTED_CADENCES, ConfigError, RunConfig
 from .products import INDICES, SENSORS, get_product
@@ -33,6 +33,7 @@ DEFAULT_DEPS = types.SimpleNamespace(
     smooth=smoothing.apply,
     sharpen_local=sharpen_local.apply,
     focus=focus.apply,
+    metadata=metadata.write_frame_metadata,
     render=render.render,
     timeseries=charts.inside_outside_timeseries,
     inventory=inventory.write_inventory,
@@ -639,6 +640,9 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
     frames = deps.smooth(frames, coll, cfg)
     frames = deps.sharpen_local(frames, cfg, frame_geom, region_geom)
     frames = deps.focus(frames, cfg, region_geom)
+    if cfg.metadata:
+        # frame_geom defines the "outside" comparison area (frame minus region)
+        deps.metadata(frames, cfg, region_geom, frame_geom=frame_geom)
     paths = deps.render(frames, cfg, geometry=frame_geom)
     mp4 = next((str(p) for p in paths if str(p).endswith(".mp4")), None)
     gif = next((str(p) for p in paths if str(p).endswith(".gif")), None)

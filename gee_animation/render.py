@@ -226,7 +226,7 @@ def _geotiff_params(cfg, geometry) -> dict:
     return params
 
 
-def _export_geotiffs(frames, cfg, geometry) -> list:
+def _export_geotiffs(frames, cfg, geometry, bounds=None) -> list:
     """Write one georeferenced GeoTIFF per observed frame: ``{name}_{label}.tif``.
 
     Raw bytes are disk-cached exactly like thumbnails (the ``GEO_TIFF`` format
@@ -249,10 +249,14 @@ def _export_geotiffs(frames, cfg, geometry) -> list:
     out_dir.mkdir(parents=True, exist_ok=True)
     composite = _is_composite(cfg)
     params = _geotiff_params(cfg, geometry)
-    # Backstop for a frame so wide that even float32 exceeds the cap.
-    params["scale"] = _geotiff_fit_scale(
-        cfg, _aoi_bounds(getattr(cfg, "frame_aoi", None) or {}),
-        3 if composite else 1, params["scale"])
+    # Backstop for a frame so wide that even float32 exceeds the cap. `bounds` is
+    # render()'s already-resolved frame extent; callers without a frame_aoi (api/GUI
+    # paths) have no extent to fit, so the backstop is skipped instead of crashing
+    # on `_aoi_bounds({})`.
+    if bounds is None and getattr(cfg, "frame_aoi", None):
+        bounds = _aoi_bounds(cfg.frame_aoi)
+    if bounds is not None:
+        params["scale"] = _geotiff_fit_scale(cfg, bounds, 3 if composite else 1, params["scale"])
     failed: list[str] = []
 
     def one(frame):
@@ -849,6 +853,8 @@ _SENSOR_CREDITS = {
     "landsat": "Landsat imagery courtesy of the U.S. Geological Survey",
     "modis": "MODIS data courtesy of NASA LP DAAC",
     "modis_lst": "MODIS data courtesy of NASA LP DAAC",
+    # Dynamic World is CC BY 4.0 (Google / World Resources Institute) on Sentinel-2.
+    "dynamicworld": "Dynamic World (Google, WRI; CC BY 4.0) — contains modified Copernicus Sentinel data",
 }
 
 
@@ -2356,7 +2362,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     paths = assemble_stream(_produced(_finished()), cfg)
     # GeoTIFF export last: by now every frame's thumbnail fetch has already
     # warmed the EE session, and a mid-run failure here cannot cost the video.
-    tif_paths = (_export_geotiffs(frames, cfg, geometry)
+    tif_paths = (_export_geotiffs(frames, cfg, geometry, bounds=bounds)
                  if getattr(cfg, "geotiffs", False) else [])
     return paths + png_paths + tif_paths
 

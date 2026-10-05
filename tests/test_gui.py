@@ -63,6 +63,7 @@ def _fake_deps(tmp_path, captured, frames=None):
         smooth=step("smooth"),
         sharpen_local=step("sharpen_local"),
         focus=step("focus"),
+        metadata=step("metadata"),
         render=lambda frames_, cfg, geometry=None: (calls.append("render") or render(frames_, cfg, geometry)),
         timeseries=timeseries,
         inventory=inventory,
@@ -139,6 +140,24 @@ def test_pipeline_steps_run_in_cli_order(tmp_path):
         aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst",
         start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path), deps=_fake_deps(tmp_path, captured))
     assert captured["calls"] == ["anomaly", "smooth", "sharpen_local", "focus", "render", "timeseries"]
+
+
+def test_record_statistics_actually_writes_metadata(tmp_path):
+    # The checkbox used to set cfg.metadata and nothing else: the GUI never called
+    # metadata.write_frame_metadata, so "Record per-frame statistics" was a no-op.
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path), write_metadata=True,
+        deps=_fake_deps(tmp_path, captured))
+    calls = captured["calls"]
+    assert "metadata" in calls and calls.index("metadata") < calls.index("render")
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        deps=_fake_deps(tmp_path, captured))
+    assert "metadata" not in captured["calls"]
 
 
 def test_sharpening_and_focus_fields_reach_the_config(tmp_path):
