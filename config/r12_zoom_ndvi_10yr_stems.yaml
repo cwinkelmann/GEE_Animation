@@ -56,6 +56,6 @@ overlay:
   raster: docs/aoi/r12/r12_stem_kde40_5m.tif
   mode: fill
   levels: [100, 250, 500, 1000]
-  colors: ["#ffe082", "#ffb000", "#ff5a1f", "#c40000"]
-  alpha: 0.45
+  colors: ["#fbb4d9", "#f768a1", "#c51b8a", "#7a0177"]   # magenta: the one hue the NDVI palette never uses
+  alpha: 0.55
   label: "fallen stems, m per ha"
