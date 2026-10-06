@@ -1,0 +1,58 @@
+# The r13_zoom_lst_pretty_10yr_grid_noaoi cut (unsharpened 100 m thermal cells, harmonic seasonal model, pixel mesh)
+# shown as each frame's departure from the footprint's own mean, -3..+3 K on the diverging ramp --
+# the same view as the RF-sharpened delta cuts, at the native resolution, for comparison.
+# Never chunk this run (smooth: harmonic fits one curve across the whole period).
+name: r13_zoom_lst_pretty_10yr_grid_delta_noaoi
+project: hnee-331218
+title: Spandauer Forst, Revier 13
+subtitle: Surface temperature · Δ vs footprint mean · 100 m grid
+aoi:
+  frame:
+    bbox:
+    - 13.133
+    - 52.5582
+    - 13.2168
+    - 52.6024
+  region:
+    geojson: docs/aoi/r13/r13_footprint.geojson
+  region_max_cloud_percent: 20
+start: '2017-01-01'
+end: '2026-09-01'
+sensor: landsat
+index: lst
+cadence: monthly
+max_cloud_percent: 70
+draw_region: false
+missions:
+- L8
+- L9
+smooth: harmonic
+harmonics: 2
+metadata: false
+viz:
+  min: -3.0
+  max: 3.0
+  palette:
+  - '#2166ac'
+  - '#67a9cf'
+  - '#d1e5f0'
+  - '#f7f7f7'
+  - '#fddbc7'
+  - '#ef8a62'
+  - '#b2182b'
+render:
+  fps: 6
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 10
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: match
+  upscale: nearest
+  region_line_width: 5
+  quality: 9
+  raw_frames: true
+  geotiffs: false
+  pixel_grid: true
+relative: region_mean

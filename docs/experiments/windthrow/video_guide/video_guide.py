@@ -110,6 +110,8 @@ def entries(site: str):
         f"The zoomed NDVI cut with the stem overlay in magenta. {STEMS}")
     add(f"zoom_nbr_10yr{zoom_noaoi}", "NBR, zoomed",
         f"{NBR} Zoomed to the footprint. {PERIOD}.")
+    add(f"zoom_nbr_10yr{zoom_noaoi}_stems", "NBR, zoomed, with fallen-stem density",
+        f"The zoomed NBR cut with the stem overlay in magenta. {STEMS}")
     add("zoom_rgb_10yr_noaoi", "True colour, zoomed",
         f"{RGB} Zoomed to the footprint, no outline. {PERIOD}.")
     add(f"lst_pretty_10yr{zoom_noaoi}", "Surface temperature, wide frame",
@@ -125,6 +127,11 @@ def entries(site: str):
     if s == "r13":
         add("zoom_lst_pretty_10yr_grid_noaoi", "Surface temperature, zoomed, 100 m grid, no outline",
             "The zoomed gridded temperature cut without the outline.")
+    add(f"zoom_lst_pretty_10yr_grid_delta{zoom_noaoi}", "Surface temperature, 100 m grid, departure from footprint mean",
+        "The zoomed 100 m temperature cut with the pixel mesh, shown as each frame's departure from "
+        "the footprint's own mean that month (−3 to +3 K, blue cooler, red warmer) at the native thermal "
+        "resolution: the unsharpened counterpart of the sharpened departure cuts, for judging what the "
+        "sharpening adds. Seasonal cycle removed; the felled stands appear as warm cells from July 2025 on.")
     add("zoom_lst_rf_local_10yr", "Sharpened surface temperature, zoomed",
         f"{RF} Zoomed to the footprint; compare with the 100 m grid cut to see what the sharpening adds. {PERIOD}.")
     if s == "r13":
