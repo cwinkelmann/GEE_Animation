@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 VIDEOS, OUT_R12, OUT_R13, WORK = (Path(a) for a in sys.argv[1:5])
+OUT_WNE = Path(sys.argv[5]) if len(sys.argv) > 5 else None
 PY = sys.executable
 
 SITES = {
@@ -22,6 +23,14 @@ SITES = {
         zoom="4.7 × 4.7 km, the footprint plus 0.4 km",
         wide="16.3 × 6.9 km, 16:9",
         outline="The footprint is outlined in every video except the true-colour cut.",
+    ),
+    "wne": dict(
+        name="Grumsin beech reserve (WNE), control site",
+        area="the UNESCO World Heritage beech reserve in the Schorfheide, Brandenburg, with no known 2025 storm damage; "
+             "it is the control that shows what the Tegel signals look like where nothing happened",
+        zoom="4.5 × 3.3 km, the reserve plus 0.4 km",
+        wide="22.2 × 9.4 km, 16:9",
+        outline="The reserve boundary is outlined in both videos.",
     ),
     "r13": dict(
         name="Spandauer Forst, Revier 13 (R13)",
@@ -72,6 +81,17 @@ SAR_DELTA = ("Same radar series as each month's departure from the footprint mea
 # (filename stem, title, description, thumbnail position as fraction of duration)
 def entries(site: str):
     s = site
+    if s == "wne":
+        return [
+            ("wne_cinema_lst_rf_2018_2026", "Sharpened surface temperature, wide frame",
+             f"{RF.replace(' Absolute temperature, 15 to 45 °C.', '')} Wide frame ({SITES[s]['wide']}) with the surroundings, January 2018 to July 2026, one frame per "
+             "month at 2 frames per second. Colour range −3 to 46 °C (the reserve's measured range). The reserve "
+             "shows the ordinary seasonal cycle and nothing else across 2025.", 0.89),
+            ("wne_focus_lst_rf_delta_2018_2026", "Sharpened temperature, departure from reserve mean, reserve only",
+             f"{DELTA.replace('footprint', 'reserve').replace('the felled stands appear as warm patches from July 2025 on', 'in the control nothing appears in 2025')} "
+             "Everything outside the reserve is masked. Zoomed to the reserve "
+             f"({SITES[s]['zoom']}), January 2018 to July 2026.", 0.89),
+        ]
     zoom_noaoi = "_noaoi" if site == "r13" else ""
     E = []
     def add(stem, title, text, pos=0.89):
@@ -203,3 +223,5 @@ def build(site: str, out_dir: Path):
 """)
 build("r12", OUT_R12)
 build("r13", OUT_R13)
+if OUT_WNE is not None:
+    build("wne", OUT_WNE)
