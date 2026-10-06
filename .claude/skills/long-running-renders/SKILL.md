@@ -33,7 +33,12 @@ daily or the span is long.
 
 **The one cost:** interpolation is computed within a chunk, so the generated
 transition across each boundary is missing — one small jump per boundary. With
-`interpolate: 0` there is no cost at all.
+`interpolate: 0` there is no cost at all. So chunk as coarsely as the run
+survives: the delivered ten-year Sentinel-2 cuts use `--years 5` (one seam);
+a yearly-chunked twin of a sibling cut came out with 1077 frames against 1257
+and had to be re-rendered. Runs whose fetches are already cached (`lst_rf`
+re-renders) need no chunking at all, and `smooth: harmonic` must never be
+chunked — each chunk would fit its own seasonal curve.
 
 ## Run renders sequentially
 
@@ -67,6 +72,25 @@ look dead and a dead run look working.
 ps -Ao pid,etime,rss,command | grep '[g]ee-animation --config'
 ```
 
+## A stalled run after a network blip
+
+Two Sentinel-2 runs sat for over an hour at **0 % CPU** after a transient
+error (`thumbnail fetch attempt 1/3 failed (The read operation timed out)`,
+then a DNS failure) and never resumed. The download loop retries with
+timeouts; the hang is in a call outside it. The process looks alive, so judge
+by progress, not by `ps`:
+
+```bash
+stat -f "%Sm" -t "%H:%M" $(ls -t out/<name>_part*_20*.png | head -1)   # newest raw frame
+ps -Ao pid,etime,%cpu,command | grep '[g]ee-animation --config'          # 0.0 → stalled
+```
+
+No new frame for 20 minutes with the network back means kill the whole tree
+and relaunch; the rerun resumes from cache. A chunk that *dies* with
+`Not signed up for Earth Engine or project is not registered` hit a passing
+auth blip: rerun that chunk alone (a config with the chunk's `start`/`end` and
+`name: <name>_partNN`) and `ffmpeg -f concat -c copy` it to the finished parts.
+
 ## Stopping a run cleanly
 
 **Killing the parent is not enough.** `render_chunked.py` launches
@@ -89,3 +113,5 @@ cached thumbnails rather than starting over.
 | HTTP 429 | too many concurrent renders, not a transient blip |
 | a run "finished" but wrote fewer frames than periods | months with no usable scene, not an error — check the count |
 | stopped a chunked run and quota keeps burning | orphaned child process |
+| a run with no new raw frame for 20+ min, 0 % CPU, after a network error | stalled, not slow — kill and relaunch |
+| two `gee-animation` processes with the same config | a queue was restarted over an orphan — kill the older one |
