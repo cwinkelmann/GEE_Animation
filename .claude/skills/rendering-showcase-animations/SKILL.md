@@ -16,17 +16,19 @@ Margins come out of the canvas *height*, so imagery only fills the width at one
 specific aspect. A "square-ish" reserve bbox at `aspect: "16:9"` renders with
 half the frame black.
 
-"Two-line" means header line 2 exists **at all**. It exists if *any* of these is
-true: `subtitle` is set (whatever its text), the run pools years, the run
-interpolates, or the product is a titled composite. It does not have to be a
-caveat.
+"Two-line" means header line 2 exists **at all**. Since 2026-10-06 the ramp
+legend lives in that second line (right-aligned, beside the subtitle and
+caveats), so **every single-band product is two-line** — NDVI, NBR, LST, radar,
+anomalies, all of them, whatever the subtitle. Only composites (`rgb`, `cir`)
+can be one-line, and even those become two-line when a `subtitle` is set, the
+run pools years, the run interpolates, or the composite is titled.
 
 | Preset | Header | Required **frame** aspect (w/h in **metres**) |
 |---|---|---|
-| 1080p / 4k / 720p | two-line — line 2 exists | **2.373** |
-| 1080p / 4k / 720p | one-line — title only, no subtitle, no pooling, no interpolation | **2.136** |
+| 1080p / 4k / 720p | two-line — any palette product; or a composite with subtitle / pooling / interpolation / title | **2.373** |
+| 1080p / 4k / 720p | one-line — an untitled composite with none of those | **2.136** |
 
-Nearly every showcase run is two-line → **2.373**. Compute the bbox with
+In practice every showcase run is two-line → **2.373**. Compute the bbox with
 `scripts/fit_frame_bbox.py` (it handles the cos(latitude) correction — degrees
 of longitude are shorter than degrees of latitude away from the equator):
 
@@ -34,6 +36,12 @@ of longitude are shorter than degrees of latitude away from the equator):
 python .claude/skills/rendering-showcase-animations/scripts/fit_frame_bbox.py \
     --region 13.60 52.85 14.05 53.10 --aspect 2.373
 ```
+
+Footprint-shaped canvases (`aspect: "match"` on a square-ish AOI) are portrait.
+Their header, footer and legend are sized from the **16:9-equivalent height**
+(`w × 9/16`), so they get the proportions of a 16:9 frame of the same width
+instead of text twice as large. The map is never covered: the legend is in the
+header band, the footprint can touch the top of the imagery.
 
 ## Two AOIs, never one
 
