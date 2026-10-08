@@ -1,0 +1,31 @@
+# R13 DATA-ONLY run: monthly EVI composites over the zoomed footprint frame,
+# no gap-filling (every frame is real data for its own month), GeoTIFF per month,
+# no pictures. Used by docs/experiments/windthrow/index_drops.py.
+name: r13_data_evi
+project: hnee-331218
+title: Spandauer Forst, Revier 13
+subtitle: Berlin, Germany
+aoi:
+  frame: { bbox: [13.1330, 52.5582, 13.2168, 52.6024] }
+  region: { geojson: docs/aoi/r13/r13_footprint.geojson }
+  region_max_cloud_percent: 20
+start: "2017-01-01"
+end: "2026-09-01"
+sensor: sentinel2
+index: evi
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+
+
+render:
+  fps: 1
+  interpolate: 0
+  scale: 10
+  dimensions: 480
+  crs: auto
+  upscale: nearest
+  gif: false
+  frames: false
+  raw_frames: false
+  geotiffs: true
