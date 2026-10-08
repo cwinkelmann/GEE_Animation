@@ -39,6 +39,22 @@ class ConfigError(ValueError):
 _RENDER_FLAGS = ("gif", "frames", "pixel_grid")
 
 
+def _top_int(raw: dict, key: str, default: int) -> int:
+    """A top-level integer key with a default — the `_opt_int` rule for keys outside
+    `render:` (`harmonics`, `min_scenes`): a YAML string or bool gives the one-line
+    config error, and 0 is passed through for `validate()` to reject rather than
+    being silently replaced by the default."""
+    value = raw.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ConfigError(f"{key} must be a whole number, got {value!r}")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{key} must be a whole number, got {value!r}") from exc
+
+
 def _opt_int(render: dict, key: str):
     """A `render.<key>` integer, or None when the key is absent/null.
 
@@ -320,7 +336,7 @@ class RunConfig:
                 relative=(str(relative) if relative else None),
                 sharpen=(str(raw["sharpen"]) if raw.get("sharpen") else None),
                 smooth=(str(raw["smooth"]) if raw.get("smooth") else None),
-                harmonics=int(raw.get("harmonics", 2) or 2),
+                harmonics=_top_int(raw, "harmonics", 2),
                 region_line_width=(int(render["region_line_width"])
                                    if render.get("region_line_width") is not None else None),
                 anomaly=anomaly,
@@ -330,7 +346,7 @@ class RunConfig:
                 pool_strategy=str(raw.get("pool_strategy") or "least_cloudy"),
                 metadata=_flag(raw, "metadata", default=False, scope=""),
                 missions=raw.get("missions"),
-                min_scenes=int(raw.get("min_scenes", 1)),
+                min_scenes=_top_int(raw, "min_scenes", 1),
                 allow_upsample=bool(raw.get("allow_upsample", False)),
                 debug_month=(str(raw["debug_month"]) if raw.get("debug_month") else None),
                 workers=int(render.get("workers", 4)),
@@ -468,6 +484,12 @@ class RunConfig:
                 raise ConfigError(
                     "sharpen: local cannot be combined with metadata: true — the frames "
                     "no longer live in Earth Engine, where the stats are computed")
+            if self.anomaly:
+                raise ConfigError(
+                    "sharpen: local cannot be combined with anomaly — the anomaly step "
+                    "runs first and rebuilds each frame without the Sentinel-2 window the "
+                    "local sharpener needs (and a sharpened z-score is not a temperature). "
+                    "Use relative: region_mean for a within-frame departure instead")
         if self.relative is not None:
             from .focus import RELATIVE_MODES
             if self.relative not in RELATIVE_MODES:

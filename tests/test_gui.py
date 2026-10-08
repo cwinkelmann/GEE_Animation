@@ -41,15 +41,31 @@ def _fake_deps(tmp_path, captured, frames=None):
         p.write_text("scene_id,used\n")
         return p
 
+    calls = captured.setdefault("calls", [])
+
+    def step(name):
+        def _step(frames_, *args, **kwargs):
+            calls.append(name)
+            return frames_
+        return _step
+
+    def timeseries(frames_, region, frame, scale):
+        calls.append("timeseries")
+        return [(f.label, 0.8, 0.5) for f in frames_]
+
     return types.SimpleNamespace(
         init=lambda project: captured.__setitem__("project", project),
         parse=lambda a: ("geom", tuple(sorted(a))),
         frame_bbox=frame_bbox,
         build=lambda cfg, f, r: (captured.update(cfg=cfg, frame=f, region=r) or "COLL"),
         monthly_median=lambda coll, cfg: frames,
-        anomaly=lambda frames_, cfg, f, r, build: frames_,
-        render=render,
-        timeseries=lambda frames_, region, frame, scale: [(f.label, 0.8, 0.5) for f in frames_],
+        anomaly=step("anomaly"),
+        smooth=step("smooth"),
+        sharpen_local=step("sharpen_local"),
+        focus=step("focus"),
+        metadata=step("metadata"),
+        render=lambda frames_, cfg, geometry=None: (calls.append("render") or render(frames_, cfg, geometry)),
+        timeseries=timeseries,
         inventory=inventory,
     )
 
@@ -116,6 +132,164 @@ def test_run_animation_builds_config_and_threads_geometry(tmp_path):
     assert "inside AOI 0.800" in status and "outside 0.500" in status and "+0.300" in status
 
 
+def test_pipeline_steps_run_in_cli_order(tmp_path):
+    # The GUI must apply the same steps as cli.run, in the same order: the seasonal
+    # model, local sharpening and the region focus all sit between anomaly and render.
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path), deps=_fake_deps(tmp_path, captured))
+    assert captured["calls"] == ["anomaly", "smooth", "sharpen_local", "focus", "render", "timeseries"]
+
+
+def test_record_statistics_actually_writes_metadata(tmp_path):
+    # The checkbox used to set cfg.metadata and nothing else: the GUI never called
+    # metadata.write_frame_metadata, so "Record per-frame statistics" was a no-op.
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path), write_metadata=True,
+        deps=_fake_deps(tmp_path, captured))
+    calls = captured["calls"]
+    assert "metadata" in calls and calls.index("metadata") < calls.index("render")
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        deps=_fake_deps(tmp_path, captured))
+    assert "metadata" not in captured["calls"]
+
+
+def test_sharpening_and_focus_fields_reach_the_config(tmp_path):
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst_rf",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        sharpen_local=True, region_only=True, relative="region_mean", pixel_grid=True,
+        upscale="nearest", deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.sharpen == "local" and cfg.scale == 20        # lst_rf lives on the 20 m Sentinel-2 grid
+    assert cfg.region_only is True and cfg.relative == "region_mean"
+    assert cfg.pixel_grid is True and cfg.upscale == "nearest"
+
+
+def test_sharpening_and_focus_default_off(tmp_path):
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path), deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.sharpen is None and cfg.region_only is False and cfg.relative is None
+    assert cfg.pixel_grid is False and cfg.upscale == "lanczos" and cfg.scale == 30
+    assert cfg.smooth is None and cfg.anomaly is None and cfg.baseline_years is None
+
+
+def test_local_sharpening_skips_the_earth_engine_timeseries(tmp_path):
+    # Locally sharpened frames are numpy rasters, not EE images; the inside/outside
+    # chart reduces EE images, so it is skipped rather than crashed.
+    captured = {}
+    *_, status, series = gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst_rf",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        sharpen_local=True, deps=_fake_deps(tmp_path, captured))
+    assert series == [] and "timeseries" not in captured["calls"]
+    assert "chart" in status.lower()
+
+
+def test_seasonal_model_and_anomaly_fields_reach_the_config(tmp_path):
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        smooth="harmonic", harmonics=3, deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.smooth == "harmonic" and cfg.harmonics == 3
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        anomaly_mode="climatology", baseline_start_year=2018, baseline_end_year=2021,
+        deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.anomaly == "climatology" and cfg.baseline_years == [2018, 2021]
+
+
+def test_refused_combinations_are_friendly_errors(tmp_path):
+    # validate() refuses smooth: harmonic with lst_rf and sharpen: local with anomaly;
+    # the GUI surfaces both as ValueError text, not a traceback.
+    with pytest.raises(ValueError, match="Invalid settings"):
+        gui.run_animation(
+            aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst_rf",
+            start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+            smooth="harmonic", deps=_fake_deps(tmp_path, {}))
+    with pytest.raises(ValueError, match="anomaly"):
+        gui.run_animation(
+            aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="landsat", index="lst_rf",
+            start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+            sharpen_local=True, anomaly_mode="climatology", baseline_start_year=2018,
+            baseline_end_year=2021, deps=_fake_deps(tmp_path, {}))
+
+
+def test_presets_cover_the_tegel_editions():
+    from gee_animation import presets
+    names = list(presets.PRESETS)
+    for site in ("R12", "R13"):
+        for edition in ("native", "grid", "RF"):
+            assert any(site in n and edition in n for n in names), (site, edition, names)
+
+
+def test_preset_values_are_run_animation_keywords():
+    import inspect
+    from gee_animation import presets
+    allowed = set(inspect.signature(gui.run_animation).parameters) - {"deps"}
+    for name, values in presets.PRESETS.items():
+        unknown = set(values) - allowed
+        assert not unknown, f"{name}: unknown keys {unknown}"
+        assert Path(values["aoi_path"]).exists(), f"{name}: AOI missing"
+
+
+@pytest.mark.parametrize("name", ["Tegel R12 · native 100 m", "Tegel R12 · 100 m grid",
+                                  "Tegel R12 · RF-sharpened", "Tegel R13 · RF-sharpened"])
+def test_presets_build_the_matching_config(tmp_path, name):
+    from gee_animation import presets
+    captured = {}
+    gui.run_animation(**presets.PRESETS[name], out_dir=str(tmp_path), deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.sensor == "landsat" and cfg.start == "2017-01-01" and cfg.end == "2026-09-01"
+    assert cfg.viz_min == 15.0 and cfg.viz_max == 45.0 and cfg.missions == ["L8", "L9"]
+    assert cfg.interpolate == 10 and cfg.preset == "1080p" and cfg.aspect == "match"
+    assert captured["buffer"] == 400.0
+    if "native" in name or "grid" in name:
+        assert cfg.index == "lst" and cfg.smooth == "harmonic" and cfg.sharpen is None
+        assert cfg.pixel_grid is ("grid" in name)
+        assert cfg.upscale == ("nearest" if "grid" in name else "lanczos")
+    else:
+        assert cfg.index == "lst_rf" and cfg.sharpen == "local" and cfg.smooth is None
+        assert cfg.pool_years == [2017, 2026] and cfg.pool_strategy == "gap_fill" and cfg.scale == 20
+    assert ("R12" in name) == ("Tegeler Forst" in cfg.title)
+
+
+def test_apply_preset_returns_one_value_per_wired_input():
+    pytest.importorskip("gradio")
+    import tempfile
+    from gee_animation import presets
+    app = gui.build_app()
+    for block_fn in app.fns.values():
+        if getattr(block_fn.fn, "__name__", None) == "_apply_preset":
+            values = block_fn.fn("Tegel R12 · 100 m grid")
+            assert len(values) == len(block_fn.outputs)
+            # The AOI must NOT be the package-data path: Gradio refuses to serve files
+            # it did not create (InvalidPathError in the container). It is a staged
+            # copy under the temp dir, byte-identical to the shipped footprint.
+            aoi = values[0]["value"]
+            assert aoi != presets.PRESETS["Tegel R12 · 100 m grid"]["aoi_path"]
+            assert Path(aoi).is_relative_to(Path(tempfile.gettempdir()).resolve()) or Path(aoi).is_relative_to(tempfile.gettempdir())
+            assert Path(aoi).read_bytes() == Path(presets.PRESETS["Tegel R12 · 100 m grid"]["aoi_path"]).read_bytes()
+            break
+    else:
+        raise AssertionError("no _apply_preset handler wired")
+
+
 def test_run_animation_status_reports_dropped_months(tmp_path):
     # 4-month range but only 2 frames -> status flags the 2 dropped (cloud-filtered) months
     aoi = _write_geojson(tmp_path)
@@ -151,6 +325,19 @@ def test_run_animation_rejects_unsupported_pair(tmp_path):
         gui.run_animation(aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="lst",
                           start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
                           deps=_fake_deps(tmp_path, {}))
+
+
+def test_default_out_dir_is_a_timestamped_folder_under_output_dir(tmp_path, monkeypatch):
+    # A GUI run must outlive the process (the container's /app/out is a mounted volume)
+    # and be listed by "Load a previous animation", so the default is not a temp dir.
+    monkeypatch.setattr(gui, "OUTPUT_DIR", str(tmp_path / "runs"))
+    captured = {}
+    gui.run_animation(aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="sentinel2",
+                      index="ndvi", start="2022-05-01", end="2022-07-01",
+                      deps=_fake_deps(tmp_path, captured))
+    out_dir = Path(captured["cfg"].out_dir)
+    assert out_dir.parent == tmp_path / "runs"
+    assert out_dir.name.startswith("sentinel2_ndvi_") and len(out_dir.name) == len("sentinel2_ndvi_20260101-120000")
 
 
 def test_run_animation_requires_aoi(tmp_path):
@@ -465,6 +652,13 @@ def test_build_app_input_order_matches_handler_param_order():
         ("fit_frame", "Fit the frame to the output shape"),
         ("viz_min", "Colour scale min"), ("viz_max", "Colour scale max"),
         ("missions", "Landsat missions"),
+        ("sharpen_local", "sharpening forest locally"),
+        ("region_only", "Show the region only"),
+        ("relative", "Relative to"), ("pixel_grid", "pixel grid"),
+        ("upscale", "Upscaling filter"),
+        ("smooth", "Seasonal smoothing"), ("harmonics", "Harmonics"),
+        ("anomaly_mode", "Anomaly mode"),
+        ("baseline_start", "Baseline from year"), ("baseline_end", "Baseline to year"),
     ]
     app = gui.build_app()
     checked = []

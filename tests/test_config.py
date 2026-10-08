@@ -867,6 +867,42 @@ def test_smooth_harmonic_refuses_lst_rf(tmp_path):
         RunConfig.from_yaml(_write(tmp_path, body))
 
 
+def test_overlay_parses_and_defaults_to_none(tmp_path):
+    rasterio = pytest.importorskip("rasterio")
+    import numpy as np
+    from rasterio.transform import from_bounds
+    tif = tmp_path / "dens.tif"
+    with rasterio.open(tif, "w", driver="GTiff", height=4, width=4, count=1, dtype="float32",
+                       crs="EPSG:4326", transform=from_bounds(0, 0, 1, 1, 4, 4)) as d:
+        d.write(np.zeros((4, 4), "float32"), 1)
+    assert RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\n"))).overlay is None
+    cfg = RunConfig.from_yaml(_write(tmp_path, _base(
+        f"index: ndvi\noverlay:\n  raster: {tif}\n  levels: [20, 60]\n  colors: ['#ffb000', '#ff2a2a']\n")))
+    assert cfg.overlay["raster"] == str(tif) and cfg.overlay["levels"] == [20.0, 60.0]
+    with pytest.raises(ConfigError, match="not found"):
+        RunConfig.from_yaml(_write(tmp_path, _base("index: ndvi\noverlay: {raster: /nowhere.tif, levels: [1]}\n")))
+
+
+@pytest.mark.parametrize("key, value, match", [
+    ("harmonics", "abc", "harmonics must be a whole number"),
+    ("harmonics", "0", "harmonics must be between 1 and 5"),   # used to be silently coerced to 2
+    ("min_scenes", "x", "min_scenes must be a whole number"),
+])
+def test_top_level_integers_give_one_line_config_errors(tmp_path, key, value, match):
+    body = _base(f"index: lst\n{key}: {value}\n" + ("smooth: harmonic\n" if key == "harmonics" else ""))
+    with pytest.raises(ConfigError, match=match):
+        RunConfig.from_yaml(_write(tmp_path, body))
+
+
+def test_sharpen_local_refuses_anomaly(tmp_path):
+    # anomaly runs before sharpen_local in cli.run and rebuilds each frame with only
+    # its timestamp, dropping the s2_start/s2_end window the local sharpener needs;
+    # without this guard EE fails at export time with an opaque ee.Date(null) error.
+    body = _base("index: lst_rf\nsharpen: local\nanomaly: climatology\n")
+    with pytest.raises(ConfigError, match="anomaly"):
+        RunConfig.from_yaml(_write(tmp_path, body))
+
+
 def test_region_only_defaults_off_and_parses_a_boolean(tmp_path):
     assert RunConfig.from_yaml(_write(tmp_path, _base("index: lst\n"))).region_only is False
     assert RunConfig.from_yaml(_write(tmp_path, _base("index: lst\nregion_only: true\n"))).region_only is True

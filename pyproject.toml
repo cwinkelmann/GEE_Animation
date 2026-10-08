@@ -35,7 +35,7 @@ include = ["gee_animation*"]
 [tool.setuptools.package-data]
 # Bundled DejaVu Sans (+ licence) so annotate/draw_info_bar can render "←"/"–"/"°"
 # without depending on matplotlib (an optional extra) at runtime — see render._font.
-gee_animation = ["fonts/*"]
+gee_animation = ["fonts/*", "presets_aoi/*.geojson"]   # presets_aoi: footprints behind gui presets
 
 [tool.pytest.ini_options]
 markers = [

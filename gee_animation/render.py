@@ -95,13 +95,32 @@ def _drawable(text: str) -> str:
     return text
 
 
-def _annot_scale(h: int):
-    """(font, line_width) proportional to frame height so overlays read at any size.
+def _ref_h(h: int, w: int | None = None) -> int:
+    """The height every text, bar and legend size is derived from.
+
+    A frame's furniture used to scale with its *height* alone, which is right for the
+    landscape presets it was calibrated on but doubles every font on a footprint-
+    shaped (portrait) canvas: 1920 x 2236 drew 47 px text where 1920 x 1080 draws 27 px,
+    and the legend covered the top of the map. The reference is therefore the
+    16:9-equivalent height — the height itself on landscape frames (unchanged), and
+    ``w * 9/16`` once the frame is taller than that, so a portrait canvas gets the
+    proportions of a 16:9 frame of the same width. `w` is optional for callers that
+    only know a height; they get the old height-only rule.
+    """
+    if w is None:
+        return h
+    return min(h, w * 9 // 16)
+
+
+def _annot_scale(h: int, w: int | None = None):
+    """(font, line_width) proportional to the frame's reference height (`_ref_h`) so
+    overlays read at any size.
 
     Calibrated so a ~512 px frame matches the previous fixed look (~12 px font, 1 px
     lines) and a 4K frame gets legible ~54 px text and ~5 px lines.
     """
-    return _font(max(11, h // 40)), max(1, round(h / 430))
+    ref = _ref_h(h, w)
+    return _font(max(11, ref // 40)), max(1, round(ref / 430))
 
 
 def _index_meta(cfg):
@@ -226,7 +245,7 @@ def _geotiff_params(cfg, geometry) -> dict:
     return params
 
 
-def _export_geotiffs(frames, cfg, geometry) -> list:
+def _export_geotiffs(frames, cfg, geometry, bounds=None) -> list:
     """Write one georeferenced GeoTIFF per observed frame: ``{name}_{label}.tif``.
 
     Raw bytes are disk-cached exactly like thumbnails (the ``GEO_TIFF`` format
@@ -249,10 +268,14 @@ def _export_geotiffs(frames, cfg, geometry) -> list:
     out_dir.mkdir(parents=True, exist_ok=True)
     composite = _is_composite(cfg)
     params = _geotiff_params(cfg, geometry)
-    # Backstop for a frame so wide that even float32 exceeds the cap.
-    params["scale"] = _geotiff_fit_scale(
-        cfg, _aoi_bounds(getattr(cfg, "frame_aoi", None) or {}),
-        3 if composite else 1, params["scale"])
+    # Backstop for a frame so wide that even float32 exceeds the cap. `bounds` is
+    # render()'s already-resolved frame extent; callers without a frame_aoi (api/GUI
+    # paths) have no extent to fit, so the backstop is skipped instead of crashing
+    # on `_aoi_bounds({})`.
+    if bounds is None and getattr(cfg, "frame_aoi", None):
+        bounds = _aoi_bounds(cfg.frame_aoi)
+    if bounds is not None:
+        params["scale"] = _geotiff_fit_scale(cfg, bounds, 3 if composite else 1, params["scale"])
     failed: list[str] = []
 
     def one(frame):
@@ -537,36 +560,27 @@ def add_class_legend(rgb: np.ndarray, cfg, y_offset: int = 4,
     return np.asarray(img)
 
 
-def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
-                 x_offset: int = 0, region_w: int | None = None) -> np.ndarray:
-    """Draw the index legend into the top-left of the imagery.
+#: Legend geometry in header mode, as fractions of the canvas width: the ramp's
+#: length and the most the whole block (ramp + swatch + overlay rows) may take, so
+#: the header text keeps at least the left half (`_header_metrics`).
+_LEGEND_RAMP_FRAC = 0.28
+_LEGEND_MAX_FRAC = 0.5
 
-    `region_w`/`x_offset` describe the *imagery* inside the array, which is not the
-    whole array once `render()` has letterboxed the side bars on: the legend is an
-    overlay on the picture, so it is sized and placed against the picture's width
-    (`region_w`, default: the array's) starting at `x_offset`. The header and bottom
-    bars deliberately do the opposite and span the full canvas — they are frame
-    furniture, not overlays.
+
+def _colorbar_plan(draw: ImageDraw.ImageDraw, cfg, font, lw: int, bar_w: int, bar_h: int,
+                   x0: int, panel_top: int, max_right: int) -> dict:
+    """Lay the ramp legend out without drawing it.
+
+    Everything is positioned relative to `x0` (left edge of the ramp) and `panel_top`
+    (top of the heading line); `max_right` bounds the overlay row's label. Returns
+    the draw list plus the block's bounds (`left`, `right`, `top`, `bottom`), so a
+    caller can measure the block once, decide where it goes, and lay it out again
+    there — that is how the header placement right-aligns it (`_header_legend_plan`).
     """
-    img = Image.fromarray(rgb.astype(np.uint8), "RGB")
-    draw = ImageDraw.Draw(img, "RGBA")
-    _canvas_w, h = img.size
-    w = int(region_w) if region_w else _canvas_w
-    font, lw = _annot_scale(h)
-    bar_w = max(20, int(w * 0.4))
-    bar_h = max(6, h // 20)
-    x0 = x_offset + max(4, w // 200)
-    # Legend heading: cartographic convention names the variable the ramp shows
-    # ("Vegetation greenness (NDVI)"), drawn on its own line above the ramp, same
-    # font as the tick labels below. Drawn unconditionally -- the legend naming its
-    # own variable is correct whether or not cfg.title is also set (see render()'s
-    # header, which falls back to this same name when no title is set; a harmless
-    # doubled statement on untitled frames is fine).
     heading = _index_display_name(cfg)
     line_h = draw.textbbox((0, 0), "Ag", font=font)[3]   # incl. descenders; reused
                                                            # below for the anchor line
     head_gap = max(2, lw)
-    panel_top = y_offset
     y0 = panel_top + line_h + head_gap   # ramp starts below the heading line
     vmin, vmax = cfg.viz_min, cfg.viz_max
     ramp = colorize(
@@ -636,10 +650,6 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
     swatch_label = "no data"
     swatch_label_bounds = _label_bounds(swatch_label, swatch_text_x, "l")
 
-    # Translucent panel behind the whole block. The ramp and its white labels sit on
-    # top of the imagery, which can be any colour — white-on-pale-yellow was
-    # unreadable. draw_scale_bar already backs its label the same way; without this
-    # the legend's legibility depends on whatever the scene happens to look like.
     pad = max(3, lw * 2)
     heading_bounds = _label_bounds(heading, x0, "l")
     shown = [(_label_bounds(lb, _x(v), a)) for i, (v, lb, a, _d) in enumerate(ticks)
@@ -665,8 +675,14 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
         ov_y = panel_bottom + max(3, lw * 2)
         sw = max(6, text_h)
         xcur = x0
-        for level, color in zip(ov["levels"], ov["colors"]):
-            text = f"≥ {level:g}"
+        levels = list(ov["levels"])
+        for i, (level, color) in enumerate(zip(levels, ov["colors"])):
+            # fill mode paints the band [level_i, level_i+1); say so, except for the
+            # open-ended top band. Lines mode outlines everything >= level.
+            if ov.get("mode", "lines") == "fill" and i + 1 < len(levels):
+                text = f"{level:g}–{levels[i + 1]:g}"
+            else:
+                text = f"≥ {level:g}"
             tw = draw.textbbox((0, 0), text, font=font)[2]
             ov_items.append((xcur, ov_y, sw, _hex_to_rgb(color), text))
             xcur += sw + max(3, lw * 2) + tw + max(8, lw * 5)
@@ -675,7 +691,7 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
         if ov.get("label"):
             label = str(ov["label"])
             label_w = draw.textbbox((0, 0), label, font=font)[2]
-            if xcur + label_w <= x_offset + w - pad:
+            if xcur + label_w <= max_right - pad:
                 ov_items.append((xcur, ov_y, 0, None, label))
                 xcur += label_w
             else:
@@ -684,47 +700,135 @@ def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
                 ov_items.append((x0, ov_y + row_h + max(2, lw), 0, None, label))
                 panel_bottom = ov_y + row_h + max(2, lw) + line_h
                 xcur = max(xcur, x0 + label_w)
-        right = max(right, min(xcur, x_offset + w - pad))
-    # Top overhang clamped to 4 px: render() places the legend 4 px below the
-    # header bar, and on ≥1730 px canvases pad (lw*2 = 8+) would otherwise reach
-    # up past that gap and tint the header's bottom rows.
-    draw.rectangle([left - pad, panel_top - min(pad, 4), right + pad, panel_bottom + pad],
-                   fill=(0, 0, 0, 130))
+        right = max(right, min(xcur, max_right - pad))
 
-    draw.text((x0, panel_top), heading, fill=(255, 255, 255, 255), font=font)
+    return dict(
+        heading=(x0, panel_top, heading), ramp=(x0, y0, bar_w, bar_h, ramp),
+        ticks=[(_x(v), tick_top, tick_bot, label,
+                _label_bounds(label, _x(v), anchor)[0] if show_label[i] else None, text_y)
+               for i, (v, label, anchor, _d) in enumerate(ticks)],
+        low=(low_bounds[0], anchor_y, low_label) if show_low else None,
+        high=(high_bounds[0], anchor_y, high_label) if show_high else None,
+        swatch=(swatch_x0, y0, swatch_size, swatch_text_x,
+                y0 + max(0, (swatch_size - text_h) // 2), swatch_label),
+        ov_items=ov_items, ov_fill=bool(ov) and ov.get("mode", "lines") == "fill",
+        left=left, right=right, top=panel_top, bottom=panel_bottom, pad=pad,
+    )
 
+
+def _draw_colorbar_plan(draw: ImageDraw.ImageDraw, plan: dict, font, lw: int) -> None:
+    white = (255, 255, 255, 255)
+    x0, y0, bar_w, bar_h, ramp = plan["ramp"]
+    draw.text(plan["heading"][:2], plan["heading"][2], fill=white, font=font)
     for i in range(bar_w):
         c = tuple(int(v) for v in ramp[i])
         draw.line([(x0 + i, y0), (x0 + i, y0 + bar_h)], fill=c)
-    draw.rectangle([x0, y0, x0 + bar_w, y0 + bar_h], outline=(255, 255, 255, 255), width=lw)
-
-    for i, (v, label, anchor, _droppable) in enumerate(ticks):
-        x = _x(v)
-        draw.line([(x, tick_top), (x, tick_bot)], fill=(255, 255, 255, 255), width=lw)
-        if show_label[i]:
-            lo, _hi = _label_bounds(label, x, anchor)
-            draw.text((lo, text_y), label, fill=(255, 255, 255, 255), font=font)
-
-    if show_low:
-        draw.text((low_bounds[0], anchor_y), low_label, fill=(255, 255, 255, 255), font=font)
-    if show_high:
-        draw.text((high_bounds[0], anchor_y), high_label, fill=(255, 255, 255, 255), font=font)
-
-    draw.rectangle([swatch_x0, y0, swatch_x0 + swatch_size, y0 + swatch_size],
-                   fill=tuple(NODATA_RGB) + (255,))
-    draw.text((swatch_text_x, y0 + max(0, (swatch_size - text_h) // 2)), swatch_label,
-              fill=(255, 255, 255, 255), font=font)
-
-    for xi, yi, sw, color, text in ov_items:
+    draw.rectangle([x0, y0, x0 + bar_w, y0 + bar_h], outline=white, width=lw)
+    for x, tick_top, tick_bot, label, lo, text_y in plan["ticks"]:
+        draw.line([(x, tick_top), (x, tick_bot)], fill=white, width=lw)
+        if lo is not None:
+            draw.text((lo, text_y), label, fill=white, font=font)
+    for item in (plan["low"], plan["high"]):
+        if item:
+            draw.text(item[:2], item[2], fill=white, font=font)
+    sx, sy, ssize, stx, sty, slabel = plan["swatch"]
+    draw.rectangle([sx, sy, sx + ssize, sy + ssize], fill=tuple(NODATA_RGB) + (255,))
+    draw.text((stx, sty), slabel, fill=white, font=font)
+    for xi, yi, sw, color, text in plan["ov_items"]:
         if color is not None:
-            if ov.get("mode", "lines") == "fill":
+            if plan["ov_fill"]:
                 draw.rectangle([xi, yi, xi + sw, yi + sw], fill=tuple(color) + (255,))
             else:
-                draw.rectangle([xi, yi, xi + sw, yi + sw], outline=tuple(color) + (255,), width=max(1, lw))
-            draw.text((xi + sw + max(3, lw * 2), yi), text, fill=(255, 255, 255, 255), font=font)
+                draw.rectangle([xi, yi, xi + sw, yi + sw], outline=tuple(color) + (255,),
+                               width=max(1, lw))
+            draw.text((xi + sw + max(3, lw * 2), yi), text, fill=white, font=font)
         else:
-            draw.text((xi, yi), text, fill=(255, 255, 255, 255), font=font)
+            draw.text((xi, yi), text, fill=white, font=font)
 
+
+def _header_legend_plan(draw: ImageDraw.ImageDraw, cfg, w: int, h: int, zone_h: int) -> tuple:
+    """(plan, font, lw) for the legend right-aligned inside the header zone.
+
+    The block is laid out once at x=0 to measure its width, then again with its right
+    edge on the header's right inset. If it is taller than the zone (an overlay row
+    whose label had to wrap, say) the whole block shrinks in steps down to 0.8 of the
+    body size — the same floor the header's own line 2 accepts — before the zone's
+    clip in `add_colorbar` has to cut anything.
+    """
+    pad = max(1, h // 200)
+    x_inset = max(4, w // 200)
+    base_font, lw = _annot_scale(h, w)
+    ref = _ref_h(h, w)
+    max_w = int(w * _LEGEND_MAX_FRAC)
+    plan, font = None, base_font
+    for scale in (1.0, 0.95, 0.9, 0.85, 0.8):
+        font = _font(max(10, round(base_font.size * scale)))
+        bar_h = max(6, round(ref / 36 * scale))
+        bar_w = max(20, int(w * _LEGEND_RAMP_FRAC * scale))
+        probe = _colorbar_plan(draw, cfg, font, lw, bar_w, bar_h, 0, pad, max_w)
+        width = probe["right"] - probe["left"]
+        # the overlay label's "fits beside the swatches" test keeps `pad` clear of
+        # `max_right`, so leave that pad here too or the placed block wraps the
+        # label the measuring pass kept on the row
+        x0 = int(w - x_inset - probe["pad"] - width - probe["left"])
+        plan = _colorbar_plan(draw, cfg, font, lw, bar_w, bar_h, x0, pad, w - x_inset)
+        if plan["bottom"] + pad <= zone_h:
+            break
+    return plan, font, lw
+
+
+def legend_width(cfg, w: int, h: int, zone_h: int) -> int:
+    """Columns on the right of a `w` x `h` canvas the header legend occupies, plus a
+    text gap — what `draw_info_bar` must keep its text out of (`reserved_w`)."""
+    draw = ImageDraw.Draw(Image.new("RGB", (1, 1)), "RGBA")
+    plan, _font_, _lw = _header_legend_plan(draw, cfg, w, h, zone_h)
+    return int(w - plan["left"]) + max(4, w // 200)
+
+
+def add_colorbar(rgb: np.ndarray, cfg, y_offset: int = 4,
+                 x_offset: int = 0, region_w: int | None = None,
+                 header_zone: int | None = None) -> np.ndarray:
+    """Draw the index legend.
+
+    With `header_zone` (the top margin's height, `_margins`' `top_h`) the legend is
+    drawn right-aligned **inside the header band**, on its black background, and the
+    first `header_zone` rows are the only rows written: the imagery below is never
+    touched, which is the point — the legend used to sit on the picture and, on a
+    footprint-shaped canvas, covered the top of the map. `legend_width` reports the
+    columns it takes so `draw_info_bar` keeps the title and caveats to the left.
+
+    Without it (direct callers, tests) the legacy placement applies: top-left of the
+    imagery on a translucent panel. `region_w`/`x_offset` then describe the *imagery*
+    inside the array, which is not the whole array once `render()` has letterboxed
+    the side bars on.
+    """
+    img = Image.fromarray(rgb.astype(np.uint8), "RGB")
+    canvas_w, h = img.size
+    if header_zone is not None:
+        zone_h = max(1, min(h, int(header_zone)))
+        band = img.crop((0, 0, canvas_w, zone_h))
+        draw = ImageDraw.Draw(band, "RGBA")
+        plan, font, lw = _header_legend_plan(draw, cfg, canvas_w, h, zone_h)
+        _draw_colorbar_plan(draw, plan, font, lw)
+        out = np.asarray(img).copy()
+        out[:zone_h] = np.asarray(band)
+        return out
+    draw = ImageDraw.Draw(img, "RGBA")
+    w = int(region_w) if region_w else canvas_w
+    font, lw = _annot_scale(h, canvas_w)
+    bar_w = max(20, int(w * 0.4))
+    bar_h = max(6, h // 20)
+    x0 = x_offset + max(4, w // 200)
+    plan = _colorbar_plan(draw, cfg, font, lw, bar_w, bar_h, x0, y_offset, x_offset + w)
+    # Translucent panel behind the whole block. The ramp and its white labels sit on
+    # top of the imagery, which can be any colour — white-on-pale-yellow was
+    # unreadable. Top overhang clamped to 4 px: render() places the legend 4 px below
+    # the header bar, and on ≥1730 px canvases pad (lw*2 = 8+) would otherwise reach
+    # up past that gap and tint the header's bottom rows.
+    pad = plan["pad"]
+    draw.rectangle([plan["left"] - pad, plan["top"] - min(pad, 4), plan["right"] + pad,
+                    plan["bottom"] + pad], fill=(0, 0, 0, 130))
+    _draw_colorbar_plan(draw, plan, font, lw)
     return np.asarray(img)
 
 
@@ -843,6 +947,8 @@ _SENSOR_CREDITS = {
     "landsat": "Landsat imagery courtesy of the U.S. Geological Survey",
     "modis": "MODIS data courtesy of NASA LP DAAC",
     "modis_lst": "MODIS data courtesy of NASA LP DAAC",
+    # Dynamic World is CC BY 4.0 (Google / World Resources Institute) on Sentinel-2.
+    "dynamicworld": "Dynamic World (Google, WRI; CC BY 4.0) — contains modified Copernicus Sentinel data",
 }
 
 
@@ -907,10 +1013,20 @@ def _two_line_header(cfg) -> bool:
     every frame of a run and is computed once, before the frame loop.
     """
     _title, subtitle, caveats = _header_text(cfg)
-    return bool(subtitle or caveats or _line2_prefix(cfg))
+    return bool(subtitle or caveats or _line2_prefix(cfg) or _has_colorbar(cfg))
 
 
-def _margins(imagery_h: int, two_line_header: bool = False) -> tuple:
+def _has_colorbar(cfg) -> bool:
+    """Whether `render()` draws the ramp legend for this run: a single-band product
+    with a palette (not a composite, not a categorical class map). The legend lives
+    in the header's second row, so it is one of the things that make the header two
+    lines tall (`_two_line_header`)."""
+    meta = _index_meta(cfg)
+    return bool(meta) and not meta.composite and not getattr(meta, "classes", ())
+
+
+def _margins(imagery_h: int, two_line_header: bool = False,
+             imagery_w: int | None = None) -> tuple:
     """(top_h, bottom_h) label margins to pad imagery `imagery_h` px tall with.
 
     `draw_info_bar`/`annotate` pick their bar height as `max(12, h // 12)` of the
@@ -923,7 +1039,15 @@ def _margins(imagery_h: int, two_line_header: bool = False) -> tuple:
     under the 12 px floor (below which `_bar_h`'s own floor keeps both sides at 12).
     The top margin carries one extra pixel because PIL's `rectangle` includes its
     bottom edge: without it the header's last row would tint the imagery's first row.
+
+    With `imagery_w` given, a portrait frame (taller than 16:9 at that width) sizes
+    its bars from the width instead (`_ref_h`): the bar is then independent of the
+    height, so no fixed point is needed — and `_bar_h(padded_h, imagery_w)` agrees,
+    because the padded frame is taller still.
     """
+    if imagery_w is not None and imagery_w * 9 // 16 < imagery_h:
+        b = max(12, (imagery_w * 9 // 16) // 12)
+        return (2 * b + 1, b) if two_line_header else (b + 1, b)
     if two_line_header:
         b = max(12, (imagery_h + 1) // 9)
         return 2 * b + 1, b
@@ -948,12 +1072,12 @@ def add_margins(rgb: np.ndarray, top_h: int, bottom_h: int, bg=LETTERBOX_RGB) ->
     return out
 
 
-def _bar_h(h: int) -> int:
-    """Info/label bar height for a frame `h` px tall — shared by draw_info_bar and
-    annotate so the two bars stay the same height (see also _margins, which sizes the
-    padding around them to match; that is a related but distinct computation, see
-    _margins' docstring)."""
-    return max(12, h // 12)
+def _bar_h(h: int, w: int | None = None) -> int:
+    """Info/label bar height for a frame `h` px tall (and `w` wide, see `_ref_h`) —
+    shared by draw_info_bar and annotate so the two bars stay the same height (see
+    also _margins, which sizes the padding around them to match; that is a related
+    but distinct computation, see _margins' docstring)."""
+    return max(12, _ref_h(h, w) // 12)
 
 
 def _text_w(draw: ImageDraw.ImageDraw, text: str, font) -> int:
@@ -1091,7 +1215,7 @@ def _fit_header_line2(draw: ImageDraw.ImageDraw, subtitle: str, caveats: str,
     return _fit_bar_text(draw, protected_only, px, avail_w)   # last resort (see docstring)
 
 
-def _header_metrics(draw: ImageDraw.ImageDraw, w: int, h: int) -> tuple:
+def _header_metrics(draw: ImageDraw.ImageDraw, w: int, h: int, reserved_w: int = 0) -> tuple:
     """`(x, pad, avail_w, bar_h, title_px, line2_px)` for a header on a `w` x `h` frame.
 
     The single owner of the header's layout arithmetic, so `draw_info_bar` and
@@ -1104,20 +1228,79 @@ def _header_metrics(draw: ImageDraw.ImageDraw, w: int, h: int) -> tuple:
     """
     pad = max(1, h // 200)
     x = max(4, w // 200)
-    avail_w = max(1, w - 2 * x)
-    bar_h = _bar_h(h)                 # sized from the FULL frame, not any crop
+    # `reserved_w` is what the legend takes on the right (`legend_width`); the text
+    # lays out against what is left of the canvas.
+    avail_w = max(1, w - 2 * x - max(0, int(reserved_w)))
+    bar_h = _bar_h(h, w)              # sized from the FULL frame, not any crop
     avail_line_h = bar_h - pad
     # `_annot_scale`'s size is what line 2 wants; `_fit_line_height` only lowers it on
     # frames whose bar is too short to hold it (see `_fit_header_line2`). The title is
     # larger, and never smaller than line 2.
-    base_px = max(11, h // 40)
+    base_px = max(11, _ref_h(h, w) // 40)
     line2_px = _fit_line_height(draw, base_px, avail_line_h, 10)
     title_px = _fit_line_height(draw, round(base_px * _TITLE_SCALE), avail_line_h, line2_px)
     return x, pad, avail_w, bar_h, title_px, line2_px
 
 
+def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, avail_w: int, rows: int):
+    """Greedy word-wrap of `text` into at most `rows` lines of `avail_w`, or None.
+
+    Breaks are preferred at the " · " separators the header uses between its parts,
+    then at spaces. Returns None when the text needs more than `rows` lines (or a
+    single word is wider than a line) — the caller then shrinks or falls back.
+    """
+    if _text_w(draw, text, font) <= avail_w:
+        return [text]
+    words = text.split(" ")
+    lines, cur = [], ""
+    for word in words:
+        probe = f"{cur} {word}" if cur else word
+        if _text_w(draw, probe, font) <= avail_w:
+            cur = probe
+            continue
+        if not cur:
+            return None                        # one word wider than the row
+        lines.append(cur)
+        cur = word
+    if cur:
+        lines.append(cur)
+    if len(lines) > rows:
+        return None
+    # tidy: a line that ends with the separator moves it to the next line's start
+    out = []
+    for ln in lines:
+        if ln.endswith(" ·"):
+            ln = ln[:-2]
+        out.append(ln.strip(" ·") if ln.strip() == "·" else ln.strip())
+    return [ln for ln in out if ln]
+
+
+def _layout_header_line2(draw: ImageDraw.ImageDraw, subtitle: str, caveats: str,
+                         px: int, avail_w: int, prefix: str, bar_h: int, pad: int) -> tuple:
+    """(font, [lines]) for header line 2 — whole on one row when it fits, else wrapped
+    onto the rows its bar can hold (the legend has taken the right part of the header,
+    so the row is narrower than the canvas), else `_fit_header_line2`'s shrink-and-
+    trim ordering as the last resort."""
+    joined = " · ".join(p for p in (prefix, subtitle, caveats) if p)
+    font = _font(px)
+    if _text_w(draw, joined, font) <= avail_w:
+        return font, [joined]
+    row_h = draw.textbbox((0, 0), "Ag", font=font)[3]
+    rows = max(1, (bar_h - pad) // max(1, row_h))
+    floor = max(10, round(px * _LINE2_MIN_SCALE))
+    for size in range(px, floor - 1, -1):
+        f = _font(size)
+        row_h = draw.textbbox((0, 0), "Ag", font=f)[3]
+        rows = max(1, (bar_h - pad) // max(1, row_h))
+        lines = _wrap_text(draw, joined, f, avail_w, rows)
+        if lines:
+            return f, lines
+    font, text = _fit_header_line2(draw, subtitle, caveats, px, avail_w, prefix)
+    return font, [text]
+
+
 def header_subtitle_fits(w: int, h: int, subtitle: str, caveats: str,
-                         prefix: str = "") -> bool:
+                         prefix: str = "", reserved_w: int = 0) -> bool:
     """Whether `draw_info_bar` can draw `subtitle` **in full** on a `w` x `h` frame.
 
     Asked once per run by `render()` so a configured subtitle that line 2 cannot hold
@@ -1130,8 +1313,10 @@ def header_subtitle_fits(w: int, h: int, subtitle: str, caveats: str,
     if not subtitle:
         return True
     draw = ImageDraw.Draw(Image.new("RGB", (1, 1)), "RGBA")
-    _x, _pad, avail_w, _bar_h, _title_px, line2_px = _header_metrics(draw, w, h)
-    _font_, text = _fit_header_line2(draw, subtitle, caveats, line2_px, avail_w, prefix)
+    _x, pad, avail_w, bar_h, _title_px, line2_px = _header_metrics(draw, w, h, reserved_w)
+    _font_, lines = _layout_header_line2(draw, subtitle, caveats, line2_px, avail_w,
+                                         prefix, bar_h, pad)
+    text = " ".join(lines)
     # Exact-composition compare, not `subtitle in text`: a subtitle like "2021"
     # is a substring of a "gap-filled from 2019–2021" caveat, which would report
     # "fits" on the very frames that dropped it. The drawing path either keeps the
@@ -1141,7 +1326,8 @@ def header_subtitle_fits(w: int, h: int, subtitle: str, caveats: str,
 
 
 def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
-                  caveats: str = "", prefix: str = "") -> np.ndarray:
+                  caveats: str = "", prefix: str = "", reserved_w: int = 0,
+                  two_line: bool | None = None) -> np.ndarray:
     """Draw the translucent header into the top margin: title, then subtitle+caveats.
 
     Line 1 is the title, set larger than the body text — it is what tells a viewer
@@ -1179,9 +1365,10 @@ def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
     """
     out = rgb.astype(np.uint8, copy=True)   # our own buffer — safe to write the zone into
     h, w = out.shape[:2]
-    two_line = bool(subtitle or caveats or prefix)
+    if two_line is None:
+        two_line = bool(subtitle or caveats or prefix)
     probe = ImageDraw.Draw(Image.new("RGB", (1, 1)), "RGBA")
-    x, pad, avail_w, bar_h, title_px, line2_px = _header_metrics(probe, w, h)
+    x, pad, avail_w, bar_h, title_px, line2_px = _header_metrics(probe, w, h, reserved_w)
     # The zone this header owns: exactly the top margin `_margins` reserved for it
     # (`bar_h` per line, +1 because PIL's `rectangle` includes its bottom edge).
     zone_h = min(h, bar_h * (2 if two_line else 1) + 1)
@@ -1190,9 +1377,12 @@ def draw_info_bar(rgb: np.ndarray, title: str, subtitle: str = "",
     title_font, title = _fit_bar_text(draw, title, title_px, avail_w)
     draw.rectangle([0, 0, w, bar_h * (2 if two_line else 1)], fill=(0, 0, 0, 140))
     draw.text((x, pad), title, fill=(255, 255, 255, 255), font=title_font)
-    if two_line:
-        font, line2 = _fit_header_line2(draw, subtitle, caveats, line2_px, avail_w, prefix)
-        draw.text((x, bar_h + pad), line2, fill=(255, 255, 255, 255), font=font)
+    if two_line and (subtitle or caveats or prefix):
+        font, lines = _layout_header_line2(draw, subtitle, caveats, line2_px, avail_w,
+                                           prefix, bar_h, pad)
+        row_h = draw.textbbox((0, 0), "Ag", font=font)[3]
+        for i, line in enumerate(lines):
+            draw.text((x, bar_h + pad + i * row_h), line, fill=(255, 255, 255, 255), font=font)
     out[:zone_h] = np.asarray(img)
     return out
 
@@ -1297,8 +1487,8 @@ def annotate(rgb: np.ndarray, label: str, credit: str = "", is_real: bool = True
     img = Image.fromarray(rgb.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img, "RGBA")
     w, h = img.size
-    font, _ = _annot_scale(h)
-    bar_h = _bar_h(h)
+    font, _ = _annot_scale(h, w)
+    bar_h = _bar_h(h, w)
     x = max(4, w // 200)
     y = h - bar_h + max(1, h // 200)
     # No crop-and-write-back needed here (unlike draw_info_bar): text is anchored at
@@ -1310,7 +1500,7 @@ def annotate(rgb: np.ndarray, label: str, credit: str = "", is_real: bool = True
     _frame_marker(draw, (marker_cx, marker_cy), marker_d, filled=is_real)
     draw.text((label_x, y), label, fill=(255, 255, 255, 255), font=font)
     if credit:
-        base_px = max(11, h // 40)              # same size _annot_scale would use
+        base_px = max(11, _ref_h(h, w) // 40)   # same size _annot_scale would use
         credit_px = max(10, round(base_px * _CREDIT_SCALE))
         credit_font = _font(credit_px)
         gap = max(4, w // 200)
@@ -1603,7 +1793,7 @@ def _scale_bar_layout(draw: ImageDraw.ImageDraw, w: int, h: int, frame_width_m: 
     if bar_px < 1:
         return None
     label = f"{nice_m / 1000:g} km" if nice_m >= 1000 else f"{nice_m:g} m"
-    font, lw = _annot_scale(h)
+    font, lw = _annot_scale(h, w)
     margin, tick = max(6, w // 100), max(4, h // 80)
     x1 = w - margin
     x0 = x1 - bar_px
@@ -1698,7 +1888,7 @@ def draw_north_arrow(rgb: np.ndarray, frame_width_m: float, target_frac: float =
 
 
 def _fit_margins(pw: int, ph: int, ch: int, aoi_aspect: float,
-                 two_line_header: bool = False) -> tuple:
+                 two_line_header: bool = False, cw: int | None = None) -> tuple:
     """Shrink the imagery place box so imagery + both label margins still fits `ch`.
 
     The margins are part of the output, so they have to come *out of* the canvas the
@@ -1709,9 +1899,9 @@ def _fit_margins(pw: int, ph: int, ch: int, aoi_aspect: float,
     the odd pixel — or a little more on small canvases where the 12 px floor dominates.
     """
     ph = min(ph, max(1, ch * (9 if two_line_header else 10) // 12))
-    while ph > 1 and ph + sum(_margins(ph, two_line_header)) > ch:
+    while ph > 1 and ph + sum(_margins(ph, two_line_header, cw)) > ch:
         ph -= 1
-    floor = 1 + sum(_margins(1, two_line_header))
+    floor = 1 + sum(_margins(1, two_line_header, cw))
     if ph == 1 and floor > ch:
         # Even one imagery row plus the margin floors overflows the canvas; the
         # letterbox would paste at a negative offset and silently crop the header.
@@ -1755,7 +1945,7 @@ def _output_spec(cfg, imagery_wh):
         else:
             ph, pw = long_edge, max(1, round(long_edge * aoi_aspect))
         # canvas grows, imagery doesn't
-        return pw, ph + sum(_margins(ph, two_line)), pw, ph, method
+        return pw, ph + sum(_margins(ph, two_line, pw)), pw, ph, method
     target = ASPECTS[aspect]
     if target >= 1:
         cw, ch = long_edge, max(1, round(long_edge / target))
@@ -1765,7 +1955,7 @@ def _output_spec(cfg, imagery_wh):
         pw, ph = cw, max(1, round(cw / aoi_aspect))
     else:
         ph, pw = ch, max(1, round(ch * aoi_aspect))
-    pw, ph = _fit_margins(pw, ph, ch, aoi_aspect, two_line)
+    pw, ph = _fit_margins(pw, ph, ch, aoi_aspect, two_line, cw)
     return cw, ch, pw, ph, method
 
 
@@ -2167,6 +2357,8 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     credit_text = _default_credit(cfg)
     output = None      # (cw, ch, pw, ph, method) screen layout, computed on frame 1
     checked_subtitle = False   # the "will the subtitle fit?" warning fires at most once
+    has_colorbar = _has_colorbar(cfg)   # ramp legend in the header (see add_colorbar)
+    reserved_w = None  # header columns the legend takes; measured on frame 1
     region_width = getattr(cfg, "region_line_width", None) or 2
     region_masks = None   # (casing_mask, core_mask); built once below, then reused
     pixel_grid = bool(getattr(cfg, "pixel_grid", False))
@@ -2199,7 +2391,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
         a bounded lookahead; everything here stays strictly ordered and single-threaded,
         so output is identical to workers=1.
         """
-        nonlocal output, region_masks, checked_subtitle, grid_mask, overlay_masks
+        nonlocal output, region_masks, checked_subtitle, grid_mask, overlay_masks, reserved_w
         # Observed frames are written out in small batches rather than one at a time
         # (`_write_frames` encodes a batch across `workers` threads — a real ~2.8x, zlib
         # releases the GIL) or all at the end (which would retain every frame, the very
@@ -2296,14 +2488,20 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
             rgb = _letterbox(rgb, canvas_w, rgb.shape[0])
             # Now grow the canvas and let the (shape-preserving) bar drawers fill the new
             # top/bottom strips, so the labels sit beside the imagery instead of over it.
-            top_h, bottom_h = _margins(rgb.shape[0], two_line_header)
+            top_h, bottom_h = _margins(rgb.shape[0], two_line_header, rgb.shape[1])
             rgb = add_margins(rgb, top_h, bottom_h)
+            # The ramp legend lives in the header's right part (see `add_colorbar`);
+            # the header text is laid out against what it leaves. Run-level geometry,
+            # so measured once.
+            if reserved_w is None:
+                reserved_w = (legend_width(cfg, rgb.shape[1], rgb.shape[0], top_h)
+                              if has_colorbar else 0)
             if not checked_subtitle:
                 # Run-level geometry: the same answer for every frame, so ask once.
                 checked_subtitle = True
                 if header_subtitle and not header_subtitle_fits(
                         rgb.shape[1], rgb.shape[0], header_subtitle, header_caveats,
-                        header_prefix):
+                        header_prefix, reserved_w):
                     log.warning(
                         "subtitle %r does not fit the header beside this run's "
                         "provenance caveats/product name (%r) and will be shortened or "
@@ -2313,7 +2511,8 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                         header_subtitle, " · ".join(p for p in (header_prefix,
                                                                 header_caveats) if p))
             rgb = draw_info_bar(rgb, header_title, header_subtitle, header_caveats,
-                               header_prefix)
+                               header_prefix, reserved_w=reserved_w,
+                               two_line=two_line_header)
             # `text` is already composed (see `_imagery_sequence`). `_drawable` is a
             # no-op now (the bundled font draws "←" directly) but stays as the single
             # seam this composed text passes through on its way to `annotate`.
@@ -2326,12 +2525,9 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
                 rgb = add_class_legend(rgb, cfg, y_offset=top_h + 4,
                                        x_offset=(canvas_w - imagery_w) // 2,
                                        region_w=imagery_w)
-            elif not composite:                          # colorbar needs a palette
-                # Just inside the imagery — which is inset by the side bars added above,
-                # hence the explicit imagery origin/width (see `add_colorbar`).
-                rgb = add_colorbar(rgb, cfg, y_offset=top_h + 4,
-                                   x_offset=(canvas_w - imagery_w) // 2,
-                                   region_w=imagery_w)
+            elif has_colorbar:                           # colorbar needs a palette
+                # Into the header band, right-aligned, never on the imagery.
+                rgb = add_colorbar(rgb, cfg, header_zone=top_h)
             if output:
                 rgb = _letterbox(rgb, output[0], output[1])   # vertical half only now
             if want_frames and label is not None:
@@ -2350,7 +2546,7 @@ def render(frames, cfg, fetch=_fetch_thumbnail, geometry=None) -> list[Path]:
     paths = assemble_stream(_produced(_finished()), cfg)
     # GeoTIFF export last: by now every frame's thumbnail fetch has already
     # warmed the EE session, and a mid-run failure here cannot cost the video.
-    tif_paths = (_export_geotiffs(frames, cfg, geometry)
+    tif_paths = (_export_geotiffs(frames, cfg, geometry, bounds=bounds)
                  if getattr(cfg, "geotiffs", False) else [])
     return paths + png_paths + tif_paths
 

@@ -516,14 +516,16 @@ def test_line2_prefix_names_the_product_only_for_a_titled_composite():
 
 
 def test_two_line_header_is_forced_by_a_titled_composite_alone():
-    # Without a configured subtitle or caveat, a plain single-band+title run stays
-    # one line (unchanged). A titled composite must still get its second line, or
-    # the product name (the whole point of this fix) has nowhere to be drawn.
+    # A titled composite must get its second line, or the product name (the whole
+    # point of this fix) has nowhere to be drawn. A single-band run has two lines
+    # regardless: its ramp legend lives in the header's second row (see
+    # test_legend_header.py) -- only an untitled composite stays one line.
     from gee_animation.render import _two_line_header
     assert _two_line_header(types.SimpleNamespace(index="rgb",
                                                    title="Grumsin forest")) is True
     assert _two_line_header(types.SimpleNamespace(index="ndvi",
-                                                   title="Grumsin forest")) is False
+                                                   title="Grumsin forest")) is True
+    assert _two_line_header(types.SimpleNamespace(index="rgb", title=None)) is False
 
 
 def test_header_line_two_truncates_the_subtitle_never_the_caveat(monkeypatch):
@@ -539,8 +541,14 @@ def test_header_line_two_truncates_the_subtitle_never_the_caveat(monkeypatch):
     from gee_animation.render import draw_info_bar, _annot_scale
     w, h = 640, 300
     caveat = "every frame re-picked from 2018–2024 — not a time series"
+    # Long enough that even wrapping onto every row the bar holds cannot keep it
+    # whole (line 2 wraps before it shrinks or trims -- see test_legend_header.py),
+    # so the shrink-then-trim ordering is what this input exercises.
     subtitle = ("Brandenburg, Germany, in the Schorfheide-Chorin Biosphere Reserve "
-                "north-east of Berlin, mapped every month from Sentinel-2")
+                "north-east of Berlin, mapped every month from Sentinel-2, with the "
+                "beech stands of the UNESCO World Heritage core zone outlined and the "
+                "surrounding managed forest, lakes and farmland shown for context, "
+                "across every season of every year of the run")
     seen = _text_spy(monkeypatch)
     draw_info_bar(np.zeros((h, w, 3), np.uint8), "Grumsiner Forst", subtitle, caveat)
 
@@ -567,8 +575,14 @@ def test_header_line_two_truncates_the_subtitle_never_the_composite_name_or_cave
     w, h = 640, 300
     prefix = "True colour"
     caveat = "every frame re-picked from 2018–2024 — not a time series"
+    # Long enough that even wrapping onto every row the bar holds cannot keep it
+    # whole (line 2 wraps before it shrinks or trims -- see test_legend_header.py),
+    # so the shrink-then-trim ordering is what this input exercises.
     subtitle = ("Brandenburg, Germany, in the Schorfheide-Chorin Biosphere Reserve "
-                "north-east of Berlin, mapped every month from Sentinel-2")
+                "north-east of Berlin, mapped every month from Sentinel-2, with the "
+                "beech stands of the UNESCO World Heritage core zone outlined and the "
+                "surrounding managed forest, lakes and farmland shown for context, "
+                "across every season of every year of the run")
     seen = _text_spy(monkeypatch)
     draw_info_bar(np.zeros((h, w, 3), np.uint8), "Grumsin forest — vegetation",
                   subtitle, caveat, prefix)
@@ -639,10 +653,13 @@ def test_render_draws_subtitle_and_caveats_whole_on_a_pooled_interpolated_run(
     cfg = _audience_cfg(tmp_path, preset, aspect)
     render([Frame("2022-05", "A"), Frame("2022-06", "B")], cfg,
            fetch=_wide_fetch, geometry=None)
-    line2 = next(t for t in seen if _CAVEAT_POOLED in t)
-    assert cfg.subtitle in line2, "the configured subtitle must be drawn in full"
-    assert "2 generated frames between observations" in line2, "caveats stay whole too"
-    assert "…" not in line2
+    # line 2 may wrap onto several rows (the legend takes the header's right part),
+    # each row its own draw call -- so judge the drawn text as a whole
+    drawn = " ".join(seen)
+    assert cfg.subtitle in drawn, "the configured subtitle must be drawn in full"
+    assert _CAVEAT_POOLED in drawn
+    assert "2 generated frames between observations" in drawn, "caveats stay whole too"
+    assert not any("…" in t for t in seen)
 
 
 @pytest.mark.parametrize("preset", [768, 1920])
@@ -824,7 +841,7 @@ def test_render_draws_a_two_line_header_in_the_margin_not_over_the_imagery(tmp_p
     paths = render([Frame("2022-05", object(), 1, 2018)], cfg, fetch=fake_fetch,
                    geometry=None)
     arr = np.asarray(Image.open(next(p for p in paths if p.suffix == ".png")))
-    top_h, bottom_h = _margins(h, True)
+    top_h, bottom_h = _margins(h, True, w)
     assert arr.shape[:2] == (h + top_h + bottom_h, w)
     assert np.all(arr[top_h:top_h + h] == 123)      # every imagery pixel untouched
     assert arr[:top_h].sum() > 0 and arr[-bottom_h:].sum() > 0
@@ -899,7 +916,7 @@ def test_output_spec_accounts_for_a_two_line_header():
                                    index="ndvi", pool_years=[2018, 2024])
     assert _two_line_header(pooled) is True
     plain = types.SimpleNamespace(preset="1080p", aspect="16:9", upscale="lanczos",
-                                  index="ndvi")
+                                  index="rgb")      # untitled composite: no legend, no caveat
     assert _two_line_header(plain) is False
     # and the two-line canvas really does give the imagery less room than one line
     assert _output_spec(pooled, (200, 100))[3] < _output_spec(plain, (200, 100))[3]
@@ -994,7 +1011,7 @@ def test_render_draws_label_bars_in_the_margins_not_over_the_imagery(tmp_path):
 
     paths = render([Frame("2022-01", object(), 5)], cfg, fetch=fake_fetch, geometry=None)
     arr = np.asarray(Image.open(next(p for p in paths if p.suffix == ".png")))
-    top_h, bottom_h = _margins(h)
+    top_h, bottom_h = _margins(h, False, w)
     assert arr.shape[:2] == (h + top_h + bottom_h, w)
     assert np.all(arr[top_h:top_h + h] == 123)         # every imagery pixel untouched
     assert arr[:top_h].sum() > 0 and arr[-bottom_h:].sum() > 0   # both labels drawn
@@ -1017,7 +1034,7 @@ def test_render_keeps_region_outline_on_imagery_when_margins_added(tmp_path):
 
     paths = render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
     arr = np.asarray(Image.open(next(p for p in paths if p.suffix == ".png")))
-    top_h, bottom_h = _margins(h)
+    top_h, bottom_h = _margins(h, True, w)   # ndvi: the legend makes the header two lines
     assert arr.shape[:2] == (h + top_h + bottom_h, w)   # margins added, imagery whole
 
     core = np.all(arr == np.asarray(REGION_OUTLINE_RGB, np.uint8), axis=-1)
@@ -1487,8 +1504,9 @@ def test_render_titled_rgb_names_true_colour_on_line_two(tmp_path, monkeypatch):
            fetch=_wide_rgb_fetch, geometry=None)
     line2 = next(t for t in seen if "True colour" in t)
     assert line2.startswith("True colour · "), "the product name must lead line 2"
-    assert cfg.subtitle in line2
-    assert "generated frames between observations" in line2, "caveats stay whole too"
+    drawn = " ".join(seen)                      # line 2 may wrap onto several rows
+    assert cfg.subtitle in drawn
+    assert "generated frames between observations" in drawn, "caveats stay whole too"
 
 
 def test_render_titled_cir_names_colour_infrared_on_line_two(tmp_path, monkeypatch):
@@ -1977,7 +1995,7 @@ def test_render_credit_lands_in_the_bottom_margin_never_the_imagery(tmp_path):
 
         paths = render([Frame("2022-05", object(), 1)], cfg, fetch=fake_fetch, geometry=None)
         arr = np.asarray(Image.open(next(p for p in paths if p.suffix == ".png")))
-        top_h, bottom_h = _margins(h, False)
+        top_h, bottom_h = _margins(h, False, w)
         assert arr.shape[:2] == (h + top_h + bottom_h, w)
         assert np.all(arr[top_h:top_h + h] == 123)     # every imagery pixel untouched
         return arr[top_h + h:]                          # the bottom margin only
@@ -2452,8 +2470,8 @@ def test_annotate_draws_a_filled_marker_for_an_observed_frame_by_default():
 
     probe = Image.new("RGB", (w, h))
     draw = ImageDraw.Draw(probe)
-    font, _ = _annot_scale(h)
-    bar_h = _bar_h(h)
+    font, _ = _annot_scale(h, w)
+    bar_h = _bar_h(h, w)
     x = max(4, w // 200)
     y = h - bar_h + max(1, h // 200)
     cx, cy, _d, _label_x = _marker_layout(draw, font, x, y, w)
@@ -2468,8 +2486,8 @@ def test_annotate_draws_a_hollow_marker_for_a_generated_frame():
 
     probe = Image.new("RGB", (w, h))
     draw = ImageDraw.Draw(probe)
-    font, _ = _annot_scale(h)
-    bar_h = _bar_h(h)
+    font, _ = _annot_scale(h, w)
+    bar_h = _bar_h(h, w)
     x = max(4, w // 200)
     y = h - bar_h + max(1, h // 200)
     cx, cy, _d, _label_x = _marker_layout(draw, font, x, y, w)
@@ -2534,7 +2552,7 @@ def test_render_marker_lands_in_the_bottom_margin_never_the_imagery(tmp_path):
 
     paths = render([Frame("2022-05", "A"), Frame("2022-06", "B")], cfg,
                    fetch=fake_fetch, geometry=None)
-    top_h, bottom_h = _margins(h, True)     # interpolate>0 adds a caveat -> two-line header
+    top_h, bottom_h = _margins(h, True, w)  # interpolate>0 adds a caveat -> two-line header
     for p in sorted(pp for pp in paths if pp.suffix == ".png"):
         arr = np.asarray(Image.open(p))
         assert arr.shape[:2] == (h + top_h + bottom_h, w)
@@ -2776,14 +2794,14 @@ def test_header_subtitle_fits_is_not_fooled_by_substring_subtitles(monkeypatch):
     # when the drawing path drops the subtitle the fitted text still CONTAINS
     # "2021", and the old `subtitle in text` check reported it as fitting.
     caveats = "gap-filled from 2019–2021"
-    monkeypatch.setattr(R, "_fit_header_line2",
-                        lambda draw, sub, cav, px, avail, prefix="": (None, cav))
+    monkeypatch.setattr(R, "_layout_header_line2",
+                        lambda draw, sub, cav, px, avail, prefix, bar_h, pad: (None, [cav]))
     assert R.header_subtitle_fits(1920, 1080, "2021", caveats) is False
     # untouched composition => genuinely fits
     monkeypatch.setattr(
-        R, "_fit_header_line2",
-        lambda draw, sub, cav, px, avail, prefix="": (
-            None, " · ".join(p for p in (prefix, sub, cav) if p)))
+        R, "_layout_header_line2",
+        lambda draw, sub, cav, px, avail, prefix, bar_h, pad: (
+            None, [" · ".join(p for p in (prefix, sub, cav) if p)]))
     assert R.header_subtitle_fits(1920, 1080, "2021", caveats) is True
 
 
@@ -2878,7 +2896,7 @@ def test_render_returns_geotiff_paths_only_when_enabled(tmp_path, monkeypatch):
         return np.zeros((16, 16)), np.ones((16, 16), bool)
     called = []
     monkeypatch.setattr(R, "_export_geotiffs",
-                        lambda frames, cfg, geometry: called.append(1) or [])
+                        lambda frames, cfg, geometry, bounds=None: called.append(1) or [])
     render([Frame("2022-06", object())], cfg, fetch=fetch, geometry=None)
     assert not called                        # default off
     cfg = _cfg(tmp_path, name="tifgate2")
@@ -3109,6 +3127,16 @@ def test_render_skips_pixel_grid_when_unset(tmp_path, monkeypatch):
         return np.zeros((20, 20)), np.ones((20, 20), dtype=bool)
 
     render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
+
+
+def test_export_geotiffs_without_a_frame_aoi_does_not_crash(tmp_path):
+    # api/GUI callers may build a cfg without frame_aoi; the fit-scale backstop used
+    # to call _aoi_bounds({}) and raise KeyError before a single frame was exported.
+    import gee_animation.render as r
+    cfg = _cfg(tmp_path)
+    cfg.frame_aoi = None
+    cfg.geotiffs = True
+    assert r._export_geotiffs([], cfg, None) == []
 
 
 # --- raster overlay (overlay: {raster, levels, colors}) ------------------------------
