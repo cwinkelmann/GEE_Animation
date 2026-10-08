@@ -1,0 +1,31 @@
+# R12 DATA-ONLY run: monthly NDVI composites over the zoomed footprint frame,
+# no gap-filling (every frame is real data for its own month), GeoTIFF per month,
+# no pictures. Used by docs/experiments/windthrow/index_drops.py.
+name: r12_data_ndvi
+project: hnee-331218
+title: Tegeler Forst, Revier 12
+subtitle: Berlin, Germany
+aoi:
+  frame: { bbox: [13.2162, 52.5680, 13.2862, 52.6102] }   # footprint bounds + 0.4 km, 4.7 x 4.7 km
+  region: { geojson: docs/aoi/r12/r12_footprint.geojson }
+  region_max_cloud_percent: 20
+start: "2017-01-01"
+end: "2026-09-01"
+sensor: sentinel2
+index: ndvi
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+
+
+render:
+  fps: 1
+  interpolate: 0
+  scale: 10
+  dimensions: 480
+  crs: auto
+  upscale: nearest
+  gif: false
+  frames: false
+  raw_frames: false
+  geotiffs: true

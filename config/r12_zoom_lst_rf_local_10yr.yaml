@@ -1,0 +1,47 @@
+# Tegeler Forst, Revier 12: absolute RF-sharpened surface temperature on the zoomed
+# frame (forest trained locally), 15-45 C turbo like the pretty LST cut. Same exported
+# inputs as r12_focus_lst_rf_delta_local_10yr (cache hit on the EE exports; the forests
+# are re-trained per frame here). Companion of r13_zoom_lst_rf_local_10yr.
+name: r12_zoom_lst_rf_local_10yr
+project: hnee-331218
+title: Tegeler Forst, Revier 12
+subtitle: "RF-sharpened surface temperature"
+aoi:
+  frame: { bbox: [13.2162, 52.5680, 13.2862, 52.6102] }   # footprint bounds + 0.4 km
+  region: { geojson: docs/aoi/r12/r12_footprint.geojson }
+  region_max_cloud_percent: 20
+start: "2017-01-01"
+end: "2026-09-01"
+sensor: landsat
+index: lst_rf
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+missions: [L8, L9]
+metadata: false
+sharpen: local                 # EE exports composites; the forest trains here (sharpen_local)
+
+pool_years: [2017, 2026]
+pool_strategy: gap_fill
+
+viz:
+  min: 15.0
+  max: 45.0
+  palette: ['#30123b', '#4145ab', '#4675ed', '#39a2fc', '#1bcfd4', '#24eca6',
+            '#61fc6c', '#a4fc3b', '#d1e834', '#f3c63a', '#fe9b2d', '#f36315',
+            '#d93806', '#b11901', '#7a0402']
+
+render:
+  fps: 6
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 20
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: "match"               # canvas follows the near-square footprint extent
+  upscale: lanczos
+  region_line_width: 5
+  quality: 9
+  raw_frames: true
+  geotiffs: true

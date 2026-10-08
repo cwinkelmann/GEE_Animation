@@ -1,0 +1,57 @@
+# R12: the NBR zoom cut with the fallen-stem density overlay of r12_zoom_ndvi_10yr_stems
+# (same kernel-density raster, magenta fills: the NBR ramp is brown-to-green and never uses it).
+# A pure cache hit on the NBR zoom run's thumbnails -- the overlay is drawn client-side.
+name: r12_zoom_nbr_10yr_stems
+project: hnee-331218
+title: Tegeler Forst, Revier 12
+subtitle: Berlin, Germany
+aoi:
+  frame:
+    bbox:
+    - 13.2162
+    - 52.568
+    - 13.2862
+    - 52.6102
+  region:
+    geojson: docs/aoi/r12/r12_footprint.geojson
+  region_max_cloud_percent: 20
+start: '2017-01-01'
+end: '2026-09-01'
+sensor: sentinel2
+index: nbr
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+pool_years:
+- 2017
+- 2026
+pool_strategy: gap_fill
+render:
+  fps: 2
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 20
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: match
+  upscale: lanczos
+  region_line_width: 5
+  quality: 8
+  raw_frames: true
+  geotiffs: true
+overlay:
+  raster: docs/aoi/r12/r12_stem_kde40_5m.tif
+  mode: fill
+  levels:
+  - 100
+  - 250
+  - 500
+  - 1000
+  colors:
+  - '#fbb4d9'
+  - '#f768a1'
+  - '#c51b8a'
+  - '#7a0177'
+  alpha: 0.55
+  label: fallen stems, m per ha

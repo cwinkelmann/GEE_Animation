@@ -1,0 +1,45 @@
+# Spandauer Forst, Revier 13 (Berlin): the second Tegel footprint, same treatment as
+# the R12 config r12_zoom_lst_pretty_10yr_grid. Footprint: R13_footprint.gpkg (1,033 ha, three parts)
+# simplified to 5 m as docs/aoi/r13/r13_footprint.geojson (188 vertices).
+name: r13_zoom_lst_pretty_10yr_grid
+project: hnee-331218
+title: Spandauer Forst, Revier 13
+subtitle: "Surface temperature · harmonic seasonal model · 100 m grid"
+aoi:
+  frame: { bbox: [13.1330, 52.5582, 13.2168, 52.6024] }   # footprint bounds + 0.4 km, 5.7 x 4.9 km
+  region: { geojson: docs/aoi/r13/r13_footprint.geojson }
+  region_max_cloud_percent: 20
+start: "2017-01-01"
+end: "2026-09-01"
+sensor: landsat
+index: lst
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+missions: [L8, L9]
+smooth: harmonic
+harmonics: 2
+metadata: false
+
+viz:
+  min: 15.0
+  max: 45.0
+  palette: ['#30123b', '#4145ab', '#4675ed', '#39a2fc', '#1bcfd4', '#24eca6',
+            '#61fc6c', '#a4fc3b', '#d1e834', '#f3c63a', '#fe9b2d', '#f36315',
+            '#d93806', '#b11901', '#7a0402']
+
+render:
+  fps: 6
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 10
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: "match"               # canvas follows the near-square footprint extent
+  upscale: nearest               # flat blocks: the mesh sits on real cell edges
+  region_line_width: 5
+  quality: 9
+  raw_frames: true
+  geotiffs: false
+  pixel_grid: true               # trace the 162 x 69 fetched raster (~100 m cells)

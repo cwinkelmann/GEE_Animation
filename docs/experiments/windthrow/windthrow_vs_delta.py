@@ -1,0 +1,110 @@
+"""Do predicted windthrown stems sit on a temperature deviation?
+
+Inputs: the local lst_rf delta GeoTIFFs (K, departure from the footprint mean,
+20 m, EPSG:32633, clipped to the footprint) and the tegel-unet stem predictions
+(LineStrings, EPSG:32633). Per 20 m cell: metres of predicted stem. Streets are
+excluded (steet_mask.gpkg). Per month: mean delta in windthrow cells vs. cells
+with no predicted stem, Spearman rho of delta vs stem density, binned means.
+
+    python windthrow_vs_delta.py <geotiff dir or glob> <out csv>
+"""
+import glob, sys, re
+import numpy as np, geopandas as gpd, rasterio
+from rasterio.features import rasterize
+from scipy.stats import spearmanr
+
+import os
+# Site selection: WT_SITE=R12 (default), R13, or WNE (no stem map). The WINMOL data root
+# (the folder holding Revier_12/ and Revier_13/) comes from WT_DATA_ROOT; without it the
+# three locations used on the HNEE Mac are tried. WT_STEMS / WT_STREETS override the files.
+_SITE = os.environ.get("WT_SITE", "R12")
+_ROOTS = tuple(r for r in (os.environ.get("WT_DATA_ROOT"),
+                           "/Volumes/storage/Datasets/Winmol/training_data/WINDWURF_Tegel",   # NAS
+                           "/Volumes/2TB/winmol/training_data/WINDWURF_Tegel",              # external mirror
+                           os.path.expanduser("~/data/Winmol/training_data/WINDWURF_Tegel")) if r)
+_REV = {"R12": "Revier_12", "R13": "Revier_13"}.get(_SITE)     # a site without a stem map (WNE) has no Revier folder
+
+
+def site_dir() -> str:
+    """The site's Revier folder under the first data root that has it ("" for WNE).
+    Resolved lazily so that importing this module for `stem_density()` does not
+    need the WINMOL mount; the lookup fails only when a stem map is actually read."""
+    found = next((f"{r}/{_REV}" for r in _ROOTS if _REV and os.path.isdir(f"{r}/{_REV}")), "")
+    if _REV and not found and not os.environ.get("WT_STEMS"):
+        raise SystemExit(f"windthrow_vs_delta: no {_REV}/ under WT_DATA_ROOT or the default roots {_ROOTS}; "
+                         "set WT_DATA_ROOT to the WINDWURF_Tegel folder (or WT_STEMS / WT_STREETS)")
+    return found
+
+
+def __getattr__(name):
+    # Module-level STEMS / STREETS / R12 stay available as names (every script uses
+    # them) but are resolved on first access, not at import time.
+    if name == "R12":
+        return site_dir()
+    if name == "STEMS":
+        return os.environ.get("WT_STEMS", f"{site_dir()}/predictions_cw_2026/{_SITE}_stems_tegel-unet_2026-08.gpkg")
+    if name == "STREETS":
+        return os.environ.get("WT_STREETS", f"{site_dir()}/steet_mask.gpkg")      # absent for R13: no street exclusion
+    raise AttributeError(name)
+WT_MIN_M = 20.0          # ≥ 20 m of predicted stem per 20 m cell (~4 stems) = "windthrow cell"
+BINS = [0, 0.01, 10, 30, 60, 1e9]
+BIN_NAMES = ["none", "0-10 m", "10-30 m", "30-60 m", ">60 m"]
+
+def stem_density(template):
+    """metres of predicted stem per cell of `template` (an open rasterio dataset)."""
+    g = gpd.read_file(__getattr__("STEMS"), layer="stems").to_crs(template.crs)
+    pts = []
+    for line in g.geometry:
+        n = max(2, int(line.length / 0.5))
+        for t in np.linspace(0, 1, n, endpoint=False):
+            p = line.interpolate(t, normalized=True); pts.append((p.x, p.y, line.length / n))
+    pts = np.array(pts)
+    rows, cols = rasterio.transform.rowcol(template.transform, pts[:, 0], pts[:, 1])
+    dens = np.zeros((template.height, template.width), "float32")
+    ok = (rows >= 0) & (rows < template.height) & (cols >= 0) & (cols < template.width)
+    np.add.at(dens, (np.asarray(rows)[ok], np.asarray(cols)[ok]), pts[ok, 2])
+    streets_path = __getattr__("STREETS")
+    if os.path.exists(streets_path):
+        streets = gpd.read_file(streets_path).to_crs(template.crs)
+        street = rasterize([(geom, 1) for geom in streets.geometry], out_shape=dens.shape,
+                           transform=template.transform, fill=0, all_touched=True).astype(bool)
+    else:
+        street = np.zeros(dens.shape, bool)
+    return dens, street
+
+def main():
+    pattern, out_csv = sys.argv[1], sys.argv[2]
+    files = sorted(glob.glob(pattern))
+    if not files:
+        sys.exit(f"no GeoTIFFs match {pattern}")
+    with rasterio.open(files[0]) as t:
+        dens, street = stem_density(t)
+    rows = []
+    for f in files:
+        label = re.search(r"(\d{4}-\d{2})\.tif$", f).group(1)
+        with rasterio.open(f) as ds:
+            d = ds.read(1).astype("float32"); d[d == ds.nodata] = np.nan
+        inside = np.isfinite(d) & ~street
+        wt, ctrl = inside & (dens >= WT_MIN_M), inside & (dens == 0)
+        rho = spearmanr(dens[inside], d[inside]).statistic if inside.sum() > 10 else np.nan
+        binned = {}
+        idx = np.digitize(dens, BINS[1:], right=False)
+        for i, name in enumerate(BIN_NAMES):
+            m = inside & (idx == i); binned[name] = (float(np.nanmean(d[m])) if m.sum() else np.nan, int(m.sum()))
+        rows.append(dict(month=label, n_wt=int(wt.sum()), n_ctrl=int(ctrl.sum()),
+                         delta_wt=float(np.nanmean(d[wt])), delta_ctrl=float(np.nanmean(d[ctrl])),
+                         diff_K=float(np.nanmean(d[wt]) - np.nanmean(d[ctrl])), spearman=float(rho),
+                         **{f"bin_{k}": v[0] for k, v in binned.items()}))
+        print(f"{label}: windthrow cells {wt.sum():4d} mean {rows[-1]['delta_wt']:+.2f} K | "
+              f"no-stem cells {ctrl.sum():4d} mean {rows[-1]['delta_ctrl']:+.2f} K | "
+              f"diff {rows[-1]['diff_K']:+.2f} K | rho {rho:+.3f} | bins "
+              + " ".join(f"{k}:{v[0]:+.2f}({v[1]})" for k, v in binned.items()), flush=True)
+    import csv
+    with open(out_csv, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0].keys())); w.writeheader(); w.writerows(rows)
+    print("wrote", out_csv)
+    print(f"cells: total inside {int((np.isfinite(d) & ~street).sum())}, street-excluded {int(street[np.isfinite(d)].sum())}, "
+          f"stem density max {dens.max():.0f} m/cell, cells with any stem {(dens > 0).sum()}")
+
+if __name__ == "__main__":
+    main()
