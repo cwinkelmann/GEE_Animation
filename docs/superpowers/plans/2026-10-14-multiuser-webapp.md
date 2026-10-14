@@ -1787,8 +1787,18 @@ GEE_OAUTH_CLIENT_SECRET=
 # Signs the OAuth state cookie. Generate once with:  python -c "import secrets;
 # print(secrets.token_urlsafe(48))"  and keep it stable across restarts.
 GEE_COOKIE_SECRET=
+# Peers whose X-Forwarded-* headers uvicorn may trust. Caddy terminates TLS and
+# proxies over plain HTTP, so without this Starlette sees http:// and the Secure
+# session cookie misbehaves (Ruling Z). Default covers loopback + RFC1918; tighten
+# to the Caddy container's address if you know it.
+GEE_FORWARDED_ALLOW_IPS=127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 DNS_API_TOKEN=
 ```
+
+Only these five variables are read by the app (`GEE_OUTPUT_DIR` and
+`GEE_ANIMATION_CACHE_DIR` are set in the Dockerfile). The caps — 3 concurrent renders,
+100 MB upload, 14-day retention — are `AppConfig` defaults in code, not environment
+variables; do NOT add env vars for them to `.env.example`.
 
 Confirm `.env` is ignored: `git check-ignore -v deploy/.env` must print a rule. If it
 does not, add `deploy/.env` to `.gitignore` in this commit. (`work/UltraDetector/.env`
@@ -1809,8 +1819,9 @@ Add after the existing "Docker" section: what the server is, the two prerequisit
 (a browser-trusted certificate via DNS-01 or an HNEE internal CA; an OAuth client whose
 consent screen is Internal, or External/testing with `hnee.de` verified and ≤100 named
 users), the per-user setup (their own Cloud project with the Earth Engine API enabled
-and registered), the 3-concurrent/12-year/1440p limits, the 14-day retention, and this
-sentence verbatim:
+and registered), the fact that the project field starts **empty** and each person types
+their own project id there — nothing is billed to HNEE's project (Ruling AA) — the
+3-concurrent/12-year/1440p limits, the 14-day retention, and this sentence verbatim:
 
 > Renders run as subprocesses on a shared machine. Anyone with Docker access on carrot
 > can read a running worker's memory, which briefly holds your Google refresh token.
