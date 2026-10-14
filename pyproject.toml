@@ -29,6 +29,7 @@ ml = ["rasterio>=1.3", "scikit-learn>=1.4", "joblib>=1.3"]   # sharpen: local (l
 [project.scripts]
 gee-animation = "gee_animation.cli:main"
 gee-animation-gui = "gee_animation.gui:main"
+gee-animation-server = "gee_animation.webapp.app:main"
 
 [tool.setuptools.packages.find]
 include = ["gee_animation*"]
