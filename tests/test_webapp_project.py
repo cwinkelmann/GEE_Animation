@@ -1,3 +1,4 @@
+import traceback
 import types
 
 import pytest
@@ -66,3 +67,28 @@ def test_an_echoed_refresh_token_is_redacted_from_the_error():
     assert "SECRET-TOKEN" not in str(e.value)
     assert "***" in str(e.value)
     assert "boom" in str(e.value)
+
+
+def test_an_echoed_access_token_is_redacted_from_the_error():
+    creds = types.SimpleNamespace(refresh_token="1//RT", token="ya29.ACCESS-SECRET")
+    exc = Exception("401 Authorization: Bearer ya29.ACCESS-SECRET boom")
+    with pytest.raises(ProjectError) as e:
+        validate(creds, "p", ee_module=_ee(exc))
+    assert "ACCESS-SECRET" not in str(e.value)
+    assert "boom" in str(e.value)
+
+
+def test_the_fallback_error_does_not_chain_the_unredacted_original():
+    secret = "ya29." + "HIDDEN"       # built so the literal is not in a traceback source line
+    creds = types.SimpleNamespace(refresh_token="1//RT", token=secret)
+    with pytest.raises(ProjectError) as e:
+        validate(creds, "p", ee_module=_ee(Exception("weird " + secret)))
+    assert e.value.__cause__ is None
+    assert e.value.__suppress_context__ is True
+    assert secret not in "".join(traceback.format_exception(e.value))
+
+
+def test_the_specific_branches_keep_their_cause_for_debugging():
+    with pytest.raises(ProjectError) as e:
+        validate(object(), "p", ee_module=_ee(Exception("Caller does not have permission")))
+    assert e.value.__cause__ is not None

@@ -111,6 +111,16 @@ def test_callback_without_a_refresh_token_fails_clearly():
     assert store.all() == []
 
 
+def test_callback_without_userinfo_or_email_fails_clearly():
+    for token in ({"refresh_token": RT}, {"refresh_token": RT, "userinfo": {}}):
+        tc, store, _ = _app(token)
+        r = tc.get("/oauth2/callback")
+        assert r.status_code == 400
+        assert "sign in again" in r.text.lower()
+        assert "set-cookie" not in r.headers
+        assert store.all() == []
+
+
 def test_logout_drops_the_session_and_clears_the_cookie():
     tc, store, _ = _app(_good())
     sid = _sid(tc.get("/oauth2/callback"))

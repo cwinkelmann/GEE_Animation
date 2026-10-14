@@ -43,7 +43,12 @@ def add_routes(app, cfg: OAuthConfig, store, client):
     @app.get("/oauth2/callback")
     async def callback(request: Request):
         token = await client.authorize_access_token(request)
-        email = token["userinfo"]["email"]
+        email = (token.get("userinfo") or {}).get("email")
+        if not email:
+            # Google only returns userinfo if openid+email were requested (Task 9 does).
+            return PlainTextResponse(
+                "Google did not tell us who you are. Please sign in again at /login.",
+                status_code=400)
         refresh_token = token.get("refresh_token")
         if not refresh_token:
             # Google omits it if consent was already granted and prompt=consent is missing.
