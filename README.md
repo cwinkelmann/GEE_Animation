@@ -200,11 +200,35 @@ docker run --rm -p 7860:7860 \
   gee-timelapse
 ```
 
-The container runs as uid 10001, not root, so on Linux a mounted file that is mode 600
-and owned by you is unreadable inside it. Either `chmod` the mounted credentials so uid
-10001 can read them, or add `--user "$(id -u):$(id -g)"` to `docker run`; the latter is
-preferable because it leaves the files' permissions alone and never widens access to a
-key.
+The container runs as uid 10001, not root, and inside the image `/data/out` and
+`/data/cache` are owned by that uid. On Linux this has two consequences: a mounted
+credential file that is mode 600 and owned by you is unreadable inside the container, and
+if you run as your own uid the container cannot write its output or cache directories.
+Two ways out:
+
+- **Run as your own uid** (preferred; it leaves your credential files' permissions alone).
+  Point `HOME` at a writable directory, mount the credentials beneath it, and give the
+  container host-owned directories for output and cache (the extra mounts are needed
+  because of the ownership above, not decoration). This recipe was reasoned from the
+  Dockerfile and has **not been tested**:
+
+  ```bash
+  docker run --rm -p 7860:7860 \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp \
+    -v "$HOME/.config/earthengine:/tmp/.config/earthengine:ro" \
+    -v "$PWD/out:/data/out" \
+    -v "$PWD/.cache/gee:/data/cache" \
+    gee-timelapse
+  ```
+
+  For the service-account example below, add the same `--user`, `-e HOME=/tmp` and two
+  `-v` data lines; the key mount stays as it is (it is your own file, so it is readable).
+  Create `out` and `.cache/gee` first so they are owned by you.
+- **`chmod` the credentials** so uid 10001 can read them, if you would rather not pass the
+  extra flags. This widens permissions on a credential file, so do it on a *copy*, not on
+  `~/.config/earthengine/credentials` itself. Output still goes to the container's own
+  `/data/out`.
 
 Open **http://localhost:7860**. Environment variables the container reads:
 
@@ -222,9 +246,6 @@ and drop the service-account env vars:
 docker run --rm -p 7860:7860 \
   -v "$HOME/.config/earthengine:/home/app/.config/earthengine:ro" gee-timelapse
 ```
-
-The same uid note applies: with `--user "$(id -u):$(id -g)"` also add `-e HOME=/home/app`
-so Earth Engine finds the mounted credentials.
 
 ## Multi-user server
 
