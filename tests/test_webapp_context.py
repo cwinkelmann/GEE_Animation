@@ -1,6 +1,8 @@
 import inspect
 import types
 
+import pytest
+
 from gee_animation import gui
 
 
@@ -162,3 +164,124 @@ def test_go_in_server_mode_gives_up_on_a_job_stuck_in_the_queue(monkeypatch):
     go = _fn(gui.build_app(context=ctx), "_go")
     out = go(*_go_args(go), progress=lambda *a, **k: None, request=None)
     assert out[0] is None and "gave up waiting" in out[5]
+
+
+# --- review round A: containment and correctness -----------------------------------------
+
+def _inventory_button(app):
+    return next(b for b in app.blocks.values()
+                if getattr(b, "value", None) == "📋 Scene inventory (CSV)")
+
+
+def _wired_targets(app):
+    return {t[0] for dep in app.get_config_file()["dependencies"] for t in dep["targets"]}
+
+
+def test_the_scene_inventory_button_does_not_exist_in_server_mode():
+    """`run_inventory` calls ee.Initialize, and ee._state._state is process-wide: in the
+    shared web process it would clobber every other user's state (and run under a
+    service-account key if the host has one). Assert on what the browser is given -- the
+    component's visibility and the events it is wired to -- not on Gradio internals."""
+    server = gui.build_app(context=types.SimpleNamespace(list_runs=lambda r: []))
+    button = _inventory_button(server)
+    assert button.visible is False
+    assert button._id not in _wired_targets(server)
+
+    local = gui.build_app()
+    assert _inventory_button(local).visible is True
+    assert _inventory_button(local)._id in _wired_targets(local)
+
+
+def test_the_server_mode_handler_set_is_the_audited_one(monkeypatch):
+    """A tripwire, not a proof. Every handler below was audited by reading: none reaches
+    ee/auth/deps.init in the web process (`_go` goes through context.submit; the rest are
+    UI plumbing or read files). A NEW handler fails this test, forcing the same audit."""
+    def boom(*a, **k):
+        raise AssertionError("Earth Engine initialised in the web process")
+    monkeypatch.setattr(gui.auth, "init", boom)
+    monkeypatch.setattr(gui.DEFAULT_DEPS, "init", boom, raising=False)
+    monkeypatch.setattr(gui, "run_animation", boom)
+    monkeypatch.setattr(gui, "run_inventory", boom)
+    ctx = types.SimpleNamespace(list_runs=lambda r: [], submit=lambda r, p: "j",
+                                job_status=lambda j: {"state": "error", "message": "m"})
+    app = gui.build_app(context=ctx)
+    names = {b.fn.__name__ for b in app.fns.values()}
+    assert "_inventory" not in names
+    # What remains is pure UI plumbing; none of it may call into the ee-touching names.
+    assert names <= {"_fill_runs", "_go", "_load", "_sync_index", "_apply_preset"}
+
+
+def test_the_poll_bound_is_not_shorter_than_the_jobs_own_timeout(monkeypatch):
+    """A poll that gives up before the job's deadline reports failure on a render that is
+    still running fine. The old constant (7200 s) was independent of the queue's timeout."""
+    clock = {"t": 0.0}
+
+    def monotonic():
+        clock["t"] += 1000.0
+        return clock["t"]
+
+    gave_up_at = {}
+    monkeypatch.setattr(gui.time, "monotonic", monotonic)
+    monkeypatch.setattr(gui.time, "sleep", lambda s: None)
+    ctx = types.SimpleNamespace(
+        list_runs=lambda r: [], submit=lambda r, p: "j", job_timeout_s=20000,
+        job_status=lambda j: gave_up_at.update(t=clock["t"]) or
+        {"state": "running", "message": "", "position": 0})
+    go = _fn(gui.build_app(context=ctx), "_go")
+    out = go(*_go_args(go), progress=lambda *a, **k: None, request=None)
+    assert "gave up waiting" in out[5]
+    # Started running at ~t=1000-3000; it must have been polled for at least the timeout.
+    assert gave_up_at["t"] >= 20000 + 1000
+
+
+def test_a_series_in_the_done_event_reaches_the_chart_in_server_mode(monkeypatch):
+    """Worker line -> JSON -> job result -> `_go` -> chart rows."""
+    import io
+    import json
+    from gee_animation.webapp import worker
+    out = io.StringIO()
+    job = json.dumps({"refresh_token": "r", "client_id": "c", "client_secret": "s",
+                      "project": "p", "params": {}})
+    runner = lambda **kw: ("/o/x.mp4", None, [], None, "ok",
+                           [("2022-05", 0.5, 0.25), ("2022-06", 0.75, None)])
+    worker.main(io.StringIO(job), out, ee_module=types.SimpleNamespace(
+        Initialize=lambda **k: None), runner=runner)
+    done = next(json.loads(l) for l in out.getvalue().splitlines()
+                if json.loads(l)["event"] == "done")
+
+    monkeypatch.setattr(gui.time, "sleep", lambda s: None)
+    ctx = types.SimpleNamespace(
+        list_runs=lambda r: [], submit=lambda r, p: "j",
+        job_status=lambda j: {"state": "done", "message": "", "result": done})
+    go = _fn(gui.build_app(context=ctx), "_go")
+    chart = go(*_go_args(go), progress=lambda *a, **k: None, request=None)[6]
+    assert list(chart["area"]) == ["inside AOI", "outside AOI", "inside AOI"]
+    assert list(chart["value"]) == [0.5, 0.25, 0.75]
+
+
+def _zip_with(path, members):
+    import zipfile
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+    return path
+
+
+def test_a_zip_that_expands_beyond_the_bound_is_refused_before_extracting(tmp_path, monkeypatch):
+    monkeypatch.setattr(gui, "MAX_ZIP_UNCOMPRESSED_BYTES", 10_000)
+    bomb = _zip_with(tmp_path / "bomb.zip", {"a.shp": b"\0" * 50_000})   # compresses to ~50 B
+    assert bomb.stat().st_size < 1_000
+    with pytest.raises(ValueError, match="too large to unpack"):
+        gui._region_aoi_from_upload(str(bomb))
+
+
+def test_a_zip_with_too_many_members_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(gui, "MAX_ZIP_MEMBERS", 5)
+    many = _zip_with(tmp_path / "many.zip", {f"f{i}.txt": b"x" for i in range(6)})
+    with pytest.raises(ValueError, match="too large to unpack"):
+        gui._region_aoi_from_upload(str(many))
+
+
+def test_an_ordinary_shapefile_zip_still_unpacks(tmp_path):
+    ok = _zip_with(tmp_path / "ok.zip", {"area.shp": b"x", "area.dbf": b"y"})
+    assert gui._region_aoi_from_upload(str(ok))["shapefile"].endswith("area.shp")

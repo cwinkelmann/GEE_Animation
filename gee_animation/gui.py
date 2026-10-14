@@ -169,9 +169,29 @@ DEFAULT_AOI = os.environ.get("GEE_DEFAULT_AOI") or (str(_WNE_AOI) if _WNE_AOI.ex
 
 # Where previously-rendered runs live (overridable for a mounted output volume).
 OUTPUT_DIR = os.environ.get("GEE_OUTPUT_DIR", "out")
-# Server mode: stop polling a job after this long. Comfortably above the JobQueue's own
-# 5400 s run timeout, so it only fires if the queue itself is wedged.
-SERVER_POLL_TIMEOUT_S = 7200
+# Server mode: how long one render may run. The queue enforces it (AppConfig.job_timeout_s,
+# which the server context exposes as `job_timeout_s`); 4 h matches the Caddyfile's proxy
+# timeouts and the README. The GUI's poll bound is DERIVED from it (see `_poll_bound_s`),
+# never an independent number: a poll that gives up before the job's own deadline reports
+# failure on a render that is still running fine.
+DEFAULT_JOB_TIMEOUT_S = 14400
+# Slack added to the job timeout before the GUI stops polling, so the queue's own timeout
+# (and its "timed out" message) always wins; the poll bound only fires on a wedged queue.
+SERVER_POLL_MARGIN_S = 1800
+
+
+def _poll_bound_s(context) -> float:
+    """How long to poll one job: its run timeout plus a margin."""
+    timeout = getattr(context, "job_timeout_s", None) or DEFAULT_JOB_TIMEOUT_S
+    return timeout + SERVER_POLL_MARGIN_S
+
+
+# A zip upload may not expand beyond this, nor hold more members than this. 2 GiB is
+# well above any real shapefile bundle (a national-scale polygon layer is tens of MB)
+# yet far below what fills a disk shared by 20 users; the member cap stops a zip of
+# millions of tiny files, which the size sum alone would not.
+MAX_ZIP_UNCOMPRESSED_BYTES = 2 * 1024 ** 3
+MAX_ZIP_MEMBERS = 1000
 # A frame stem's period suffix: "YYYY-MM" (monthly), "YYYY-MM-DD" (sub-monthly)
 # or "YYYY-Qn" (quarterly) — every label format compositing.period_starts emits.
 _PERIOD_RE = re.compile(r"\d{4}-(?:\d{2}(?:-\d{2})?|Q[1-4])")
@@ -282,6 +302,14 @@ def _region_aoi_from_upload(path: str) -> dict:
     if ext == ".zip":
         dest = Path(tempfile.mkdtemp())
         with zipfile.ZipFile(p) as zf:
+            members = zf.infolist()
+            total = sum(m.file_size for m in members)
+            if len(members) > MAX_ZIP_MEMBERS or total > MAX_ZIP_UNCOMPRESSED_BYTES:
+                raise ValueError(
+                    f"the uploaded .zip is too large to unpack ({len(members)} files, "
+                    f"{total / 1024 ** 2:.0f} MiB uncompressed; the limit is "
+                    f"{MAX_ZIP_MEMBERS} files and "
+                    f"{MAX_ZIP_UNCOMPRESSED_BYTES // 1024 ** 2} MiB)")
             zf.extractall(dest)
         shp = next(dest.rglob("*.shp"), None)
         if shp is None:
@@ -292,6 +320,21 @@ def _region_aoi_from_upload(path: str) -> dict:
     raise ValueError(
         f"unsupported AOI file {p.name!r}; upload a .geojson or a zipped shapefile (.zip)"
     )
+
+
+def _series_frame(series):
+    """Chart rows from `(period, inside, outside)` tuples (or JSON lists of them).
+
+    Empty input gives an empty frame, which the chart renders as blank.
+    """
+    import pandas as pd
+    rows = []
+    for period, inside, outside in series:
+        if inside is not None:
+            rows.append((period, inside, "inside AOI"))
+        if outside is not None:
+            rows.append((period, outside, "outside AOI"))
+    return pd.DataFrame(rows, columns=["period", "value", "area"])
 
 
 def _blank(value) -> bool:
@@ -958,7 +1001,12 @@ def build_app(context=None):
                     placeholder="my-ee-project" if context is not None else None,
                     value=project_default)
                 go = gr.Button("Generate animation", variant="primary")
-                inv = gr.Button("📋 Scene inventory (CSV)", variant="secondary")
+                # Not offered in server mode: the inventory calls ee.Initialize, and
+                # ee._state._state is process-wide, so in the shared web process it would
+                # clobber every other user's state (and, with a service-account key on the
+                # host, run under HNEE's identity). Renders go through the worker instead.
+                inv = gr.Button("📋 Scene inventory (CSV)", variant="secondary",
+                                visible=context is None)
             with gr.Column():
                 video = gr.Video(label="Animation (MP4)")
                 gif = gr.File(label="Animation (GIF, download)")
@@ -1050,7 +1098,6 @@ def build_app(context=None):
                 sharpen_local, region_only, relative, pixel_grid, upscale,
                 smooth, harmonics, anomaly_mode, baseline_start, baseline_end,
                 progress=gr.Progress(), request: gr.Request = None):
-            import pandas as pd
             try:
                 params = dict(
                     aoi_path=aoi_file, buffer_m=buffer_m, sensor=sensor, index=index,
@@ -1075,16 +1122,24 @@ def build_app(context=None):
                     # Server mode: never render in the web process (it holds no user's
                     # EE credentials). Caps, queue and per-user out_dir live behind submit.
                     job_id = context.submit(request, dict(params))
-                    deadline = time.monotonic() + SERVER_POLL_TIMEOUT_S
+                    bound = _poll_bound_s(context)
+                    # A job still waiting for a slot gets room for a full run ahead of it;
+                    # once it is running, the bound restarts from that moment.
+                    queued_deadline = time.monotonic() + 2 * bound
+                    deadline = queued_deadline
+                    started = False
                     while True:
                         state = context.job_status(job_id)
                         if state["state"] in ("done", "error", "cancelled"):
                             break
+                        if state["state"] == "running" and not started:
+                            started = True
+                            deadline = time.monotonic() + bound
                         if time.monotonic() > deadline:
                             return _error(RuntimeError(
                                 "gave up waiting for the render job "
                                 f"(still {state['state']} after "
-                                f"{SERVER_POLL_TIMEOUT_S // 60} min); try again later"))
+                                f"{bound // 60:.0f}+ min); try again later"))
                         progress(0.5, desc=state.get("message")
                                  or (f"queued, position {state.get('position')}"
                                      if state["state"] == "queued" else "rendering..."))
@@ -1094,16 +1149,11 @@ def build_app(context=None):
                                                    or f"job {state['state']}"))
                     result = state["result"]
                     return (result["mp4"], result.get("gif"), result.get("frames"),
-                            result.get("zip"), None, result["status"], pd.DataFrame())
+                            result.get("zip"), None, result["status"],
+                            _series_frame(result.get("series") or []))
                 progress(0.05, desc="Filtering imagery and building frames…")
                 mp4, gif_path, frame_pngs, zip_path, msg, series = run_animation(**params)
-                rows = []
-                for period, inside, outside in series:
-                    if inside is not None:
-                        rows.append((period, inside, "inside AOI"))
-                    if outside is not None:
-                        rows.append((period, outside, "outside AOI"))
-                df = pd.DataFrame(rows, columns=["period", "value", "area"])
+                df = _series_frame(series)
                 progress(1.0, desc="Done")
                 return mp4, gif_path, frame_pngs, zip_path, None, msg, df
             except Exception as exc:   # surface a friendly message in the UI
@@ -1153,7 +1203,8 @@ def build_app(context=None):
             except Exception as exc:   # surface a friendly message in the UI
                 return _error(exc)
 
-        inv.click(_inventory, inputs, outputs)
+        if context is None:
+            inv.click(_inventory, inputs, outputs)
 
         # Load a previously-rendered run into the same output widgets (no Earth Engine).
         def _load(sel):
