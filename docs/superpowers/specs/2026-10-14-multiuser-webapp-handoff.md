@@ -7,8 +7,8 @@ end of implementation so the decisions outlive the session that made them.
 
 ## State
 
-41 commits off `main` (`c74da2e`), 31 files, +6247/−24. Unit suite **891 passed, 1 skipped,
-2 deselected, 2 warnings** (730 before this branch). `tests/test_gui.py` unchanged throughout,
+45 commits off `main` (`c74da2e`), 32 files, +6729/−24. Unit suite **899 passed, 1 skipped,
+2 deselected, 1 warning** (730 before this branch). `tests/test_gui.py` unchanged throughout,
 82 green. The suite is network-free; the one live-Earth-Engine test stays behind the
 `integration` marker and `GEE_INTEGRATION`.
 
@@ -138,7 +138,22 @@ was found by which a token reaches it; it is the one logging surface not covered
   Gradio's 40-thread default; it would need to become async at a larger scale.
 - A user's Cloud project id is not remembered across restarts, and runs cannot be shared between
   users. Both were left open deliberately in the spec.
-- The suite reports two warnings. One is upstream (`StarletteDeprecationWarning` about httpx in
-  `fastapi.testclient`). The other is `coroutine 'JobQueue.submit' was never awaited`, emitted at GC
-  time by the two tests that deliberately wedge an event loop and close it before its scheduled
-  callback runs. Both are test-time only; neither was silenced, so a third warning stays visible.
+- The suite reports one warning, and it is upstream: `StarletteDeprecationWarning` about httpx
+  in `fastapi.testclient`. It was briefly two. The second, `coroutine 'JobQueue.submit' was never
+  awaited`, was dismissed as test-teardown noise and then turned out to be a real race announcing
+  itself: `submit` told the user "the server is busy" while a slow-but-recovering event loop went on
+  to create the job and spawn a worker whose id never reached the browser. Fixing that race removed
+  the warning. Nothing is silenced, so the next new warning stays visible — which is the point.
+
+### Two invariants a future change could break silently
+
+- **`JobQueue.submit` must contain no `await`.** `ServerContext.submit` chooses the job id before
+  handing work to the loop, so that if the hand-off times out it can undo *that* job and nothing
+  else. An `await` inserted before `self._jobs[job_id] = Job(...)` would let the cleanup miss the
+  job and leave a render running that the user was told had failed — invisible, holding a slot for
+  up to four hours. A test parses the function and fails if a suspension point appears, and the
+  docstring says why. If you genuinely need an await there, harden the cleanup in the same change
+  rather than deleting the test.
+- **Per-user isolation of the run browser leans on Gradio.** `Dropdown.preprocess` rejects values
+  outside the per-session choices; we add no containment check of our own at that point. If Gradio's
+  behaviour changes, this needs one.
