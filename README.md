@@ -200,6 +200,12 @@ docker run --rm -p 7860:7860 \
   gee-timelapse
 ```
 
+The container runs as uid 10001, not root, so on Linux a mounted file that is mode 600
+and owned by you is unreadable inside it. Either `chmod` the mounted credentials so uid
+10001 can read them, or add `--user "$(id -u):$(id -g)"` to `docker run`; the latter is
+preferable because it leaves the files' permissions alone and never widens access to a
+key.
+
 Open **http://localhost:7860**. Environment variables the container reads:
 
 | Var | Purpose |
@@ -216,6 +222,9 @@ and drop the service-account env vars:
 docker run --rm -p 7860:7860 \
   -v "$HOME/.config/earthengine:/home/app/.config/earthengine:ro" gee-timelapse
 ```
+
+The same uid note applies: with `--user "$(id -u):$(id -g)"` also add `-e HOME=/home/app`
+so Earth Engine finds the mounted credentials.
 
 ## Multi-user server
 

@@ -15,7 +15,7 @@ STDOUT_LIMIT = 32 * 1024 * 1024
 #: Server-only secrets a render subprocess has no business holding. (The user's refresh
 #: token is never in the environment at all: it travels on stdin.)
 _SCRUBBED_PREFIXES = ("GEE_OAUTH_",)
-_SCRUBBED_NAMES = ("GEE_COOKIE_SECRET",)
+_SCRUBBED_NAMES = ("GEE_COOKIE_SECRET", "DNS_API_TOKEN")
 
 
 def worker_env(environ=None) -> dict:

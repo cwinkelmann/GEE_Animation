@@ -634,12 +634,13 @@ def test_a_line_beyond_even_the_raised_limit_fails_the_job_with_an_honest_messag
 
 def test_the_worker_does_not_inherit_the_servers_secrets_and_gets_its_own_session(monkeypatch):
     for k, v in {"GEE_OAUTH_CLIENT_SECRET": "S1", "GEE_OAUTH_CLIENT_ID": "I",
-                 "GEE_COOKIE_SECRET": "S2", "GEE_OUTPUT_DIR": "/data/out",
+                 "GEE_COOKIE_SECRET": "S2", "DNS_API_TOKEN": "S3", "GEE_OUTPUT_DIR": "/data/out",
                  "PATH": "/usr/bin"}.items():
         monkeypatch.setenv(k, v)
     _, captured, _, _ = _run_worker(monkeypatch, [])
     env = captured["env"]
     assert not [k for k in env if k.startswith("GEE_OAUTH_")] and "GEE_COOKIE_SECRET" not in env
+    assert "DNS_API_TOKEN" not in env
     assert env["GEE_OUTPUT_DIR"] == "/data/out" and env["PATH"] == "/usr/bin"
     assert captured["start_new_session"] is True
 

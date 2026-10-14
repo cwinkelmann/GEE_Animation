@@ -12,3 +12,5 @@ venv/
 
 # deployment secrets
 deploy/.env
+deploy/*.key
+deploy/*.crt
