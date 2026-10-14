@@ -1352,7 +1352,7 @@ from gee_animation.webapp.app import AppConfig, create_app
 def _app(tmp_path):
     cfg = AppConfig(client_id="cid", client_secret="sec",
                     redirect_uri="https://carrot.aisl.c4ds.hnee.de/oauth2/callback",
-                    output_root=Path(tmp_path))
+                    cookie_secret="test-signing-key", output_root=Path(tmp_path))
     return create_app(cfg, oauth_client=None, spawn=lambda job, on_event: None)
 
 
@@ -1378,13 +1378,21 @@ def test_the_run_list_is_empty_for_an_anonymous_request(tmp_path):
     assert oauth.current_user(anon) is None
 
 
-def test_a_stray_stdout_line_from_the_render_path_does_not_kill_the_job():
-    """Ruling N: a library printing to stdout must not corrupt the JSON-lines protocol."""
+def test_a_stray_stdout_line_from_the_render_path_does_not_kill_the_job(monkeypatch):
+    """Ruling N: a library printing to stdout must not corrupt the JSON-lines protocol.
+
+    This drives the REAL `WorkerProcess.run` with a faked subprocess, rather than
+    re-implementing the read loop in the test — a test that reimplements the code it
+    covers passes no matter what the code does (Ruling Q).
+    """
     import asyncio
 
-    from gee_animation.webapp.spawn import WorkerProcess
+    from gee_animation.webapp import spawn as spawn_mod
 
-    seen = []
+    class FakeStdin:
+        def write(self, data): pass
+        async def drain(self): pass
+        def close(self): pass
 
     class FakeStdout:
         def __init__(self, lines):
@@ -1398,24 +1406,32 @@ def test_a_stray_stdout_line_from_the_render_path_does_not_kill_the_job():
                 raise StopAsyncIteration
             return self._lines.pop(0)
 
-    proc = WorkerProcess({"id": "j1"})
-    proc._proc = types.SimpleNamespace(
-        stdout=FakeStdout([b"Using TensorFlow backend.\n",
-                           b'{"event": "done", "mp4": "/out/x.mp4"}\n'],),
-        stdin=None, wait=lambda: asyncio.sleep(0), returncode=0)
-    # Drive only the read loop: stdin was already closed by the real run().
-    async def read_only():
-        async for line in proc._proc.stdout:
-            if not line.strip():
-                continue
-            try:
-                event = __import__("json").loads(line)
-            except ValueError:
-                continue
-            seen.append(event)
+    class FakeProc:
+        returncode = 0
 
-    asyncio.run(read_only())
-    assert seen == [{"event": "done", "mp4": "/out/x.mp4"}]
+        def __init__(self):
+            self.stdin = FakeStdin()
+            self.stdout = FakeStdout([
+                b"Using TensorFlow backend.\n",                      # library chatter
+                b'{"event": "progress", "message": "fetching"}\n',
+                b"not json either\n",
+                b'{"event": "done", "mp4": "/out/x.mp4"}\n',
+            ])
+
+        async def wait(self):
+            return 0
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(spawn_mod.asyncio, "create_subprocess_exec", fake_exec)
+
+    seen = []
+    proc = spawn_mod.WorkerProcess({"id": "j1", "params": {}})
+    asyncio.run(proc.run(seen.append))
+
+    assert seen == [{"event": "progress", "message": "fetching"},
+                    {"event": "done", "mp4": "/out/x.mp4"}]
 
 
 def test_the_log_redactor_is_installed_once_the_app_has_started(tmp_path):
@@ -1481,6 +1497,7 @@ from pathlib import Path
 import gradio as gr
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 
 from . import caps, logsafe, oauth, storage
 from .jobs import JobQueue
@@ -1494,6 +1511,9 @@ class AppConfig:
     client_secret: str
     redirect_uri: str
     output_root: Path
+    #: Signs the Starlette session cookie that carries the OAuth CSRF state. Must be
+    #: stable across restarts (an in-flight sign-in breaks otherwise) and secret.
+    cookie_secret: str = ""
     max_concurrency: int = 3
     max_upload_mb: int = 100
     retention_days: int = 14
@@ -1501,6 +1521,11 @@ class AppConfig:
 
 def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
     app = FastAPI()
+    # Authlib stores the OAuth `state` (the CSRF token) in a Starlette session, so
+    # /login raises without this middleware. The secret signs that cookie only; our own
+    # session cookie is an opaque sid looked up in SessionStore (Ruling S).
+    app.add_middleware(SessionMiddleware, secret_key=cfg.cookie_secret,
+                       https_only=True, same_site="lax")
     app.state.sessions = SessionStore()
     app.state.queue = JobQueue(spawn=spawn, max_concurrency=cfg.max_concurrency)
     app.state.max_upload_bytes = cfg.max_upload_mb * 1024 * 1024
@@ -1584,11 +1609,15 @@ def main() -> None:
         client_id=os.environ["GEE_OAUTH_CLIENT_ID"],
         client_secret=os.environ["GEE_OAUTH_CLIENT_SECRET"],
         redirect_uri=os.environ["GEE_OAUTH_REDIRECT_URI"],
+        cookie_secret=os.environ["GEE_COOKIE_SECRET"],
         output_root=Path(os.environ.get("GEE_OUTPUT_DIR", "/data/out")))
     client = OAuth().register(
         name="google",
         server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
         client_id=cfg.client_id, client_secret=cfg.client_secret,
+        # access_type=offline + prompt=consent are REQUIRED, not optional: without
+        # them Google returns no refresh token, and a render outlives the one-hour
+        # access token, so every job would fail partway (Ruling S).
         client_kwargs={"scope": "openid email " + " ".join(oauth.SCOPES),
                        "access_type": "offline", "prompt": "consent"})
     from .spawn import spawn_worker
@@ -1710,6 +1739,7 @@ services:
     env_file: .env
     environment:
       GEE_OAUTH_REDIRECT_URI: https://carrot.aisl.c4ds.hnee.de/oauth2/callback
+      # GEE_OAUTH_CLIENT_ID / _SECRET and GEE_COOKIE_SECRET come from .env
     volumes:
       - out:/data/out
       - cache:/data/cache
@@ -1754,6 +1784,9 @@ carrot.aisl.c4ds.hnee.de {
 # deploy/.env.example — copy to deploy/.env (root-owned, chmod 600, NEVER committed)
 GEE_OAUTH_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com
 GEE_OAUTH_CLIENT_SECRET=
+# Signs the OAuth state cookie. Generate once with:  python -c "import secrets;
+# print(secrets.token_urlsafe(48))"  and keep it stable across restarts.
+GEE_COOKIE_SECRET=
 DNS_API_TOKEN=
 ```
 
