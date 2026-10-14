@@ -13,6 +13,8 @@ from pathlib import Path
 
 from ..gui import list_previous_runs
 
+_MEDIA_SUFFIXES = (".mp4", ".gif")
+
 
 def user_dir(root: Path, email: str) -> Path:
     """`root/<16 hex chars>` — stable per user, and not itself an identity leak."""
@@ -20,20 +22,30 @@ def user_dir(root: Path, email: str) -> Path:
     return Path(root) / digest
 
 
-def list_runs(root: Path, email: str) -> list:
+def list_runs(root: Path, email: str) -> list[tuple[str, str]]:
     """[(label, media_path)] for THIS user only."""
     return list_previous_runs(base_dir=str(user_dir(root, email)))
 
 
-def sweep(root: Path, max_age_days: int = 14, now: float | None = None) -> list:
-    """Delete run directories whose newest file is older than `max_age_days`."""
+def _is_run(directory: Path) -> bool:
+    """A run is a directory holding at least one .mp4/.gif, the same definition
+    `list_previous_runs` uses when it lists them."""
+    return any(f.suffix.lower() in _MEDIA_SUFFIXES for f in directory.rglob("*") if f.is_file())
+
+
+def sweep(root: Path, max_age_days: int = 14, now: float | None = None) -> list[Path]:
+    """Delete run directories whose newest file is older than `max_age_days`.
+
+    Only directories that contain media count as runs; anything else under a user
+    directory (for example an uploads folder) is left alone.
+    """
     root = Path(root)
     if not root.exists():
         return []
-    cutoff = (now or time.time()) - max_age_days * 86400
+    cutoff = (time.time() if now is None else now) - max_age_days * 86400
     deleted = []
     for user in sorted(p for p in root.iterdir() if p.is_dir()):
-        for run in sorted(p for p in user.iterdir() if p.is_dir()):
+        for run in sorted(p for p in user.iterdir() if p.is_dir() and _is_run(p)):
             newest = max((f.stat().st_mtime for f in run.rglob("*") if f.is_file()),
                          default=run.stat().st_mtime)
             if newest < cutoff:
