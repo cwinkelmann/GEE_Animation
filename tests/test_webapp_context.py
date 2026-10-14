@@ -268,7 +268,7 @@ def test_a_series_in_the_done_event_reaches_the_chart_in_server_mode(monkeypatch
 
 def _stop_button(app):
     return next(b for b in app.blocks.values()
-                if getattr(b, "value", None) == "⏹ Stop my render")
+                if getattr(b, "value", None) == "⏹ Stop all my renders")
 
 
 def test_the_stop_button_exists_and_is_wired_only_in_server_mode():
@@ -294,12 +294,14 @@ def test_the_stop_handler_asks_the_context_and_passes_it_no_job_id():
     cancel = _fn(gui.build_app(context=ctx), "_cancel")
     assert list(inspect.signature(cancel).parameters) == ["request"]
     out = cancel("REQ")
-    assert calls == ["REQ"] and "2 renders" in out
+    assert calls == ["REQ"] and "Stopped 2 renders" in out
+    assert "all" in out and "queued and running" in out   # says what it does
 
 
 def test_the_stop_handler_reports_having_nothing_to_stop_and_surfaces_a_refusal():
     ctx = types.SimpleNamespace(list_runs=lambda r: [], cancel=lambda r: 0)
-    assert "Nothing" in _fn(gui.build_app(context=ctx), "_cancel")("REQ")
+    assert "no queued or running renders" in _fn(
+        gui.build_app(context=ctx), "_cancel")("REQ")
 
     def refuse(request):
         raise PermissionError("Your session expired. Sign in again.")

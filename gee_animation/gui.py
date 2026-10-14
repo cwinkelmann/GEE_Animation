@@ -1004,7 +1004,11 @@ def build_app(context=None):
                 # Server mode only: the single-operator app renders in this process and
                 # has no queue to stop. Takes no job id -- the server resolves which
                 # renders are yours from your session (see ServerContext.cancel).
-                stop = gr.Button("⏹ Stop my render", variant="stop",
+                # The label says "all" because that is what it does: the server has no
+                # job id to go on (by design), so it stops every unfinished render of
+                # yours, not just the newest. A user with two queued renders must not
+                # discover that by losing both.
+                stop = gr.Button("⏹ Stop all my renders", variant="stop",
                                  visible=context is not None)
                 # Not offered in server mode: the inventory calls ee.Initialize, and
                 # ee._state._state is process-wide, so in the shared web process it would
@@ -1154,8 +1158,10 @@ def build_app(context=None):
                         # one poll of the Stop button rather than waiting out the
                         # job timeout.
                         return (None, None, None, None, None,
-                                "**Stopped.** Your render was cancelled and its slot "
-                                "released.", None)
+                                "**Stopped.** This render was cancelled and its slot "
+                                "released. Stopping affects all of your unfinished "
+                                "renders, so any others you had queued are gone too.",
+                                None)
                     if state["state"] != "done":
                         return _error(RuntimeError(state.get("message")
                                                    or f"job {state['state']}"))
@@ -1178,9 +1184,11 @@ def build_app(context=None):
             except Exception as exc:
                 return f"**Error:** {exc}"
             if not stopped:
-                return "Nothing of yours was running or queued."
-            return (f"Stopping {stopped} render{'s' if stopped != 1 else ''} of yours; "
-                    "the slot is released.")
+                return "You had no queued or running renders, so nothing was stopped."
+            noun = "render" if stopped == 1 else "renders"
+            return (f"**Stopped {stopped} {noun}.** This stops *all* of your unfinished "
+                    "renders — every queued and running one, not just the most recent "
+                    "— and releases their slots. Other users' renders are untouched.")
 
         _cancel.__annotations__["request"] = gr.Request   # see _fill_runs
         _go.__annotations__["request"] = gr.Request   # see _fill_runs
