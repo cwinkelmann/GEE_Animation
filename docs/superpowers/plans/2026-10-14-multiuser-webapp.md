@@ -1376,6 +1376,21 @@ def test_the_run_list_is_empty_for_an_anonymous_request(tmp_path):
     assert oauth.current_user(anon) is None
 
 
+def test_the_log_redactor_is_installed_once_the_app_has_started(tmp_path):
+    """Ruling J: installing before uvicorn configures logging would attach the filter to
+    handlers that are then replaced, leaving credentials unredacted."""
+    import logging
+
+    from gee_animation.webapp.logsafe import RedactingFilter
+
+    root = logging.getLogger()
+    before = [f for f in root.filters if isinstance(f, RedactingFilter)]
+    assert before == []
+    with TestClient(_app(tmp_path)):
+        during = [f for f in root.filters if isinstance(f, RedactingFilter)]
+    assert len(during) == 1
+
+
 def test_the_session_store_and_queue_live_on_app_state(tmp_path):
     app = _app(tmp_path)
     assert app.state.sessions is not None
@@ -1443,14 +1458,15 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
     app.state.config = cfg
 
     @app.on_event("startup")
-    async def _sweep_on_start():
+    async def _on_start():
         app.state.loop = asyncio.get_running_loop()   # ServerContext.submit runs off-loop
+        # Install the redactor HERE, not at import time: `logsafe.install` attaches the
+        # filter to the handlers that exist when it runs, and uvicorn configures logging
+        # during startup. Installing earlier would attach to handlers that are then
+        # replaced, and the redaction would silently cover nothing (Task 3, Ruling J).
+        logsafe.install(logging.getLogger(),
+                        lambda: [s.refresh_token for s in app.state.sessions.all()])
         storage.sweep(cfg.output_root, max_age_days=cfg.retention_days)
-
-    # A credential can only reach a log line through this process; make that impossible
-    # rather than merely unlikely (Task 3).
-    logsafe.install(logging.getLogger(),
-                    lambda: [s.refresh_token for s in app.state.sessions.all()])
 
     if oauth_client is not None:
         oauth.add_routes(app, oauth.OAuthConfig(cfg.client_id, cfg.client_secret,
@@ -1574,7 +1590,7 @@ gee-animation-server = "gee_animation.webapp.app:main"
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `conda run -n GEE_animation python -m pytest tests/test_webapp_app.py -q`
-Expected: PASS (5 passed)
+Expected: PASS (6 passed)
 
 - [ ] **Step 5: Run the whole suite**
 
