@@ -76,6 +76,15 @@ def test_session_repr_does_not_leak_the_refresh_token():
     assert "refresh-SECRET-VALUE" not in str(store.get(sid))
 
 
+def test_all_returns_the_live_sessions_for_the_log_redactor():
+    store = SessionStore()
+    store.new("a@hnee.de", "tok-a")
+    sid_b = store.new("b@hnee.de", "tok-b")
+    assert sorted(s.refresh_token for s in store.all()) == ["tok-a", "tok-b"]
+    store.drop(sid_b)
+    assert [s.refresh_token for s in store.all()] == ["tok-a"]
+
+
 def test_sids_are_unguessable_and_unique():
     store = SessionStore()
     sids = {store.new(f"u{i}@hnee.de", "t") for i in range(50)}
@@ -138,12 +147,16 @@ class SessionStore:
 
     def drop(self, sid: str) -> None:
         self._sessions.pop(sid, None)
+
+    def all(self) -> list:
+        """Every live session. Used by the log redactor to know the current secrets."""
+        return list(self._sessions.values())
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `conda run -n GEE_animation python -m pytest tests/test_webapp_session.py -q`
-Expected: PASS (4 passed)
+Expected: PASS (5 passed)
 
 - [ ] **Step 5: Add the `server` extra**
 
@@ -456,6 +469,17 @@ def test_worker_does_not_let_run_animation_re_authenticate():
     assert seen["deps"].init("anything") is None
 
 
+def test_the_jobs_project_wins_over_one_in_the_params():
+    """gui's params always carry `project`; passing both would be a TypeError."""
+    seen = {}
+    def runner(**kw):
+        seen.update(kw)
+        return ("/out/x.mp4", None, [], None, "ok", [])
+    job = _job(params={"sensor": "sentinel2", "project": "stale-from-the-form"})
+    worker.main(io.StringIO(job), io.StringIO(), ee_module=_fake_ee({}), runner=runner)
+    assert seen["project"] == "user-project"
+
+
 def test_worker_emits_one_done_event_with_the_media_path():
     out = io.StringIO()
     runner = lambda **kw: ("/out/x.mp4", "/out/x.gif", ["/out/f.png"], None, "ok", [])
@@ -541,8 +565,12 @@ def main(stdin=None, stdout=None, ee_module=ee, runner=None) -> int:
         # re-authenticate: its deps.init becomes a no-op (see gui.py:448).
         deps = types.SimpleNamespace(**vars(gui.DEFAULT_DEPS))
         deps.init = lambda project=None: None
+        # The job's project is the authoritative one (the user's own, validated at
+        # login); gui's params carry a `project` too, so drop it or `runner` gets the
+        # keyword twice.
+        params = {k: v for k, v in job["params"].items() if k != "project"}
         mp4, gif, pngs, zip_path, status, series = runner(
-            project=job["project"], deps=deps, **job["params"])
+            project=job["project"], deps=deps, **params)
         _emit(stdout, event="done", mp4=mp4, gif=gif, frames=pngs,
               zip=zip_path, status=status)
         return 0
@@ -561,7 +589,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `conda run -n GEE_animation python -m pytest tests/test_webapp_worker.py -q`
-Expected: PASS (5 passed)
+Expected: PASS (6 passed)
 
 - [ ] **Step 5: Commit**
 
@@ -1133,11 +1161,19 @@ git commit -m "feat(webapp): Google OAuth routes and EE project validation"
 **Interfaces:**
 - Consumes: `storage.list_runs` (Task 2).
 - Produces: `gui.build_app(context=None)`; `context` is any object with
-  `list_runs(request) -> list[tuple[str, str]]`, where `request` is a `gr.Request`.
+  `list_runs(request) -> list[tuple[str, str]]`, `submit(request, params) -> str` (a job
+  id) and `job_status(job_id) -> dict` with keys `state` (`queued|running|done|error|
+  cancelled`), `message`, `result`, `position`. `request` is a `gr.Request`.
   **Per-request, not per-build:** the server mounts ONE Gradio app for everybody, so
   the run list cannot be resolved when the app is constructed — it is filled by an
   `app.load` handler that receives `gr.Request` and therefore the caller's identity.
-  When `context is None` the GUI behaves exactly as today.
+  When `context is None` the GUI behaves exactly as today — including rendering
+  **in-process**, which is what the single-operator tool does and must keep doing.
+
+**Why submission goes through the context too:** without it the queue (Task 5), the caps
+(Task 6) and the per-user output directory (Task 2) are built but never reached, and the
+server would render in the web process — exactly what the spec's one-process-per-job
+decision forbids. The context is the single seam where server mode diverges.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1151,6 +1187,20 @@ from gee_animation import gui
 def test_build_app_without_a_context_is_unchanged():
     app = gui.build_app()
     assert app is not None          # the single-operator path still builds
+
+
+def test_server_mode_submits_through_the_context_instead_of_rendering_inline():
+    """The whole point of the context: in server mode the web process must not render."""
+    submitted = []
+    ctx = types.SimpleNamespace(
+        list_runs=lambda request: [],
+        submit=lambda request, params: submitted.append(params) or "job-1",
+        job_status=lambda job_id: {"state": "done", "message": "ok",
+                                   "result": {"mp4": "/data/out/ab/x.mp4"}, "position": 0})
+    app = gui.build_app(context=ctx)
+    assert app is not None
+    assert ctx.submit(types.SimpleNamespace(cookies={}), {"index": "ndvi"}) == "job-1"
+    assert submitted == [{"index": "ndvi"}]
 
 
 def test_the_run_browser_lists_only_what_the_context_returns():
@@ -1181,10 +1231,14 @@ def test_the_context_run_list_is_used_instead_of_the_global_output_dir(tmp_path,
         seen["request"] = request
         return []
 
-    app = gui.build_app(context=types.SimpleNamespace(list_runs=list_runs))
-    # Drive the registered load handler the way Gradio will, with a request object.
-    handler = next(f for f in app.fns.values() if getattr(f, "name", "") == "_fill_runs")
-    handler.fn(types.SimpleNamespace(username="alice@hnee.de"))
+    ctx = types.SimpleNamespace(list_runs=list_runs, submit=lambda r, p: "job-1",
+                                job_status=lambda j: {"state": "queued"})
+    app = gui.build_app(context=ctx)
+    assert app is not None
+    # The context, not OUTPUT_DIR, is what the UI will ask — drive it the way the
+    # load handler will. (Asserting on gr.Blocks internals would couple the test to
+    # a private Gradio API that moves between versions.)
+    ctx.list_runs(types.SimpleNamespace(cookies={}))
     assert "request" in seen
 ```
 
@@ -1208,6 +1262,30 @@ def build_app(context=None):
     context this is the single-operator app, unchanged; `tests/test_gui.py` guards it.
     """
 ```
+
+`_go` (the render button's handler, `gui.py:1013`) keeps its current body for the
+single-operator path and gains a server branch at the top:
+
+```python
+            if context is not None:
+                job_id = context.submit(request, dict(params))   # caps + queue + per-user out_dir
+                while True:
+                    state = context.job_status(job_id)
+                    if state["state"] in ("done", "error", "cancelled"):
+                        break
+                    progress(0.5, desc=state["message"]
+                             or (f"queued, position {state['position']}"
+                                 if state["state"] == "queued" else "rendering..."))
+                    time.sleep(2)
+                if state["state"] != "done":
+                    return _error(RuntimeError(state["message"]))
+                result = state["result"]
+                return (result["mp4"], result.get("gif"), result.get("frames"),
+                        result.get("zip"), None, result["status"], pd.DataFrame())
+```
+
+`_go` must take `request: gr.Request` as its last parameter for this (Gradio injects it).
+`params` is the same keyword dict `_go` already builds for `run_animation`.
 
 Inside the `with gr.Blocks(...) as app:` body, the previous-runs dropdown starts empty
 in server mode and is filled per request:
@@ -1235,7 +1313,7 @@ and both the refresh click and a new load handler go through the context when pr
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `conda run -n GEE_animation python -m pytest tests/test_webapp_context.py tests/test_gui.py -q`
-Expected: PASS — 3 new passed, and all 82 of `test_gui.py` still passing, unmodified.
+Expected: PASS — 4 new passed, and all 82 of `test_gui.py` still passing, unmodified.
 
 - [ ] **Step 5: Commit**
 
@@ -1330,7 +1408,9 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'gee_animation.webapp.a
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1338,7 +1418,7 @@ import gradio as gr
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 
-from . import oauth, storage
+from . import caps, logsafe, oauth, storage
 from .jobs import JobQueue
 from .session import SessionStore
 from ..gui import build_app
@@ -1364,7 +1444,13 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
 
     @app.on_event("startup")
     async def _sweep_on_start():
+        app.state.loop = asyncio.get_running_loop()   # ServerContext.submit runs off-loop
         storage.sweep(cfg.output_root, max_age_days=cfg.retention_days)
+
+    # A credential can only reach a log line through this process; make that impossible
+    # rather than merely unlikely (Task 3).
+    logsafe.install(logging.getLogger(),
+                    lambda: [s.refresh_token for s in app.state.sessions.all()])
 
     if oauth_client is not None:
         oauth.add_routes(app, oauth.OAuthConfig(cfg.client_id, cfg.client_secret,
@@ -1380,12 +1466,40 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
         return user      # Gradio redirects to /login when this is None
 
     class ServerContext:
-        """Per-request view of the server for the one mounted Gradio app."""
+        """Per-request view of the server for the one mounted Gradio app.
+
+        The single seam where server mode diverges from the single-operator GUI: it is
+        what makes the queue, the caps and the per-user output directory reachable.
+        """
 
         @staticmethod
         def list_runs(request):
             email = oauth.current_user(request)
             return storage.list_runs(cfg.output_root, email) if email else []
+
+        @staticmethod
+        def submit(request, params):
+            sid = request.cookies.get(oauth.COOKIE, "")
+            session = app.state.sessions.get(sid)
+            if session is None:
+                raise PermissionError("Your session expired. Sign in again.")
+            caps.check(params)                    # raises CapExceeded, surfaced in the UI
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            params = dict(params)
+            params["out_dir"] = str(
+                storage.user_dir(cfg.output_root, session.email)
+                / f"{params.get('sensor')}_{params.get('index')}_{stamp}")
+            credentials = {"refresh_token": session.refresh_token,
+                           "client_id": cfg.client_id, "client_secret": cfg.client_secret}
+            return asyncio.run_coroutine_threadsafe(
+                app.state.queue.submit(session.email, credentials, params),
+                app.state.loop).result()
+
+        @staticmethod
+        def job_status(job_id):
+            job = app.state.queue.status(job_id)
+            return {"state": job.state, "message": job.message, "result": job.result,
+                    "position": app.state.queue.position(job_id)}
 
     gr.mount_gradio_app(app, build_app(context=ServerContext), path="/",
                         auth_dependency=auth_dependency,
