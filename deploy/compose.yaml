@@ -17,10 +17,15 @@ services:
     image: caddy:2
     ports: ["443:443", "80:80"]
     environment:
-      # Substituted from deploy/.env; only Caddy needs the DNS-01 token.
+      # Inert by default (the Caddyfile uses a file-based cert). Only used if you switch
+      # to DNS-01 with a Caddy built with your provider plugin. Substituted from deploy/.env.
       DNS_API_TOKEN: ${DNS_API_TOKEN:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The Caddyfile's active `tls` line expects these two files. Put the cert and key
+      # from the HNEE internal CA next to this file, then uncomment:
+      # - ./carrot.crt:/etc/caddy/carrot.crt:ro
+      # - ./carrot.key:/etc/caddy/carrot.key:ro
       - caddy_data:/data
     depends_on: [app]
     restart: unless-stopped

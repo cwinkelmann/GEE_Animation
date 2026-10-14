@@ -1,11 +1,18 @@
 # A render can take well over an hour; the default 60 s proxy timeouts would cut it.
 carrot.aisl.c4ds.hnee.de {
-	tls {
-		# VPN-only host: Let's Encrypt HTTP-01 cannot reach it. Use DNS-01 with a
-		# token for the hnee.de zone, or replace this block with:
-		#   tls /etc/caddy/carrot.crt /etc/caddy/carrot.key
-		dns <provider> {env.DNS_API_TOKEN}
-	}
+	# VPN-only host: Let's Encrypt HTTP-01 cannot reach it, so supply a certificate.
+	# Default: a cert and key from the HNEE internal CA (or any browser-trusted source),
+	# mounted into the container (see the volumes in compose.yaml).
+	#
+	# Alternative, automated renewal via DNS-01: needs a Caddy image built with your DNS
+	# provider's plugin (xcaddy build --with github.com/caddy-dns/<provider>); the stock
+	# caddy:2 image cannot do this. DNS_API_TOKEN in .env feeds it. Replace the line
+	# below with:
+	#   tls {
+	#       dns <provider> {env.DNS_API_TOKEN}
+	#   }
+	tls /etc/caddy/carrot.crt /etc/caddy/carrot.key
+
 	reverse_proxy app:7860 {
 		transport http {
 			read_timeout 4h

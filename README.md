@@ -227,11 +227,13 @@ behind a shared cap. The stack in `deploy/` (app + Caddy for TLS) is meant for
 
 **Prerequisites**
 
-1. A certificate browsers trust. Let's Encrypt HTTP-01 cannot reach a VPN-only host, so
-   use DNS-01 for the `hnee.de` zone (the stock `caddy:2` image has no DNS plugin: build
-   one with `xcaddy` and fill in `dns <provider>` in `deploy/Caddyfile`), or an HNEE
-   internal CA certificate (`tls /etc/caddy/carrot.crt /etc/caddy/carrot.key`, mounted
-   into the Caddy container).
+1. A certificate browsers trust. Let's Encrypt HTTP-01 cannot reach a VPN-only host. The
+   working default: obtain a cert and key for `carrot.aisl.c4ds.hnee.de` from the HNEE
+   internal CA (or any browser-trusted source), put them in `deploy/` as `carrot.crt` and
+   `carrot.key`, and uncomment the two matching volume lines in `deploy/compose.yaml`.
+   For automated renewal instead, use DNS-01: build Caddy with your DNS provider's plugin
+   via `xcaddy` (the stock `caddy:2` image cannot), put `DNS_API_TOKEN` in `deploy/.env`,
+   and switch the `tls` line in `deploy/Caddyfile` as its comments describe.
 2. A Google OAuth client whose consent screen is **Internal**, or External in testing
    mode with `hnee.de` verified and at most 100 named test users. Its authorised redirect
    URI is `https://carrot.aisl.c4ds.hnee.de/oauth2/callback`.
@@ -252,7 +254,8 @@ docker compose up -d --build
 The app reads `GEE_OAUTH_CLIENT_ID`, `GEE_OAUTH_CLIENT_SECRET`, `GEE_OAUTH_REDIRECT_URI`
 (set by `compose.yaml`) and `GEE_COOKIE_SECRET`, all required, plus the optional
 `GEE_OUTPUT_DIR`, `GEE_ANIMATION_CACHE_DIR` and `GEE_FORWARDED_ALLOW_IPS`. `deploy/.env`
-is git-ignored; never commit it.
+is git-ignored; never commit it. `EE_PROJECT` (set in the image for the single-user
+container) has no effect in server mode, because each user supplies their own project.
 
 **Limits** (defaults in `AppConfig`, not environment variables): at most 3 renders run
 at once (others wait in the queue), uploads up to 100 MB, an animation spans at most 12
