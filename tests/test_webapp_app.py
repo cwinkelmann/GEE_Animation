@@ -260,3 +260,62 @@ def test_the_redactor_is_installed_on_uvicorns_own_loggers_and_scrubs_a_live_tok
 def test_create_app_refuses_an_empty_cookie_secret(tmp_path):
     with pytest.raises(ValueError):
         create_app(AppConfig("c", "s", "r", output_root=Path(tmp_path)), None, lambda j, e: None)
+
+
+
+@pytest.mark.filterwarnings("ignore::authlib.deprecate.AuthlibDeprecationWarning")
+def test_the_real_oauth_client_asks_google_for_a_refresh_token(tmp_path):
+    """access_type=offline must reach the authorize URL (it was silently dropped when
+    passed via client_kwargs, which would have failed every render after an hour)."""
+    import asyncio
+    import warnings
+    from gee_animation.webapp.app import build_oauth_client
+    with warnings.catch_warnings():      # authlib's own import-time httpx deprecation
+        warnings.simplefilter("ignore")
+        import authlib.integrations.starlette_client  # noqa: F401
+    meta = {"authorization_endpoint": "https://a/auth", "token_endpoint": "https://a/t",
+            "issuer": "https://a", "jwks_uri": "https://a/j"}
+    cfg = AppConfig("cid", "sec", "https://x/cb", output_root=Path(tmp_path), cookie_secret="k")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        client = build_oauth_client(cfg, server_metadata=meta)
+        url = asyncio.run(client.create_authorization_url("https://x/cb"))["url"]
+    assert "access_type=offline" in url and "prompt=consent" in url
+    assert "earthengine" in url and "email" in url
+
+
+def _project_box(app):
+    import gradio as gr
+    return next(c for c in app.blocks.values() if isinstance(c, gr.Textbox)
+                and "project" in (c.label or "").lower())
+
+
+def test_server_mode_does_not_prefill_our_project_and_single_user_mode_keeps_it(tmp_path):
+    from gee_animation.gui import build_app
+    server = _project_box(build_app(context=_server(tmp_path).state.context))
+    assert server.value in ("", None) and "own" in server.label.lower()
+    assert _project_box(build_app()).value == "hnee-331218"
+
+
+def test_server_mode_preset_application_does_not_refill_the_project(tmp_path):
+    """Applying a preset resets every input to its default, including the project."""
+    from gee_animation.gui import build_app
+    app = build_app(context=_server(tmp_path).state.context)
+    box = _project_box(app)
+    fn = next(f for f in app.fns.values() if f.name == "_apply_preset")
+    out = fn.fn("")
+    idx = [c._id for c in fn.outputs].index(box._id)
+    assert out[idx]["value"] in ("", None)
+
+
+def test_submit_names_the_fix_when_the_project_is_empty(tmp_path):
+    from gee_animation.webapp.project import ProjectError
+    app = _server(tmp_path)
+    sid = app.state.sessions.new("a@b.de", "RT-1")
+    with TestClient(app):
+        with pytest.raises(ProjectError) as err:
+            app.state.context.submit(
+                types.SimpleNamespace(cookies={"sid": sid}, app=app),
+                {"start": "2024-01-01", "end": "2024-12-31", "preset": "720p", "project": " "})
+    assert "own Google Cloud project id" in str(err.value)
+    assert "Earth Engine" in str(err.value)

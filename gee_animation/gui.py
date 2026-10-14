@@ -695,6 +695,8 @@ def build_app(context=None):
 
     sensors = list(SENSORS)
     default_sensor, default_index = "landsat", "lst"
+    # Server mode: each user renders under their OWN project, so never pre-fill ours.
+    project_default = "" if context is not None else os.environ.get("EE_PROJECT", "hnee-331218")
 
     with gr.Blocks(title="GEE Index Timelapse") as app:
         gr.Markdown(
@@ -950,8 +952,11 @@ def build_app(context=None):
                              "single sharpest scene from any pooled year; "
                              "median = median across the pooled years (smoother, "
                              "but blurs and mixes years).")
-                project = gr.Textbox(label="Earth Engine project",
-                                     value=os.environ.get("EE_PROJECT", "hnee-331218"))
+                project = gr.Textbox(
+                    label=("Your own Google Cloud project id (registered for Earth Engine)"
+                           if context is not None else "Earth Engine project"),
+                    placeholder="my-ee-project" if context is not None else None,
+                    value=project_default)
                 go = gr.Button("Generate animation", variant="primary")
                 inv = gr.Button("📋 Scene inventory (CSV)", variant="secondary")
             with gr.Column():
@@ -1001,7 +1006,7 @@ def build_app(context=None):
             ("subtitle", ""), ("credit", ""), ("omit_credit", False),
             ("pool_start_year", None), ("pool_end_year", None),
             ("pool_strategy", "least_cloudy"),
-            ("project", os.environ.get("EE_PROJECT", "hnee-331218")),
+            ("project", project_default),
             ("show_clouds", False), ("crs_choice", DEFAULT_CRS), ("crs_custom", ""),
             ("interpolate", 0), ("interpolate_mode", "auto"), ("min_scenes", 1),
             ("raw_frames", False), ("geotiffs", False), ("write_metadata", False),

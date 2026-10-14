@@ -143,7 +143,8 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
             project_id = (params.get("project") or session.project or "").strip()
             if not project_id:
                 raise project.ProjectError(
-                    "Enter your Google Cloud project id (e.g. my-ee-project).")
+                    "Enter your own Google Cloud project id, the one you registered for "
+                    "Earth Engine, in the project field (e.g. my-ee-project).")
             project.remember(app.state.sessions, sid, project_id)
             run_dir = (storage.user_dir(cfg.output_root, session.email)
                        / f"{params.get('sensor')}_{params.get('index')}_{stamp}")
@@ -177,24 +178,40 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
     return app
 
 
+#: Sent on the authorize URL. REQUIRED, not optional: without access_type=offline Google
+#: returns no refresh token, and a render outlives the one-hour access token, so every
+#: job would fail partway. They must go in `authorize_params`: Authlib silently drops
+#: unknown keys from `client_kwargs` (access_type vanished; only prompt survived).
+AUTHORIZE_PARAMS = {"access_type": "offline", "prompt": "consent"}
+
+
+def build_oauth_client(cfg: AppConfig, server_metadata: dict | None = None):
+    from authlib.integrations.starlette_client import OAuth
+    extra = ({"server_metadata_url":
+              "https://accounts.google.com/.well-known/openid-configuration"}
+             if server_metadata is None else server_metadata)   # dict injected by tests
+    return OAuth().register(
+        name="google", client_id=cfg.client_id, client_secret=cfg.client_secret,
+        client_kwargs={"scope": "openid email " + " ".join(oauth.SCOPES)},
+        authorize_params=AUTHORIZE_PARAMS, **extra)
+
+
 def main() -> None:
     import uvicorn
-    from authlib.integrations.starlette_client import OAuth
-
     cfg = AppConfig(
         client_id=os.environ["GEE_OAUTH_CLIENT_ID"],
         client_secret=os.environ["GEE_OAUTH_CLIENT_SECRET"],
         redirect_uri=os.environ["GEE_OAUTH_REDIRECT_URI"],
         cookie_secret=os.environ["GEE_COOKIE_SECRET"],
         output_root=Path(os.environ.get("GEE_OUTPUT_DIR", "/data/out")))
-    client = OAuth().register(
-        name="google",
-        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-        client_id=cfg.client_id, client_secret=cfg.client_secret,
-        # access_type=offline + prompt=consent are REQUIRED, not optional: without
-        # them Google returns no refresh token, and a render outlives the one-hour
-        # access token, so every job would fail partway (Ruling S).
-        client_kwargs={"scope": "openid email " + " ".join(oauth.SCOPES),
-                       "access_type": "offline", "prompt": "consent"})
+    client = build_oauth_client(cfg)
     from .spawn import spawn_worker
-    uvicorn.run(create_app(cfg, client, spawn_worker), host="0.0.0.0", port=7860)
+    # Caddy terminates TLS and talks plain HTTP to us; without trusted forwarded headers
+    # Starlette sees http:// and the https-only cookie / OAuth redirect break. The default
+    # trusts loopback and the private (RFC1918) ranges a compose network allocates from,
+    # not a wildcard: a client outside them cannot spoof X-Forwarded-*. Tighten it to the
+    # proxy's address with GEE_FORWARDED_ALLOW_IPS (comma-separated IPs/CIDRs).
+    allow = os.environ.get("GEE_FORWARDED_ALLOW_IPS",
+                           "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16")
+    uvicorn.run(create_app(cfg, client, spawn_worker), host="0.0.0.0", port=7860,
+                proxy_headers=True, forwarded_allow_ips=allow)
