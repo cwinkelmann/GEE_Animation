@@ -1341,6 +1341,8 @@ git commit -m "feat(gui): optional server context for the run browser; single-us
 # tests/test_webapp_app.py
 from pathlib import Path
 
+import types
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -1376,19 +1378,66 @@ def test_the_run_list_is_empty_for_an_anonymous_request(tmp_path):
     assert oauth.current_user(anon) is None
 
 
+def test_a_stray_stdout_line_from_the_render_path_does_not_kill_the_job():
+    """Ruling N: a library printing to stdout must not corrupt the JSON-lines protocol."""
+    import asyncio
+
+    from gee_animation.webapp.spawn import WorkerProcess
+
+    seen = []
+
+    class FakeStdout:
+        def __init__(self, lines):
+            self._lines = list(lines)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._lines:
+                raise StopAsyncIteration
+            return self._lines.pop(0)
+
+    proc = WorkerProcess({"id": "j1"})
+    proc._proc = types.SimpleNamespace(
+        stdout=FakeStdout([b"Using TensorFlow backend.\n",
+                           b'{"event": "done", "mp4": "/out/x.mp4"}\n'],),
+        stdin=None, wait=lambda: asyncio.sleep(0), returncode=0)
+    # Drive only the read loop: stdin was already closed by the real run().
+    async def read_only():
+        async for line in proc._proc.stdout:
+            if not line.strip():
+                continue
+            try:
+                event = __import__("json").loads(line)
+            except ValueError:
+                continue
+            seen.append(event)
+
+    asyncio.run(read_only())
+    assert seen == [{"event": "done", "mp4": "/out/x.mp4"}]
+
+
 def test_the_log_redactor_is_installed_once_the_app_has_started(tmp_path):
     """Ruling J: installing before uvicorn configures logging would attach the filter to
-    handlers that are then replaced, leaving credentials unredacted."""
+    handlers that are then replaced, leaving credentials unredacted.
+
+    Asserts on the DELTA, not on absolute state: filters installed on the root logger
+    are process-global and survive the test that added them, so an absolute assertion
+    here would pass or fail depending on which tests ran first (Ruling K).
+    """
     import logging
 
     from gee_animation.webapp.logsafe import RedactingFilter
 
     root = logging.getLogger()
-    before = [f for f in root.filters if isinstance(f, RedactingFilter)]
-    assert before == []
+    count = lambda: sum(isinstance(f, RedactingFilter) for f in root.filters)
+    before = count()
     with TestClient(_app(tmp_path)):
-        during = [f for f in root.filters if isinstance(f, RedactingFilter)]
-    assert len(during) == 1
+        assert count() == before + 1
+    # Clean up after ourselves so the next test sees the logging state it expects.
+    for f in [f for f in root.filters if isinstance(f, RedactingFilter)]:
+        root.removeFilter(f)
 
 
 def test_the_session_store_and_queue_live_on_app_state(tmp_path):
@@ -1464,8 +1513,12 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
         # filter to the handlers that exist when it runs, and uvicorn configures logging
         # during startup. Installing earlier would attach to handlers that are then
         # replaced, and the redaction would silently cover nothing (Task 3, Ruling J).
-        logsafe.install(logging.getLogger(),
-                        lambda: [s.refresh_token for s in app.state.sessions.all()])
+        secrets = lambda: [s.refresh_token for s in app.state.sessions.all()]
+        logsafe.install(logging.getLogger(), secrets)
+        # uvicorn's own loggers carry their own handlers with propagate=False, so a
+        # root-only install never sees their records (Ruling K).
+        for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+            logsafe.install(logging.getLogger(name), secrets)
         storage.sweep(cfg.output_root, max_age_days=cfg.retention_days)
 
     if oauth_client is not None:
@@ -1568,8 +1621,16 @@ class WorkerProcess:
         await self._proc.stdin.drain()
         self._proc.stdin.close()
         async for line in self._proc.stdout:
-            if line.strip():
-                on_event(json.loads(line))
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                # Not our protocol: a library the render path imports printed to
+                # stdout. Ignore it rather than killing the job on someone else's
+                # chatter (Ruling N). The worker's own events are always valid JSON.
+                continue
+            on_event(event)
         await self._proc.wait()
 
     def kill(self) -> None:
@@ -1590,7 +1651,7 @@ gee-animation-server = "gee_animation.webapp.app:main"
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `conda run -n GEE_animation python -m pytest tests/test_webapp_app.py -q`
-Expected: PASS (6 passed)
+Expected: PASS (7 passed)
 
 - [ ] **Step 5: Run the whole suite**
 
