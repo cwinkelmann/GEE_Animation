@@ -23,21 +23,6 @@ def test_an_anonymous_request_to_the_app_is_sent_to_login(tmp_path):
     assert "/login" in response.headers["location"]
 
 
-def test_the_upload_limit_is_set_and_small_enough_to_stop_a_zip_bomb(tmp_path):
-    """Review Focus 5: a 2 GB upload must be refused before anything unpacks it."""
-    app = _app(tmp_path)
-    assert app.state.max_upload_bytes == 100 * 1024 * 1024
-
-
-def test_the_run_list_is_empty_for_an_anonymous_request(tmp_path):
-    """The mounted app serves everyone; identity comes from the request alone."""
-    import types
-    app = _app(tmp_path)
-    anon = types.SimpleNamespace(cookies={}, app=app)
-    from gee_animation.webapp import oauth
-    assert oauth.current_user(anon) is None
-
-
 def test_a_stray_stdout_line_from_the_render_path_does_not_kill_the_job(monkeypatch):
     """Ruling N: a library printing to stdout must not corrupt the JSON-lines protocol.
 
@@ -186,11 +171,14 @@ def test_a_signed_in_user_gets_the_gradio_page_and_an_anonymous_one_is_redirecte
         assert client.get("/config").status_code == 200
 
 
-def test_submit_hands_the_worker_a_private_copy_of_the_aoi_the_project_and_the_credentials(tmp_path):
-    app = _server(tmp_path)
+def test_submit_hands_the_worker_a_private_copy_of_the_aoi_the_project_and_the_credentials(
+        tmp_path, monkeypatch):
+    cache = Path(tmp_path) / "gradio_cache"
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(cache))
+    app = _server(tmp_path / "out")
     sid = app.state.sessions.new("a@b.de", "RT-1")
-    upload = Path(tmp_path) / "gradio_tmp" / "aoi.geojson"
-    upload.parent.mkdir()
+    upload = cache / "abc" / "aoi.geojson"
+    upload.parent.mkdir(parents=True)
     upload.write_text("the-aoi")
     request = types.SimpleNamespace(cookies={"sid": sid}, app=app)
     params = {"start": "2024-01-01", "end": "2024-12-31", "preset": "720p", "sensor": "s2",
@@ -319,3 +307,282 @@ def test_submit_names_the_fix_when_the_project_is_empty(tmp_path):
                 {"start": "2024-01-01", "end": "2024-12-31", "preset": "720p", "project": " "})
     assert "own Google Cloud project id" in str(err.value)
     assert "Earth Engine" in str(err.value)
+
+
+# --- fix round 2 ---------------------------------------------------------------------
+
+def _req(app, sid):
+    return types.SimpleNamespace(cookies={"sid": sid}, app=app)
+
+
+def _good(**extra):
+    return {"start": "2024-01-01", "end": "2024-12-31", "preset": "720p", "project": "p",
+            "sensor": "s2", "index": "ndvi", **extra}
+
+
+def _seed_run(root, email, name):
+    from gee_animation.webapp.storage import user_dir
+    run = user_dir(root, email) / name
+    run.mkdir(parents=True)
+    (run / f"{name}.mp4").write_bytes(b"\x00")
+
+
+def test_each_user_lists_only_their_own_runs_and_an_unknown_session_lists_none(tmp_path):
+    """Per-user isolation, through the real ServerContext (not just oauth.current_user)."""
+    app = _server(tmp_path)
+    _seed_run(tmp_path, "a@b.de", "run_of_a")
+    _seed_run(tmp_path, "c@d.de", "run_of_c")
+    sid_a = app.state.sessions.new("a@b.de", "RT-A")
+    sid_c = app.state.sessions.new("c@d.de", "RT-C")
+    ctx = app.state.context
+    labels = lambda sid: " ".join(label for label, _ in ctx.list_runs(_req(app, sid)))
+    assert "run_of_a" in labels(sid_a) and "run_of_c" not in labels(sid_a)
+    assert "run_of_c" in labels(sid_c) and "run_of_a" not in labels(sid_c)
+    assert ctx.list_runs(_req(app, "stale-sid")) == []
+    assert ctx.list_runs(types.SimpleNamespace(cookies={}, app=app)) == []
+
+
+def test_the_upload_limit_is_enforced_by_the_server(tmp_path):
+    """A 2 MB upload against a 1 MB cap is refused (probes enforcement, not a variable)."""
+    cfg = AppConfig("cid", "sec", "https://x/cb", cookie_secret="k",
+                    output_root=Path(tmp_path), max_upload_mb=1)
+    app = create_app(cfg, None, lambda j, e: _FakeWorker(j))
+    sid = app.state.sessions.new("a@b.de", "RT-1")
+    with TestClient(app) as client:
+        client.cookies.set("sid", sid)
+        small = client.post("/gradio_api/upload", files={"files": ("a.geojson", b"x" * 1000)})
+        big = client.post("/gradio_api/upload",
+                          files={"files": ("a.geojson", b"x" * (2 * 1024 * 1024))})
+    assert small.status_code == 200
+    assert big.status_code == 413
+
+
+def test_an_aoi_path_outside_the_upload_cache_is_refused_and_nothing_is_copied(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(Path(tmp_path) / "gradio_cache"))
+    app = _server(tmp_path / "out")
+    sid_a = app.state.sessions.new("a@b.de", "RT-A")
+    app.state.sessions.new("c@d.de", "RT-C")
+    _seed_run(tmp_path / "out", "c@d.de", "victim")
+    from gee_animation.webapp.storage import user_dir
+    secret = user_dir(tmp_path / "out", "c@d.de") / "victim" / "secret.geojson"
+    secret.write_text("OTHER-USERS-FILE")
+    link = Path(tmp_path) / "gradio_cache" / "x" / "link.geojson"      # symlink escape
+    link.parent.mkdir(parents=True)
+    link.symlink_to(secret)
+    with TestClient(app):
+        for evil in (secret, link, Path(tmp_path) / "gradio_cache" / ".." / "out" / "x.json"):
+            with pytest.raises(PermissionError) as err:
+                app.state.context.submit(_req(app, sid_a), _good(aoi_path=str(evil)))
+            assert str(tmp_path) not in str(err.value)          # names no paths
+    assert not list((tmp_path / "out").glob("*/*/aoi/*")) and _FakeWorker.payloads == []
+    assert not user_dir(tmp_path / "out", "a@b.de").exists()
+
+
+def test_a_staged_preset_aoi_is_accepted(tmp_path, monkeypatch):
+    """Presets are staged into gettempdir()/gee_preset_*; they must keep working."""
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(Path(tmp_path) / "gradio_cache"))
+    monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
+    staged = Path(tmp_path) / "gee_preset_abc" / "p.geojson"
+    staged.parent.mkdir()
+    staged.write_text("preset")
+    app = _server(tmp_path / "out")
+    sid = app.state.sessions.new("a@b.de", "RT-A")
+    with TestClient(app):
+        ctx = app.state.context
+        _wait_done(ctx, ctx.submit(_req(app, sid), _good(aoi_path=str(staged))))
+    assert Path(_FakeWorker.payloads[0]["params"]["aoi_path"]).read_text() == "preset"
+
+
+def test_run_directories_are_unique_and_built_from_safe_characters(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(Path(tmp_path) / "gradio_cache"))
+    app = _server(tmp_path / "out")
+    sid = app.state.sessions.new("a@b.de", "RT-A")
+    with TestClient(app):
+        ctx = app.state.context
+        ids = [ctx.submit(_req(app, sid), _good(sensor="../../etc", index="a b/c"))
+               for _ in range(2)]
+        for i in ids:
+            _wait_done(ctx, i)
+    dirs = [Path(p["params"]["out_dir"]) for p in _FakeWorker.payloads]
+    assert dirs[0] != dirs[1]                                    # same second, still distinct
+    from gee_animation.webapp.storage import user_dir
+    for d in dirs:
+        assert d.parent == user_dir(tmp_path / "out", "a@b.de")  # no escape from the user dir
+        assert all(c.isalnum() or c in "_-" for c in d.name)
+
+
+def test_submit_tells_the_user_the_server_is_busy_when_the_loop_is_wedged(tmp_path, monkeypatch):
+    import asyncio
+    from gee_animation.webapp import app as app_mod
+    monkeypatch.setattr(app_mod, "SUBMIT_TIMEOUT_S", 0.2)
+    app = _server(tmp_path)
+    sid = app.state.sessions.new("a@b.de", "RT-A")
+    with TestClient(app):
+        import threading
+        wedged = asyncio.new_event_loop()                        # a loop stuck in a blocking call
+        t = threading.Thread(target=wedged.run_forever, daemon=True)
+        t.start()
+        wedged.call_soon_threadsafe(_time.sleep, 1.0)
+        app.state.loop = wedged
+        try:
+            with pytest.raises(RuntimeError, match="busy"):
+                app.state.context.submit(_req(app, sid), _good())
+        finally:
+            wedged.call_soon_threadsafe(wedged.stop)
+            t.join(timeout=3)
+            wedged.close()
+
+
+def test_the_retention_sweep_repeats_while_the_server_is_up_and_stops_on_shutdown(
+        tmp_path, monkeypatch):
+    import os
+    from gee_animation.webapp import app as app_mod
+    monkeypatch.setattr(app_mod, "SWEEP_INTERVAL_S", 0.05)
+    app = _server(tmp_path)
+    with TestClient(app):
+        sweeper = app.state.sweeper
+        old = Path(tmp_path) / "u" / "ancient"
+        old.mkdir(parents=True)                                   # created AFTER startup
+        f = old / "ancient.mp4"
+        f.write_bytes(b"\x00")
+        stale = _time.time() - 30 * 86400
+        os.utime(f, (stale, stale))
+        for _ in range(100):
+            if not old.exists():
+                break
+            _time.sleep(0.05)
+        assert not old.exists()
+        assert not sweeper.done()
+    assert sweeper.cancelled()
+
+
+def test_a_child_logger_record_that_falls_to_last_resort_is_redacted(tmp_path, monkeypatch):
+    """With no handler on root (the uvicorn case) records go to logging.lastResort."""
+    import io
+    import logging
+    stream = io.StringIO()
+    monkeypatch.setattr(logging, "lastResort", logging.StreamHandler(stream))
+    logging.lastResort.setLevel(logging.WARNING)
+    root = logging.getLogger()
+    saved, root.handlers = root.handlers, []
+    app = _server(tmp_path)
+    app.state.sessions.new("a@b.de", "LEAKY-REFRESH-TOKEN")
+    try:
+        with TestClient(app):
+            logging.getLogger("some.library").warning("oops LEAKY-REFRESH-TOKEN")
+        logging.getLogger("some.library").warning("after shutdown")
+    finally:
+        root.handlers = saved
+        from gee_animation.webapp.logsafe import RedactingFilter
+        for f in [f for f in root.filters if isinstance(f, RedactingFilter)]:
+            root.removeFilter(f)
+    out = stream.getvalue()
+    assert "oops" in out and "LEAKY-REFRESH-TOKEN" not in out
+    assert not logging.lastResort.filters                          # removed again on shutdown
+
+
+# --- spawn ------------------------------------------------------------------------------
+
+class _LimitedStdout:
+    """Like asyncio.StreamReader: a line longer than `limit` raises ValueError."""
+
+    def __init__(self, lines, limit):
+        self._lines, self._limit = list(lines), limit
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._lines:
+            raise StopAsyncIteration
+        line = self._lines.pop(0)
+        if len(line) > self._limit:
+            raise ValueError("Separator is found, but chunk is longer than limit")
+        return line
+
+
+class _FakeProc:
+    returncode = None
+    pid = 4242
+
+    def __init__(self, lines, limit):
+        class _In:
+            def write(self, d): pass
+            async def drain(self): pass
+            def close(self): pass
+        self.stdin = _In()
+        self.stdout = _LimitedStdout(lines, limit)
+
+    async def wait(self):
+        return 0
+
+
+def _run_worker(monkeypatch, lines, payload=None):
+    import asyncio
+    from gee_animation.webapp import spawn as spawn_mod
+    captured = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured.update(kwargs)
+        return _FakeProc(lines, kwargs.get("limit", 2 ** 16))     # asyncio's default is 64 KiB
+
+    monkeypatch.setattr(spawn_mod.asyncio, "create_subprocess_exec", fake_exec)
+    seen = []
+    proc = spawn_mod.WorkerProcess(payload or {"id": "j", "params": {}})
+    killed = []
+    monkeypatch.setattr(proc, "kill", lambda: killed.append(1))
+    asyncio.run(proc.run(seen.append))
+    return seen, captured, killed, proc
+
+
+def test_a_done_event_longer_than_64_kib_is_delivered_intact(monkeypatch):
+    import json
+    frames = [f"/out/run/frame_{i:06d}.png" for i in range(5000)]       # ~150 KB line
+    line = (json.dumps({"event": "done", "mp4": "/o.mp4", "frames": frames}) + "\n").encode()
+    assert len(line) > 65536
+    seen, _, killed, _ = _run_worker(monkeypatch, [line])
+    assert seen == [{"event": "done", "mp4": "/o.mp4", "frames": frames}] and not killed
+
+
+def test_a_line_beyond_even_the_raised_limit_fails_the_job_with_an_honest_message(monkeypatch):
+    from gee_animation.webapp import spawn as spawn_mod
+    huge = b"x" * (spawn_mod.STDOUT_LIMIT + 1) + b"\n"
+    seen, _, killed, _ = _run_worker(monkeypatch, [huge])
+    assert killed and len(seen) == 1 and seen[0]["event"] == "error"
+    assert "too large" in seen[0]["message"] and "start" not in seen[0]["message"]
+
+
+def test_the_worker_does_not_inherit_the_servers_secrets_and_gets_its_own_session(monkeypatch):
+    for k, v in {"GEE_OAUTH_CLIENT_SECRET": "S1", "GEE_OAUTH_CLIENT_ID": "I",
+                 "GEE_COOKIE_SECRET": "S2", "GEE_OUTPUT_DIR": "/data/out",
+                 "PATH": "/usr/bin"}.items():
+        monkeypatch.setenv(k, v)
+    _, captured, _, _ = _run_worker(monkeypatch, [])
+    env = captured["env"]
+    assert not [k for k in env if k.startswith("GEE_OAUTH_")] and "GEE_COOKIE_SECRET" not in env
+    assert env["GEE_OUTPUT_DIR"] == "/data/out" and env["PATH"] == "/usr/bin"
+    assert captured["start_new_session"] is True
+
+
+def test_a_finished_job_no_longer_holds_the_refresh_token(monkeypatch):
+    *_, proc = _run_worker(monkeypatch, [],
+                           payload={"id": "j", "refresh_token": "RT-SECRET", "params": {}})
+    assert "RT-SECRET" not in repr(vars(proc))
+
+
+def test_kill_signals_the_whole_process_group_and_survives_an_already_gone_worker(monkeypatch):
+    import signal
+    from gee_animation.webapp import spawn as spawn_mod
+    calls = []
+    monkeypatch.setattr(spawn_mod.os, "getpgid", lambda pid: pid + 1)
+    monkeypatch.setattr(spawn_mod.os, "killpg", lambda pg, sig: calls.append((pg, sig)))
+    proc = spawn_mod.WorkerProcess({})
+    proc._proc = _FakeProc([], 10)
+    proc.kill()
+    assert calls == [(4243, signal.SIGKILL)]
+
+    def gone(pg, sig):
+        raise ProcessLookupError
+    monkeypatch.setattr(spawn_mod.os, "killpg", gone)
+    proc.kill()                                                   # must not raise

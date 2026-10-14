@@ -44,9 +44,10 @@ def main(stdin=None, stdout=None, ee_module=ee, runner=None) -> int:
         # re-authenticate: its deps.init becomes a no-op (see gui.py:448).
         deps = types.SimpleNamespace(**vars(gui.DEFAULT_DEPS))
         deps.init = lambda project=None: None
-        # The job's project is the authoritative one (the user's own, validated at
-        # login); gui's params carry a `project` too, so drop it or `runner` gets the
-        # keyword twice.
+        # The job's project is the authoritative one (the user's own, as typed into
+        # the project field; NOT validated up front, so a wrong one fails right here in
+        # Initialize, with Earth Engine's message); gui's params carry a `project` too,
+        # so drop it or `runner` gets the keyword twice.
         params = {k: v for k, v in job["params"].items() if k != "project"}
         mp4, gif, pngs, zip_path, status, series = runner(
             project=job["project"], deps=deps, **params)

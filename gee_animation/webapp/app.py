@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import gradio as gr
+import concurrent.futures
+import re
+import secrets
 import shutil
+import tempfile
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -35,6 +39,47 @@ class AppConfig:
     max_concurrency: int = 3
     max_upload_mb: int = 100
     retention_days: int = 14
+
+
+#: How long a Gradio worker thread waits for the event loop to accept a job before telling
+#: the user the server is busy, rather than hanging forever on a wedged loop.
+SUBMIT_TIMEOUT_S = 30.0
+#: Retention is enforced at startup and then this often, so an always-up server keeps
+#: its promise. A module constant so tests can shorten it.
+SWEEP_INTERVAL_S = 24 * 3600
+
+
+def _safe_part(value, limit: int = 32) -> str:
+    """A path component built only from [A-Za-z0-9_-] (the value is client-supplied)."""
+    return re.sub(r"[^A-Za-z0-9_-]", "_", str(value))[:limit] or "x"
+
+
+def allowed_aoi_roots() -> list[Path]:
+    """Where a legitimate AOI can live: Gradio's upload cache and our staged presets.
+
+    Evaluated per call (GRADIO_TEMP_DIR is read from the environment by Gradio too).
+    """
+    from gradio.utils import get_upload_folder
+    return [Path(get_upload_folder()).resolve()] + [
+        p.resolve() for p in Path(tempfile.gettempdir()).glob("gee_preset_*") if p.is_dir()]
+
+
+def _contained_aoi(path) -> Path:
+    """Resolve a client-named AOI path and require it to sit under an allowed root.
+
+    The path arrives in the client's FileData payload and Gradio only checks the
+    extension, so without this a user could name any .json on the server (another
+    user's run directory, credentials) and have it copied somewhere they can read.
+    """
+    try:
+        resolved = Path(str(path)).resolve()
+    except (OSError, ValueError, RuntimeError):
+        resolved = None
+    if resolved is None or not resolved.is_file() or not any(
+            resolved.is_relative_to(root) for root in allowed_aoi_roots()):
+        raise PermissionError("That AOI file was not uploaded through this page. "
+                              "Please upload it again.")
+    return resolved
 
 
 class _LoginRedirect:
@@ -67,10 +112,23 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
     if not cfg.cookie_secret:
         raise ValueError("AppConfig.cookie_secret must be set (and stable across restarts).")
 
+    async def _sweeper():
+        while True:
+            await asyncio.sleep(SWEEP_INTERVAL_S)
+            await asyncio.to_thread(storage.sweep, cfg.output_root,
+                                    max_age_days=cfg.retention_days)
+
     @asynccontextmanager
     async def lifespan(_app):
-        await _on_start()
-        yield
+        last_resort = await _on_start()
+        app.state.sweeper = asyncio.create_task(_sweeper())
+        try:
+            yield
+        finally:
+            app.state.sweeper.cancel()
+            await asyncio.gather(app.state.sweeper, return_exceptions=True)
+            if logging.lastResort is not None and last_resort is not None:
+                logging.lastResort.removeFilter(last_resort)
 
     app = FastAPI(lifespan=lifespan)
     # Authlib stores the OAuth `state` (the CSRF token) in a Starlette session, so
@@ -96,7 +154,15 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
         # root-only install never sees their records (Ruling K).
         for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
             logsafe.install(logging.getLogger(name), secrets)
+        # With no handler on the root logger (the uvicorn case) a child logger's record
+        # falls through to `logging.lastResort`, a handler with no filter at all.
+        # NB: process-global object; the lifespan removes the filter again on shutdown.
+        last_resort = None
+        if logging.lastResort is not None:
+            last_resort = logsafe.RedactingFilter(secrets)
+            logging.lastResort.addFilter(last_resort)
         storage.sweep(cfg.output_root, max_age_days=cfg.retention_days)
+        return last_resort
 
     if oauth_client is not None:
         oauth.add_routes(app, oauth.OAuthConfig(cfg.client_id, cfg.client_secret,
@@ -136,7 +202,9 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
             if session is None:
                 raise PermissionError("Your session expired. Sign in again.")
             caps.check(params)                    # raises CapExceeded, surfaced in the UI
-            stamp = time.strftime("%Y%m%d-%H%M%S")
+            # Second resolution plus a double-click would share a directory, and
+            # sensor/index are client-supplied: random suffix, restricted charset.
+            stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
             params = dict(params)
             # The worker needs the user's project; the GUI's textbox is where they type
             # it. `remember` (not set_project) so a lost session is an actionable error.
@@ -147,23 +215,30 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
                     "Earth Engine, in the project field (e.g. my-ee-project).")
             project.remember(app.state.sessions, sid, project_id)
             run_dir = (storage.user_dir(cfg.output_root, session.email)
-                       / f"{params.get('sensor')}_{params.get('index')}_{stamp}")
+                       / f"{_safe_part(params.get('sensor'))}_{_safe_part(params.get('index'))}_{stamp}")
             params["out_dir"] = str(run_dir)
             # The render runs in another process, later, possibly after Gradio has
             # cleaned its upload cache: hand it a copy that lives with the run (and is
             # swept with it), not Gradio's temp path.
             aoi_src = params.get("aoi_path")
             if aoi_src:
+                source = _contained_aoi(aoi_src)           # before anything is created
                 aoi_dir = run_dir / "aoi"
                 aoi_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(aoi_src, aoi_dir / Path(aoi_src).name)
-                params["aoi_path"] = str(aoi_dir / Path(aoi_src).name)
+                shutil.copy2(source, aoi_dir / source.name)
+                params["aoi_path"] = str(aoi_dir / source.name)
             credentials = {"refresh_token": session.refresh_token,
                            "client_id": cfg.client_id, "client_secret": cfg.client_secret,
                            "project": project_id}
-            return asyncio.run_coroutine_threadsafe(
+            future = asyncio.run_coroutine_threadsafe(
                 app.state.queue.submit(session.email, credentials, params),
-                app.state.loop).result()
+                app.state.loop)
+            try:
+                return future.result(timeout=SUBMIT_TIMEOUT_S)
+            except concurrent.futures.TimeoutError:
+                future.cancel()
+                raise RuntimeError(
+                    "The server is busy right now. Please try again in a minute.") from None
 
         @staticmethod
         def job_status(job_id):
