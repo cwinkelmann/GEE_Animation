@@ -214,8 +214,55 @@ and drop the service-account env vars:
 
 ```bash
 docker run --rm -p 7860:7860 \
-  -v "$HOME/.config/earthengine:/root/.config/earthengine:ro" gee-timelapse
+  -v "$HOME/.config/earthengine:/home/app/.config/earthengine:ro" gee-timelapse
 ```
+
+## Multi-user server
+
+`gee-animation-server` hosts the same Gradio app for many people at once, behind Google
+sign-in. Each person authorises Earth Engine with their own Google account and renders
+against their own Cloud project; renders run as isolated worker subprocesses, queued
+behind a shared cap. The stack in `deploy/` (app + Caddy for TLS) is meant for
+`carrot.aisl.c4ds.hnee.de`, which is reachable only from the HNEE VPN.
+
+**Prerequisites**
+
+1. A certificate browsers trust. Let's Encrypt HTTP-01 cannot reach a VPN-only host, so
+   use DNS-01 for the `hnee.de` zone (the stock `caddy:2` image has no DNS plugin: build
+   one with `xcaddy` and fill in `dns <provider>` in `deploy/Caddyfile`), or an HNEE
+   internal CA certificate (`tls /etc/caddy/carrot.crt /etc/caddy/carrot.key`, mounted
+   into the Caddy container).
+2. A Google OAuth client whose consent screen is **Internal**, or External in testing
+   mode with `hnee.de` verified and at most 100 named test users. Its authorised redirect
+   URI is `https://carrot.aisl.c4ds.hnee.de/oauth2/callback`.
+
+**Per-user setup.** Every user needs their own Google Cloud project with the Earth Engine
+API enabled and registered for Earth Engine. The project field in the UI starts
+**empty**; each person types their own project id there. Nothing is billed to HNEE's
+project.
+
+**Deploy**
+
+```bash
+cd deploy
+cp .env.example .env && chmod 600 .env   # fill in the OAuth client and cookie secret
+docker compose up -d --build
+```
+
+The app reads `GEE_OAUTH_CLIENT_ID`, `GEE_OAUTH_CLIENT_SECRET`, `GEE_OAUTH_REDIRECT_URI`
+(set by `compose.yaml`) and `GEE_COOKIE_SECRET`, all required, plus the optional
+`GEE_OUTPUT_DIR`, `GEE_ANIMATION_CACHE_DIR` and `GEE_FORWARDED_ALLOW_IPS`. `deploy/.env`
+is git-ignored; never commit it.
+
+**Limits** (defaults in `AppConfig`, not environment variables): at most 3 renders run
+at once (others wait in the queue), uploads up to 100 MB, an animation spans at most 12
+years and at most 1440p, and finished renders are deleted after 14 days. Renders are long
+(a ten-year monthly animation can take tens of minutes to hours), so the Caddyfile allows
+4-hour proxy timeouts.
+
+> Renders run as subprocesses on a shared machine. Anyone with Docker access on carrot
+> can read a running worker's memory, which briefly holds your Google refresh token.
+> Use the server only if you accept that; nothing is written to disk.
 
 ## Configuration
 
