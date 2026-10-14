@@ -28,3 +28,23 @@ def test_a_missing_or_blank_preset_is_allowed():
 def test_an_unparsable_date_is_refused_rather_than_ignored():
     with pytest.raises(CapExceeded):
         check({"start": "not-a-date", "end": "2025-01-01", "preset": "1080p"})
+
+
+def test_an_unknown_preset_is_refused_and_named():
+    with pytest.raises(CapExceeded, match="'8k'"):
+        check({"start": "2024-01-01", "end": "2025-01-01", "preset": "8k"})
+
+
+def test_the_unknown_preset_refusal_lists_the_allowed_presets():
+    with pytest.raises(CapExceeded, match="allowed presets are .*720p.*native \\(no upscaling\\)"):
+        check({"start": "2024-01-01", "end": "2025-01-01", "preset": "8k"})
+
+
+def test_a_reversed_date_range_is_refused():
+    with pytest.raises(CapExceeded, match="is not after the start date 2025-01-01"):
+        check({"start": "2025-01-01", "end": "2024-01-01", "preset": "1080p"})
+
+
+def test_an_end_equal_to_the_start_is_refused():
+    with pytest.raises(CapExceeded, match="is not after the start date 2024-01-01"):
+        check({"start": "2024-01-01", "end": "2024-01-01", "preset": "1080p"})
