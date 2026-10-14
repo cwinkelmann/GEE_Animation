@@ -169,6 +169,9 @@ DEFAULT_AOI = os.environ.get("GEE_DEFAULT_AOI") or (str(_WNE_AOI) if _WNE_AOI.ex
 
 # Where previously-rendered runs live (overridable for a mounted output volume).
 OUTPUT_DIR = os.environ.get("GEE_OUTPUT_DIR", "out")
+# Server mode: stop polling a job after this long. Comfortably above the JobQueue's own
+# 5400 s run timeout, so it only fires if the queue itself is wedged.
+SERVER_POLL_TIMEOUT_S = 7200
 # A frame stem's period suffix: "YYYY-MM" (monthly), "YYYY-MM-DD" (sub-monthly)
 # or "YYYY-Qn" (quarterly) — every label format compositing.period_starts emits.
 _PERIOD_RE = re.compile(r"\d{4}-(?:\d{2}(?:-\d{2})?|Q[1-4])")
@@ -1067,10 +1070,16 @@ def build_app(context=None):
                     # Server mode: never render in the web process (it holds no user's
                     # EE credentials). Caps, queue and per-user out_dir live behind submit.
                     job_id = context.submit(request, dict(params))
+                    deadline = time.monotonic() + SERVER_POLL_TIMEOUT_S
                     while True:
                         state = context.job_status(job_id)
                         if state["state"] in ("done", "error", "cancelled"):
                             break
+                        if time.monotonic() > deadline:
+                            return _error(RuntimeError(
+                                "gave up waiting for the render job "
+                                f"(still {state['state']} after "
+                                f"{SERVER_POLL_TIMEOUT_S // 60} min); try again later"))
                         progress(0.5, desc=state.get("message")
                                  or (f"queued, position {state.get('position')}"
                                      if state["state"] == "queued" else "rendering..."))
@@ -1096,7 +1105,12 @@ def build_app(context=None):
                 return _error(exc)
 
         _go.__annotations__["request"] = gr.Request   # see _fill_runs
-        go.click(_go, inputs, outputs)
+        # Gradio's default is ONE running call per event function, which would serialise
+        # every user behind the first render. In server mode each waiting user holds an
+        # invocation of _go while it polls, so lift the limit (None = unlimited, per
+        # Gradio 6.20; max_threads is the ceiling). The JobQueue limits real renders.
+        go.click(_go, inputs, outputs,
+                 **({"concurrency_limit": None} if context is not None else {}))
 
         def _inventory(aoi_file, buffer_m, sensor, index, start, end, cadence,
                        region_cloud, fps, dims, preset, aspect, quality, write_gif,

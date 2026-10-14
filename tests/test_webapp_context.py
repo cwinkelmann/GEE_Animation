@@ -8,6 +8,10 @@ def _fn(app, name):
     return next(b.fn for b in app.fns.values() if b.fn.__name__ == name)
 
 
+def _block(app, name):
+    return next(b for b in app.fns.values() if b.fn.__name__ == name)
+
+
 def _go_args(go):
     n = len([p for p in inspect.signature(go).parameters.values()
              if p.default is inspect.Parameter.empty])
@@ -47,26 +51,6 @@ def test_the_run_browser_lists_only_what_the_context_returns():
     # Registered for load, not called at build time: identity exists only per request.
     assert calls == []
     assert ctx.list_runs("fake-request")[0][0].startswith("alice_ndvi")
-
-
-def test_the_context_run_list_is_used_instead_of_the_global_output_dir(tmp_path, monkeypatch):
-    """A run sitting in the global OUTPUT_DIR must not appear for a context user."""
-    monkeypatch.setattr(gui, "OUTPUT_DIR", str(tmp_path))
-    stray = tmp_path / "someone_else" / "secret_run"
-    stray.mkdir(parents=True)
-    (stray / "secret_run.mp4").write_bytes(b"\x00\x00mp4")
-    seen = {}
-
-    def list_runs(request):
-        seen["request"] = request
-        return []
-
-    ctx = types.SimpleNamespace(list_runs=list_runs, submit=lambda r, p: "job-1",
-                                job_status=lambda j: {"state": "queued"})
-    app = gui.build_app(context=ctx)
-    assert app is not None
-    ctx.list_runs(types.SimpleNamespace(cookies={}))
-    assert "request" in seen
 
 
 # --- driving the real handlers: these prove gui.py itself uses the context ---
@@ -158,3 +142,23 @@ def test_gradio_recognises_request_as_an_injected_parameter():
     for name in ("_fill_runs", "_go"):
         fn = _fn(app, name)
         assert is_special_typed_parameter("request", get_type_hints(fn)), name
+
+
+def test_server_mode_lifts_gradios_one_at_a_time_limit_on_the_render_button():
+    """Gradio's default (1 per event fn) would serialise all users behind the first."""
+    ctx = types.SimpleNamespace(list_runs=lambda r: [])
+    server = _block(gui.build_app(context=ctx), "_go")
+    assert server.concurrency_limit is None          # None = unlimited in Gradio 6.20
+    assert _block(gui.build_app(), "_go").concurrency_limit == "default"   # unchanged
+
+
+def test_go_in_server_mode_gives_up_on_a_job_stuck_in_the_queue(monkeypatch):
+    clock = iter(range(0, 10**6, 3000))
+    monkeypatch.setattr(gui.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(gui.time, "sleep", lambda s: None)
+    ctx = types.SimpleNamespace(
+        list_runs=lambda r: [], submit=lambda r, p: "j",
+        job_status=lambda j: {"state": "queued", "message": "", "position": 9})
+    go = _fn(gui.build_app(context=ctx), "_go")
+    out = go(*_go_args(go), progress=lambda *a, **k: None, request=None)
+    assert out[0] is None and "gave up waiting" in out[5]
