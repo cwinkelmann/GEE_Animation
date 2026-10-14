@@ -87,12 +87,53 @@ async def test_a_stalled_job_is_killed_at_the_timeout_and_says_so():
 
 
 @pytest.mark.asyncio
-async def test_a_job_survives_its_submitter_disconnecting():
-    """Review Focus 4: the browser closes; the job finishes and stays retrievable."""
-    q = JobQueue(spawn=_spawn_ok("/out/later.mp4"), max_concurrency=3)
+async def test_a_finished_job_stays_retrievable_after_the_queue_moves_on():
+    """The browser closes; later jobs come and go; the first result is still there."""
+    mp4s = iter(["/out/first.mp4", "/out/second.mp4", "/out/third.mp4"])
+
+    def spawn(job, on_event):
+        mp4 = next(mp4s)
+        return FakeProc([json.dumps({"event": "done", "mp4": mp4, "status": "ok"})])
+
+    q = JobQueue(spawn=spawn, max_concurrency=1)
+    first = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    await q.wait(first)
+    for _ in range(2):
+        later = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+        await q.wait(later)
+    assert q.status(first).state == "done"
+    assert q.status(first).result["mp4"] == "/out/first.mp4"
+    assert q.status(later).result["mp4"] == "/out/third.mp4"
+
+
+@pytest.mark.asyncio
+async def test_a_process_that_exits_without_any_event_becomes_a_failed_job():
+    q = JobQueue(spawn=lambda job, on_event: FakeProc([]), max_concurrency=1)
     job_id = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
-    await q.wait(job_id)                       # nobody is listening meanwhile
-    assert q.status(job_id).result["mp4"] == "/out/later.mp4"
+    await q.wait(job_id)
+    job = q.status(job_id)
+    assert job.state == "error"
+    assert "stopped unexpectedly" in job.message
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_queued_job_means_it_never_starts():
+    started = []
+
+    def spawn(job, on_event):
+        started.append(job["id"])
+        return FakeProc([], hang=True)
+
+    q = JobQueue(spawn=spawn, max_concurrency=1)
+    first = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    second = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    await asyncio.sleep(0.05)
+    assert q.status(second).state == "queued"
+    await q.cancel(second)
+    await q.cancel(first)                      # frees the slot the second would take
+    await asyncio.sleep(0.05)
+    assert q.status(second).state == "cancelled"
+    assert started == [first]
 
 
 @pytest.mark.asyncio
