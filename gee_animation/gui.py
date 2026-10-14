@@ -678,8 +678,16 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
     return mp4, gif, frame_pngs, frames_zip, _with_warnings(status, warnings), series
 
 
-def build_app():
-    """Construct the Gradio Blocks app (requires the `gui` extra: gradio)."""
+def build_app(context=None):
+    """Construct the Gradio Blocks app (requires the `gui` extra: gradio).
+
+    `context` is the multi-user server's hook (see webapp/app.py): an object with
+    `list_runs(request)`, `submit(request, params)` and `job_status(job_id)`. ONE app
+    is mounted for every user, so the run list is resolved per request -- on load and
+    on refresh -- never at build time, and rendering goes through `submit` instead of
+    running in this process. Without a context this is the single-operator app,
+    unchanged; `tests/test_gui.py` guards it.
+    """
     import gradio as gr
 
     sensors = list(SENSORS)
@@ -704,11 +712,25 @@ def build_app():
                 apply_preset = gr.Button("Apply preset", variant="secondary", scale=1)
         with gr.Accordion("📂 Load a previous animation", open=False):
             with gr.Row():
-                prev = gr.Dropdown(list_previous_runs(), label="Previously rendered runs "
-                                   f"(from {OUTPUT_DIR}/)", scale=4)
+                prev = gr.Dropdown(
+                    [] if context is not None else list_previous_runs(),
+                    label="Previously rendered runs "
+                          f"({'yours' if context is not None else 'from ' + OUTPUT_DIR + '/'})",
+                    scale=4)
                 refresh = gr.Button("🔄 Refresh", scale=1)
                 load = gr.Button("Load", variant="secondary", scale=1)
-            refresh.click(lambda: gr.update(choices=list_previous_runs()), None, prev)
+
+            def _fill_runs(request: gr.Request):
+                choices = (context.list_runs(request) if context is not None
+                           else list_previous_runs())
+                return gr.update(choices=choices)
+
+            # `from __future__ import annotations` + a function-local `gr` leaves the
+            # annotation an unresolvable string, so Gradio would not inject the request.
+            _fill_runs.__annotations__["request"] = gr.Request
+            refresh.click(_fill_runs, None, prev)
+            if context is not None:
+                app.load(_fill_runs, None, prev)
         with gr.Row():
             with gr.Column():
                 aoi_file = gr.File(
@@ -1019,11 +1041,10 @@ def build_app():
                 viz_min, viz_max, missions,
                 sharpen_local, region_only, relative, pixel_grid, upscale,
                 smooth, harmonics, anomaly_mode, baseline_start, baseline_end,
-                progress=gr.Progress()):
+                progress=gr.Progress(), request: gr.Request = None):
             import pandas as pd
             try:
-                progress(0.05, desc="Filtering imagery and building frames…")
-                mp4, gif_path, frame_pngs, zip_path, msg, series = run_animation(
+                params = dict(
                     aoi_path=aoi_file, buffer_m=buffer_m, sensor=sensor, index=index,
                     start=start, end=end, cadence=cadence,
                     region_max_cloud_percent=region_cloud, fps=fps, dimensions=dims,
@@ -1042,6 +1063,26 @@ def build_app():
                     relative=relative, pixel_grid=pixel_grid, upscale=upscale,
                     smooth=smooth, harmonics=harmonics, anomaly_mode=anomaly_mode,
                     baseline_start_year=baseline_start, baseline_end_year=baseline_end)
+                if context is not None:
+                    # Server mode: never render in the web process (it holds no user's
+                    # EE credentials). Caps, queue and per-user out_dir live behind submit.
+                    job_id = context.submit(request, dict(params))
+                    while True:
+                        state = context.job_status(job_id)
+                        if state["state"] in ("done", "error", "cancelled"):
+                            break
+                        progress(0.5, desc=state.get("message")
+                                 or (f"queued, position {state.get('position')}"
+                                     if state["state"] == "queued" else "rendering..."))
+                        time.sleep(2)
+                    if state["state"] != "done":
+                        return _error(RuntimeError(state.get("message")
+                                                   or f"job {state['state']}"))
+                    result = state["result"]
+                    return (result["mp4"], result.get("gif"), result.get("frames"),
+                            result.get("zip"), None, result["status"], pd.DataFrame())
+                progress(0.05, desc="Filtering imagery and building frames…")
+                mp4, gif_path, frame_pngs, zip_path, msg, series = run_animation(**params)
                 rows = []
                 for period, inside, outside in series:
                     if inside is not None:
@@ -1054,6 +1095,7 @@ def build_app():
             except Exception as exc:   # surface a friendly message in the UI
                 return _error(exc)
 
+        _go.__annotations__["request"] = gr.Request   # see _fill_runs
         go.click(_go, inputs, outputs)
 
         def _inventory(aoi_file, buffer_m, sensor, index, start, end, cadence,
