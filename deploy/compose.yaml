@@ -19,6 +19,22 @@ services:
       - cache:/data/cache
     expose: ["7860"]
     restart: unless-stopped
+    # /login-failed, not / or /login: it is the only route that answers 200 to an
+    # anonymous request. "/" redirects to /login and /login redirects to Google, so
+    # either would report the app healthy on the strength of a redirect alone — or
+    # unhealthy, depending on the checker. python, not curl: the slim image has no curl.
+    # A long start_period because the first import pulls in geopandas and rasterio.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:7860/login-failed', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    # Memory ceiling: UNSET on purpose. A limit below a render's real peak OOM-kills it
+    # hours in, which is a worse failure than no limit at all. To size it, run your
+    # largest real job and watch `docker stats` for the peak of the container (the web
+    # process plus up to 3 render workers, AppConfig.max_concurrency), then add headroom:
+    #   mem_limit: 24g
 
   caddy:
     image: caddy:2
