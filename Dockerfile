@@ -26,15 +26,15 @@ EXPOSE 7860
 
 # Non-root; /data holds renders (GEE_OUTPUT_DIR) and the frame cache. The multi-user
 # server (compose, `gee-animation-server`) overrides CMD; see deploy/.
-# GRADIO_TEMP_DIR: Gradio copies every file a handler returns (mp4, gif, zip, each frame
-# PNG) into this directory. Left at its default that is /tmp/gradio on the container's
-# writable layer, outside both volumes and outside retention. Inside the cache volume the
-# copies are on mounted storage, and the server's sweeper ages them out with the runs.
+# /data/cache/gradio-tmp exists and is app-owned for the server, which points
+# GRADIO_TEMP_DIR at it (deploy/compose.yaml). Deliberately NOT set as an ENV here: this
+# image serves both modes, and only the server has a sweeper. In the single-operator
+# container Gradio's copies belong on its /tmp default, which a restart clears; inside a
+# persistent cache volume with nothing to reclaim them they would grow forever.
 RUN useradd --create-home --uid 10001 app \
     && mkdir -p /data/out /data/cache/gradio-tmp && chown -R app /data
 USER app
 ENV GEE_OUTPUT_DIR=/data/out \
-    GEE_ANIMATION_CACHE_DIR=/data/cache \
-    GRADIO_TEMP_DIR=/data/cache/gradio-tmp
+    GEE_ANIMATION_CACHE_DIR=/data/cache
 
 CMD ["gee-animation-gui"]

@@ -293,7 +293,10 @@ every run directory (finished or not) is deleted after 14 days. Renders are long
 ten-year monthly animation can take tens of minutes to hours), so one render may run for
 up to 4 hours (`GEE_JOB_TIMEOUT_S`, default 14400) before its worker is killed, and the
 Caddyfile allows matching 4-hour proxy timeouts. Gradio's copies of returned files live in
-`GRADIO_TEMP_DIR` (`/data/cache/gradio-tmp` in the image) and are swept on the same schedule.
+`GRADIO_TEMP_DIR` (`/data/cache/gradio-tmp`, set by the compose service — not by the image,
+which also serves the single-operator GUI, where nothing would reclaim them) and are swept
+on the same schedule. A sign-in lasts 7 days; **Stop my render** cancels your own queued or
+running renders (and only yours) and frees the slot at once.
 
 > Renders run as subprocesses on a shared machine. Anyone with Docker access on carrot
 > can read a running worker's memory, which briefly holds your Google refresh token.

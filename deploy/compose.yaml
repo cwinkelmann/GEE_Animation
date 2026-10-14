@@ -7,6 +7,13 @@ services:
     environment:
       GEE_OAUTH_REDIRECT_URI: https://carrot.aisl.c4ds.hnee.de/oauth2/callback
       # GEE_OAUTH_CLIENT_ID / _SECRET and GEE_COOKIE_SECRET come from .env
+      # Gradio copies every file a handler returns (mp4, gif, zip, each frame PNG) into
+      # this directory. Its default is /tmp/gradio on the container's writable layer:
+      # outside both volumes and outside retention. Inside the cache volume the copies
+      # sit on mounted storage AND the server's sweeper ages them out with the runs.
+      # Server-only, hence here and not in the image: the single-operator container has
+      # no sweeper, so for it a persistent directory would only grow (see Dockerfile).
+      GRADIO_TEMP_DIR: /data/cache/gradio-tmp
     volumes:
       - out:/data/out
       - cache:/data/cache
