@@ -60,6 +60,10 @@ class JobQueue:
     async def _run(self, job_id: str, payload: dict) -> None:
         job = self._jobs[job_id]
         async with self._sem:
+            # Not dead code: cancel() delivers CancelledError only at the task's next
+            # await, so a job cancelled between acquiring the semaphore and the first
+            # await lands here. Without this we would spawn a worker (and start
+            # fetching under the user's credentials) for an already-cancelled job.
             if job.state == "cancelled":
                 return
             job.state = "running"
