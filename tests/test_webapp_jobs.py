@@ -212,3 +212,84 @@ async def test_an_unknown_job_id_is_a_described_error_not_a_bare_keyerror():
     q = JobQueue(spawn=_spawn_ok())
     with pytest.raises(UnknownJobError, match="not known"):
         q.status("nope")
+
+
+# --- review round B: cancel reaches production, and only for its owner ------------------
+
+@pytest.mark.asyncio
+async def test_cancel_for_stops_only_that_users_jobs_and_frees_the_slot():
+    """The ownership rule at the queue layer: `cancel_for` selects by email only, so
+    there is no job id for a client to supply. B asking to cancel must not touch A."""
+    procs = []
+
+    def spawn(job, on_event):
+        p = FakeProc([], hang=True)
+        procs.append(p)
+        return p
+
+    q = JobQueue(spawn=spawn, max_concurrency=1)
+    a_job = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    b_job = await q.submit("b@hnee.de", {"refresh_token": "r"}, {})
+    await asyncio.sleep(0.05)
+    assert q.status(a_job).state == "running" and q.status(b_job).state == "queued"
+
+    assert await q.cancel_for("b@hnee.de") == 1          # B's own queued job
+    await asyncio.sleep(0.05)
+    assert q.status(b_job).state == "cancelled"
+    assert q.status(a_job).state == "running"            # A's render is untouched
+    assert not procs[0].killed
+
+    assert await q.cancel_for("a@hnee.de") == 1
+    await asyncio.sleep(0.05)
+    assert procs[0].killed and q.status(a_job).state == "cancelled"
+    assert "Cancelled" in q.status(a_job).message
+
+
+@pytest.mark.asyncio
+async def test_cancel_for_an_unknown_or_empty_email_cancels_nothing():
+    """Fails closed: an unrecognised caller must not become a wildcard."""
+    q = JobQueue(spawn=lambda job, on_event: FakeProc([], hang=True), max_concurrency=2)
+    job_id = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    await asyncio.sleep(0.05)
+    assert await q.cancel_for("") == 0
+    assert await q.cancel_for(None) == 0
+    assert await q.cancel_for("nobody@hnee.de") == 0
+    assert q.status(job_id).state == "running"
+    await q.cancel(job_id)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_an_already_finished_job_is_a_no_op_not_an_error():
+    q = JobQueue(spawn=_spawn_ok(), max_concurrency=1)
+    job_id = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    await _wait_bounded(q, job_id)
+    assert q.status(job_id).state == "done"
+    assert await q.cancel_for("a@hnee.de") == 0       # nothing active to cancel
+    await q.cancel(job_id)                            # and the direct call is harmless
+    assert q.status(job_id).state == "done" and q.status(job_id).result["mp4"]
+
+
+@pytest.mark.asyncio
+async def test_a_cancellation_arriving_while_the_worker_starts_still_kills_it():
+    """`cancel` kills the group before cancelling the task, but a cancellation can land
+    while `proc.run` is still starting the subprocess -- before `job.proc` was set. The
+    CancelledError branch kills again so no worker (nor an ffmpeg child) is left."""
+    procs = []
+
+    class SlowStart(FakeProc):
+        async def run(self, on_event):
+            await asyncio.sleep(3600)        # "still starting the subprocess"
+
+    def spawn(job, on_event):
+        p = SlowStart([])
+        procs.append(p)
+        return p
+
+    q = JobQueue(spawn=spawn, max_concurrency=1)
+    job_id = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    await asyncio.sleep(0.05)
+    q._jobs[job_id].proc = None                 # as if cancel arrived a moment earlier
+    assert await q.cancel_for("a@hnee.de") == 1
+    await asyncio.sleep(0.05)
+    assert procs[0].killed                      # killed by the CancelledError branch
+    assert q.status(job_id).state == "cancelled"

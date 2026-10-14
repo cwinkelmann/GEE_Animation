@@ -60,11 +60,29 @@ class JobQueue:
     async def cancel(self, job_id: str) -> None:
         job = self._jobs[job_id]
         if job.state in ("done", "error", "cancelled"):
-            return
+            return                              # already finished: a no-op, not an error
         job.state = "cancelled"
+        job.message = "Cancelled at your request."
         if job.proc is not None:
             job.proc.kill()
         self._tasks[job_id].cancel()
+
+    async def cancel_for(self, email: str) -> int:
+        """Cancel every unfinished job owned by `email`; return how many were cancelled.
+
+        Ownership is the ONLY selector. The caller resolves `email` from the server-side
+        session, so no job id crosses the wire and there is nothing for a client to
+        tamper with -- the same lesson as the AOI path: an identifier from the browser
+        is not proof of ownership. Fails closed: an empty email cancels nothing.
+        """
+        if not email:
+            return 0
+        mine = [i for i in self._order
+                if self._jobs[i].email == email
+                and self._jobs[i].state in ("queued", "running")]
+        for job_id in mine:
+            await self.cancel(job_id)
+        return len(mine)
 
     async def _run(self, job_id: str, payload: dict) -> None:
         job = self._jobs[job_id]
@@ -97,6 +115,13 @@ class JobQueue:
                     job.message = (f"Render timed out after {self._timeout / 60:.0f} minutes "
                                    "and was stopped. Try a shorter date range.")
             except asyncio.CancelledError:
+                # `cancel` kills the process group first, but a cancellation can also
+                # land while `proc.run` is still starting the subprocess (before
+                # `job.proc` was ever set, or before kill saw a pid): kill again here so
+                # a cancelled job can never leave a worker -- or its ffmpeg child --
+                # alive. `kill` is idempotent and safe on an already-gone process.
+                if proc is not None:
+                    proc.kill()
                 job.state = "cancelled"
             except Exception:
                 # Generic message on purpose: exception text may carry credentials.

@@ -31,7 +31,7 @@ def test_server_mode_submits_through_the_context_instead_of_rendering_inline():
     ctx = types.SimpleNamespace(
         list_runs=lambda request: [],
         submit=lambda request, params: submitted.append(params) or "job-1",
-        job_status=lambda job_id: {"state": "done", "message": "ok",
+        job_status=lambda r, job_id: {"state": "done", "message": "ok",
                                    "result": {"mp4": "/data/out/ab/x.mp4"}, "position": 0})
     app = gui.build_app(context=ctx)
     assert app is not None
@@ -95,7 +95,7 @@ def test_go_in_server_mode_submits_polls_and_never_renders_inline(monkeypatch):
     ctx = types.SimpleNamespace(
         list_runs=lambda r: [],
         submit=lambda r, p: seen.update(request=r, params=p) or "job-1",
-        job_status=lambda j: next(states))
+        job_status=lambda r, j: next(states))
     go = _fn(gui.build_app(context=ctx), "_go")
     out = go(*_go_args(go), progress=lambda *a, **k: None, request="REQ")
     assert seen["request"] == "REQ"
@@ -107,7 +107,7 @@ def test_go_in_server_mode_reports_a_failed_job_as_an_error(monkeypatch):
     monkeypatch.setattr(gui.time, "sleep", lambda s: None)
     ctx = types.SimpleNamespace(
         list_runs=lambda r: [], submit=lambda r, p: "j",
-        job_status=lambda j: {"state": "error", "message": "quota exceeded"})
+        job_status=lambda r, j: {"state": "error", "message": "quota exceeded"})
     go = _fn(gui.build_app(context=ctx), "_go")
     out = go(*_go_args(go), progress=lambda *a, **k: None, request=None)
     assert out[0] is None and "quota exceeded" in out[5]
@@ -117,7 +117,7 @@ def test_go_in_server_mode_surfaces_a_submit_refusal():
     def refuse(r, p):
         raise RuntimeError("over the cap")
     ctx = types.SimpleNamespace(list_runs=lambda r: [], submit=refuse,
-                                job_status=lambda j: {})
+                                job_status=lambda r, j: {})
     go = _fn(gui.build_app(context=ctx), "_go")
     out = go(*_go_args(go), progress=lambda *a, **k: None, request=None)
     assert "over the cap" in out[5]
@@ -139,9 +139,9 @@ def test_gradio_recognises_request_as_an_injected_parameter():
     """String annotations (from __future__) would leave gr.Request unresolved and Gradio
     would then demand an input component for it -- identity would never arrive."""
     from gradio.utils import get_type_hints, is_special_typed_parameter
-    ctx = types.SimpleNamespace(list_runs=lambda r: [])
+    ctx = types.SimpleNamespace(list_runs=lambda r: [], cancel=lambda r: 0)
     app = gui.build_app(context=ctx)
-    for name in ("_fill_runs", "_go"):
+    for name in ("_fill_runs", "_go", "_cancel"):
         fn = _fn(app, name)
         assert is_special_typed_parameter("request", get_type_hints(fn)), name
 
@@ -160,7 +160,7 @@ def test_go_in_server_mode_gives_up_on_a_job_stuck_in_the_queue(monkeypatch):
     monkeypatch.setattr(gui.time, "sleep", lambda s: None)
     ctx = types.SimpleNamespace(
         list_runs=lambda r: [], submit=lambda r, p: "j",
-        job_status=lambda j: {"state": "queued", "message": "", "position": 9})
+        job_status=lambda r, j: {"state": "queued", "message": "", "position": 9})
     go = _fn(gui.build_app(context=ctx), "_go")
     out = go(*_go_args(go), progress=lambda *a, **k: None, request=None)
     assert out[0] is None and "gave up waiting" in out[5]
@@ -203,12 +203,16 @@ def test_the_server_mode_handler_set_is_the_audited_one(monkeypatch):
     monkeypatch.setattr(gui, "run_animation", boom)
     monkeypatch.setattr(gui, "run_inventory", boom)
     ctx = types.SimpleNamespace(list_runs=lambda r: [], submit=lambda r, p: "j",
-                                job_status=lambda j: {"state": "error", "message": "m"})
+                                cancel=lambda r: 0,
+                                job_status=lambda r, j: {"state": "error", "message": "m"})
     app = gui.build_app(context=ctx)
     names = {b.fn.__name__ for b in app.fns.values()}
     assert "_inventory" not in names
     # What remains is pure UI plumbing; none of it may call into the ee-touching names.
-    assert names <= {"_fill_runs", "_go", "_load", "_sync_index", "_apply_preset"}
+    # `_cancel` was audited with the rest: it only calls `context.cancel`, which kills a
+    # worker process and touches no Earth Engine state in this process.
+    assert names <= {"_fill_runs", "_go", "_load", "_sync_index", "_apply_preset",
+                     "_cancel"}
 
 
 def test_the_poll_bound_is_not_shorter_than_the_jobs_own_timeout(monkeypatch):
@@ -225,7 +229,7 @@ def test_the_poll_bound_is_not_shorter_than_the_jobs_own_timeout(monkeypatch):
     monkeypatch.setattr(gui.time, "sleep", lambda s: None)
     ctx = types.SimpleNamespace(
         list_runs=lambda r: [], submit=lambda r, p: "j", job_timeout_s=20000,
-        job_status=lambda j: gave_up_at.update(t=clock["t"]) or
+        job_status=lambda r, j: gave_up_at.update(t=clock["t"]) or
         {"state": "running", "message": "", "position": 0})
     go = _fn(gui.build_app(context=ctx), "_go")
     out = go(*_go_args(go), progress=lambda *a, **k: None, request=None)
@@ -245,18 +249,91 @@ def test_a_series_in_the_done_event_reaches_the_chart_in_server_mode(monkeypatch
     runner = lambda **kw: ("/o/x.mp4", None, [], None, "ok",
                            [("2022-05", 0.5, 0.25), ("2022-06", 0.75, None)])
     worker.main(io.StringIO(job), out, ee_module=types.SimpleNamespace(
-        Initialize=lambda **k: None), runner=runner)
+        Initialize=lambda **k: None,
+        Number=lambda v: types.SimpleNamespace(getInfo=lambda: v)), runner=runner)
     done = next(json.loads(l) for l in out.getvalue().splitlines()
                 if json.loads(l)["event"] == "done")
 
     monkeypatch.setattr(gui.time, "sleep", lambda s: None)
     ctx = types.SimpleNamespace(
         list_runs=lambda r: [], submit=lambda r, p: "j",
-        job_status=lambda j: {"state": "done", "message": "", "result": done})
+        job_status=lambda r, j: {"state": "done", "message": "", "result": done})
     go = _fn(gui.build_app(context=ctx), "_go")
     chart = go(*_go_args(go), progress=lambda *a, **k: None, request=None)[6]
     assert list(chart["area"]) == ["inside AOI", "outside AOI", "inside AOI"]
     assert list(chart["value"]) == [0.5, 0.25, 0.75]
+
+
+# --- review round B: the Stop button ----------------------------------------------------
+
+def _stop_button(app):
+    return next(b for b in app.blocks.values()
+                if getattr(b, "value", None) == "⏹ Stop my render")
+
+
+def test_the_stop_button_exists_and_is_wired_only_in_server_mode():
+    """The single-operator app renders in this process and has no queue to stop."""
+    ctx = types.SimpleNamespace(list_runs=lambda r: [], cancel=lambda r: 0)
+    server = gui.build_app(context=ctx)
+    button = _stop_button(server)
+    assert button.visible is True
+    assert button._id in _wired_targets(server)
+
+    local = gui.build_app()
+    assert _stop_button(local).visible is False
+    assert _stop_button(local)._id not in _wired_targets(local)
+
+
+def test_the_stop_handler_asks_the_context_and_passes_it_no_job_id():
+    """Ownership is resolved server-side from the request; the browser never names a
+    job, so there is nothing for it to tamper with."""
+    import inspect
+    calls = []
+    ctx = types.SimpleNamespace(list_runs=lambda r: [],
+                                cancel=lambda request: calls.append(request) or 2)
+    cancel = _fn(gui.build_app(context=ctx), "_cancel")
+    assert list(inspect.signature(cancel).parameters) == ["request"]
+    out = cancel("REQ")
+    assert calls == ["REQ"] and "2 renders" in out
+
+
+def test_the_stop_handler_reports_having_nothing_to_stop_and_surfaces_a_refusal():
+    ctx = types.SimpleNamespace(list_runs=lambda r: [], cancel=lambda r: 0)
+    assert "Nothing" in _fn(gui.build_app(context=ctx), "_cancel")("REQ")
+
+    def refuse(request):
+        raise PermissionError("Your session expired. Sign in again.")
+    ctx = types.SimpleNamespace(list_runs=lambda r: [], cancel=refuse)
+    assert "session expired" in _fn(gui.build_app(context=ctx), "_cancel")("REQ")
+
+
+def test_the_poll_loop_leaves_promptly_when_the_job_is_cancelled(monkeypatch):
+    """Not an error and not a four-hour wait: the loop must notice within one poll and
+    say what happened."""
+    polls = []
+    monkeypatch.setattr(gui.time, "sleep", lambda s: None)
+    states = iter([{"state": "running", "message": "", "position": 0},
+                   {"state": "cancelled", "message": "Cancelled at your request."}])
+    ctx = types.SimpleNamespace(
+        list_runs=lambda r: [], submit=lambda r, p: "j", cancel=lambda r: 1,
+        job_status=lambda r, j: polls.append(j) or next(states))
+    go = _fn(gui.build_app(context=ctx), "_go")
+    out = go(*_go_args(go), progress=lambda *a, **k: None, request=None)
+    assert len(polls) == 2                        # it stopped at the cancelled state
+    assert out[0] is None and "Stopped" in out[5]
+    assert "Error" not in out[5] and "gave up" not in out[5]
+
+
+def test_job_status_is_called_with_the_request_so_the_server_can_check_ownership():
+    """A job id with no request cannot be checked against a session."""
+    seen = {}
+    ctx = types.SimpleNamespace(
+        list_runs=lambda r: [], submit=lambda r, p: "job-7", cancel=lambda r: 0,
+        job_status=lambda request, job_id: seen.update(request=request, job=job_id)
+        or {"state": "error", "message": "m"})
+    go = _fn(gui.build_app(context=ctx), "_go")
+    go(*_go_args(go), progress=lambda *a, **k: None, request="REQ")
+    assert seen == {"request": "REQ", "job": "job-7"}
 
 
 def _zip_with(path, members):

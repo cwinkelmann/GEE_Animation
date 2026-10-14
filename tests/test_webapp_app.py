@@ -151,9 +151,9 @@ def _server(tmp_path):
     return create_app(cfg, oauth_client=None, spawn=lambda job, on_event: _FakeWorker(job))
 
 
-def _wait_done(ctx, job_id):
+def _wait_done(ctx, job_id, request):
     for _ in range(100):
-        state = ctx.job_status(job_id)
+        state = ctx.job_status(request, job_id)
         if state["state"] in ("done", "error", "cancelled"):
             return state
         _time.sleep(0.05)
@@ -186,7 +186,7 @@ def test_submit_hands_the_worker_a_private_copy_of_the_aoi_the_project_and_the_c
               "index": "ndvi", "aoi_path": str(upload), "project": " my-proj "}
     with TestClient(app):
         ctx = app.state.context
-        state = _wait_done(ctx, ctx.submit(request, params))
+        state = _wait_done(ctx, ctx.submit(request, params), request)
         upload.unlink()                                  # Gradio cleans its cache
     payload = _FakeWorker.payloads[0]
     assert payload["project"] == "my-proj"
@@ -399,7 +399,8 @@ def test_a_staged_preset_aoi_is_accepted(tmp_path, monkeypatch):
     sid = app.state.sessions.new("a@b.de", "RT-A")
     with TestClient(app):
         ctx = app.state.context
-        _wait_done(ctx, ctx.submit(_req(app, sid), _good(aoi_path=str(staged))))
+        _wait_done(ctx, ctx.submit(_req(app, sid), _good(aoi_path=str(staged))),
+                   _req(app, sid))
     assert Path(_FakeWorker.payloads[0]["params"]["aoi_path"]).read_text() == "preset"
 
 
@@ -412,7 +413,7 @@ def test_run_directories_are_unique_and_built_from_safe_characters(tmp_path, mon
         ids = [ctx.submit(_req(app, sid), _good(sensor="../../etc", index="a b/c"))
                for _ in range(2)]
         for i in ids:
-            _wait_done(ctx, i)
+            _wait_done(ctx, i, _req(app, sid))
     dirs = [Path(p["params"]["out_dir"]) for p in _FakeWorker.payloads]
     assert dirs[0] != dirs[1]                                    # same second, still distinct
     from gee_animation.webapp.storage import user_dir
@@ -698,24 +699,49 @@ def test_the_sweeper_also_reclaims_stale_entries_in_gradios_temp_dir(tmp_path, m
     assert not stale.exists() and fresh.exists() and temp.is_dir()
 
 
-def test_without_a_dedicated_gradio_temp_dir_nothing_outside_the_output_root_is_swept(monkeypatch):
-    """The default (the system temp dir's /gradio) may be shared with other processes."""
+def test_without_a_dedicated_gradio_temp_dir_nothing_outside_the_output_root_is_swept(
+        tmp_path, monkeypatch):
+    """The single-operator path, now that GRADIO_TEMP_DIR is set by compose and not by
+    the image: the default (the system temp dir's /gradio) may be shared with other
+    processes, so the sweep must not go near it. Drives the real startup sweep."""
     from gee_animation.webapp import app as app_mod
+    from gee_animation.webapp import storage as storage_mod
     monkeypatch.delenv("GRADIO_TEMP_DIR", raising=False)
     assert app_mod.gradio_temp_dir() is None
+    calls = []
+    monkeypatch.setattr(storage_mod, "sweep_temp",
+                        lambda *a, **k: calls.append(a) or [])
+    with TestClient(_server(tmp_path)):
+        pass
+    assert calls == []                              # not called at all
+
+    temp = Path(tmp_path) / "gradio-tmp"
+    temp.mkdir()
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(temp))
+    with TestClient(_server(Path(tmp_path) / "out2")):
+        pass
+    assert [a[0] for a in calls] == [temp]          # and called once it is configured
 
 
-def test_the_image_keeps_gradios_copies_inside_the_cache_volume():
-    """Not buildable here (no Docker daemon): pin by reading the Dockerfile. Gradio's copy of
-    every output must land in a directory under the cache volume, which exists and is owned
-    by the non-root user before USER app."""
+def test_only_the_server_redirects_gradios_copies_into_the_cache_volume():
+    """Not buildable here (no Docker daemon): pin by reading the two files.
+
+    The image serves both modes and only the server has a sweeper, so GRADIO_TEMP_DIR
+    belongs in the compose service, not in the Dockerfile: in the single-operator
+    container a persistent directory nothing reclaims is worse than Gradio's /tmp
+    default. The directory itself must still exist and be app-owned in the image.
+    """
     import re
-    text = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
+    root = Path(__file__).resolve().parent.parent
+    text = (root / "Dockerfile").read_text()
     env = dict(re.findall(r"^\s+(\w+)=(\S+?)(?: \\)?$", text, re.M))
+    assert "GRADIO_TEMP_DIR" not in env                 # single-user keeps /tmp
     cache = env["GEE_ANIMATION_CACHE_DIR"]
-    assert env["GRADIO_TEMP_DIR"].startswith(cache + "/")
+    compose = (root / "deploy" / "compose.yaml").read_text()
+    configured = re.search(r"^\s+GRADIO_TEMP_DIR:\s*(\S+)\s*$", compose, re.M).group(1)
+    assert configured.startswith(cache + "/")
     before_user = text.split("USER app")[0]
-    assert f"mkdir -p /data/out {env['GRADIO_TEMP_DIR']}" in before_user
+    assert f"mkdir -p /data/out {configured}" in before_user
     assert "chown -R app /data" in before_user
 
 
@@ -736,3 +762,193 @@ def test_a_failed_google_sign_in_is_a_friendly_page_not_a_500_and_is_reachable_a
     assert "set-cookie" not in r.headers
     page = client.get("/login-failed", headers={"accept": "text/html"})
     assert page.status_code == 200 and "Sign-in failed" in page.text and "/login" in page.text
+
+
+# --- review round B --------------------------------------------------------------------
+
+class _BlockingWorker:
+    """A worker that never finishes by itself, so a test can stop it instead."""
+    procs: list = []
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.killed = False
+        _BlockingWorker.procs.append(self)
+
+    async def run(self, on_event):
+        import asyncio
+        on_event({"event": "progress", "message": "rendering"})
+        await asyncio.sleep(3600)
+
+    def kill(self):
+        self.killed = True
+
+
+def _blocking_server(tmp_path, max_concurrency=1):
+    _BlockingWorker.procs = []
+    cfg = AppConfig(client_id="cid", client_secret="sec", redirect_uri="https://x/cb",
+                    cookie_secret="k", output_root=Path(tmp_path),
+                    max_concurrency=max_concurrency)
+    return create_app(cfg, oauth_client=None,
+                      spawn=lambda job, on_event: _BlockingWorker(job))
+
+
+def _wait_state(ctx, job_id, request, want, seconds=5.0):
+    """Poll until the job reaches `want`. Bounded: a state that never arrives FAILS this
+    test within `seconds` rather than hanging the suite."""
+    deadline = _time.monotonic() + seconds
+    state = {"state": "?"}
+    while _time.monotonic() < deadline:
+        state = ctx.job_status(request, job_id)
+        if state["state"] == want:
+            return state
+        _time.sleep(0.02)
+    raise AssertionError(f"job stayed {state['state']!r} and never reached {want!r}")
+
+
+def test_a_user_can_stop_their_own_render_and_the_freed_slot_goes_to_the_next_user(
+        tmp_path):
+    """Spec acceptance criterion 5. Before this, `jobs.cancel` was unreachable: three
+    mistaken 12-year submits held every slot for the full four-hour timeout."""
+    app = _blocking_server(tmp_path, max_concurrency=1)
+    sid_a = app.state.sessions.new("a@b.de", "RT-A")
+    sid_b = app.state.sessions.new("b@b.de", "RT-B")
+    with TestClient(app):
+        ctx = app.state.context
+        ra, rb = _req(app, sid_a), _req(app, sid_b)
+        a_job = ctx.submit(ra, _good())
+        _wait_state(ctx, a_job, ra, "running")
+        b_job = ctx.submit(rb, _good())
+        assert ctx.job_status(rb, b_job)["state"] == "queued"   # waiting for the slot
+
+        assert ctx.cancel(ra) == 1
+        _wait_state(ctx, a_job, ra, "cancelled")
+        assert _BlockingWorker.procs[0].killed          # the process group was signalled
+        _wait_state(ctx, b_job, rb, "running")          # and the slot was really freed
+        assert ctx.cancel(rb) == 1
+
+
+def test_user_b_cannot_stop_user_as_render(tmp_path):
+    """The one that matters. `cancel` takes no job id at all: ownership comes from the
+    session, so there is nothing for a client to name -- the AOI-path lesson."""
+    app = _blocking_server(tmp_path, max_concurrency=2)
+    sid_a = app.state.sessions.new("a@b.de", "RT-A")
+    sid_b = app.state.sessions.new("b@b.de", "RT-B")
+    with TestClient(app):
+        ctx = app.state.context
+        ra, rb = _req(app, sid_a), _req(app, sid_b)
+        a_job = ctx.submit(ra, _good())
+        _wait_state(ctx, a_job, ra, "running")
+
+        assert ctx.cancel(rb) == 0                      # B has nothing of their own
+        _time.sleep(0.1)
+        assert ctx.job_status(ra, a_job)["state"] == "running"
+        assert not _BlockingWorker.procs[0].killed
+        assert ctx.cancel(ra) == 1
+
+
+def test_stopping_without_a_session_is_refused_rather_than_cancelling_anything(tmp_path):
+    app = _blocking_server(tmp_path, max_concurrency=1)
+    sid = app.state.sessions.new("a@b.de", "RT-A")
+    with TestClient(app):
+        ctx = app.state.context
+        job = ctx.submit(_req(app, sid), _good())
+        _wait_state(ctx, job, _req(app, sid), "running")
+        with pytest.raises(PermissionError):
+            ctx.cancel(_req(app, "never-issued"))
+        assert ctx.job_status(_req(app, sid), job)["state"] == "running"
+        ctx.cancel(_req(app, sid))
+
+
+def test_job_status_answers_only_the_owner_and_hides_an_unknown_id_the_same_way(tmp_path):
+    """The only client-reachable identifier that indexes server state. An id belonging to
+    someone else must look exactly like an id that does not exist."""
+    from gee_animation.webapp.jobs import UnknownJobError
+    app = _blocking_server(tmp_path, max_concurrency=1)
+    sid_a = app.state.sessions.new("a@b.de", "RT-A")
+    sid_b = app.state.sessions.new("b@b.de", "RT-B")
+    with TestClient(app):
+        ctx = app.state.context
+        ra, rb = _req(app, sid_a), _req(app, sid_b)
+        a_job = ctx.submit(ra, _good())
+        _wait_state(ctx, a_job, ra, "running")
+        with pytest.raises(UnknownJobError, match="not known"):
+            ctx.job_status(rb, a_job)                   # B asking about A's render
+        with pytest.raises(UnknownJobError, match="not known"):
+            ctx.job_status(_req(app, "gone"), a_job)    # no session: fails closed
+        with pytest.raises(UnknownJobError, match="not known"):
+            ctx.job_status(ra, "never-issued")
+        assert ctx.job_status(ra, a_job)["state"] == "running"   # the owner still sees it
+        ctx.cancel(ra)
+
+
+def test_a_stop_request_does_not_pin_the_gradio_thread_on_a_wedged_loop(tmp_path,
+                                                                        monkeypatch):
+    """Cancel crosses the same thread/loop boundary as submit, so it needs the same
+    bound: without it a wedged loop holds a Gradio worker thread forever."""
+    import asyncio
+    import threading
+    from gee_animation.webapp import app as app_mod
+    monkeypatch.setattr(app_mod, "CANCEL_TIMEOUT_S", 0.2)
+    app = _blocking_server(tmp_path, max_concurrency=1)
+    sid = app.state.sessions.new("a@b.de", "RT-A")
+    with TestClient(app):
+        wedged = asyncio.new_event_loop()
+        t = threading.Thread(target=wedged.run_forever, daemon=True)
+        t.start()
+        wedged.call_soon_threadsafe(_time.sleep, 1.0)
+        app.state.loop = wedged
+        try:
+            started = _time.monotonic()
+            with pytest.raises(RuntimeError, match="stop request"):
+                app.state.context.cancel(_req(app, sid))
+            assert _time.monotonic() - started < 0.9     # it did not wait out the block
+        finally:
+            wedged.call_soon_threadsafe(wedged.stop)
+            t.join(timeout=3)
+            wedged.close()
+
+
+def test_a_cancelled_runs_directory_is_reclaimable_by_the_sweep(tmp_path, monkeypatch):
+    """A cancelled render leaves a directory holding only the AOI copy. Round A made the
+    sweep count any immediate child of a user directory as a run; confirm that covers
+    this case, or a stopped render would sit in /data/out forever."""
+    from gee_animation.webapp import storage
+    cache = Path(tmp_path) / "gradio_cache"
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(cache))
+    upload = cache / "u" / "aoi.geojson"
+    upload.parent.mkdir(parents=True)
+    upload.write_text("the-aoi")
+    root = Path(tmp_path) / "out"
+    app = _blocking_server(root, max_concurrency=1)
+    sid = app.state.sessions.new("a@b.de", "RT-A")
+    with TestClient(app):
+        ctx = app.state.context
+        request = _req(app, sid)
+        job = ctx.submit(request, _good(aoi_path=str(upload)))
+        _wait_state(ctx, job, request, "running")
+        assert ctx.cancel(request) == 1
+        _wait_state(ctx, job, request, "cancelled")
+    run_dir = Path(_BlockingWorker.procs[0].payload["params"]["out_dir"])
+    assert run_dir.is_dir() and not list(run_dir.glob("*.mp4"))     # no media at all
+    assert storage.sweep(root, max_age_days=0, now=_time.time() + 10) == [run_dir]
+    assert not run_dir.exists()
+
+
+def test_an_open_route_is_matched_exactly_so_a_lookalike_path_still_needs_a_session(
+        tmp_path):
+    """`/login-failed` was reachable only because it starts with `/login`. A prefix rule
+    exempts every future lookalike from the authentication redirect."""
+    client = TestClient(_app(tmp_path), follow_redirects=False)
+    html = {"accept": "text/html"}
+    # The assertion that fails on the prefix rule: a lookalike is NOT exempt.
+    for lookalike in ("/logout-everyone", "/login-as-admin", "/oauth2/callback-debug"):
+        r = client.get(lookalike, headers=html)
+        assert r.status_code in (302, 303, 307), lookalike
+        assert r.headers["location"] == "/login", lookalike
+    # The open routes themselves are still never sent to /login (this app stands in a
+    # dev `oauth_client=None`, so an open path reaches the router -- 200 or 404 -- and
+    # what matters is that the middleware let it through).
+    for open_path in ("/login", "/logout", "/login-failed", "/oauth2/callback"):
+        assert client.get(open_path, headers=html).headers.get("location") != "/login", \
+            open_path

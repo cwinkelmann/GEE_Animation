@@ -22,7 +22,7 @@ from fastapi.responses import RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import caps, logsafe, oauth, project, storage
-from .jobs import JobQueue
+from .jobs import JobQueue, UnknownJobError
 from .session import SessionStore
 from ..gui import build_app
 
@@ -48,6 +48,10 @@ class AppConfig:
 #: How long a Gradio worker thread waits for the event loop to accept a job before telling
 #: the user the server is busy, rather than hanging forever on a wedged loop.
 SUBMIT_TIMEOUT_S = 30.0
+#: The same bound for a cancel. Shorter than submit's because the work is a `killpg` and
+#: a `Task.cancel()` with nothing to await, and the spec asks for the worker to be dead
+#: within 5 s -- but still bounded, because it crosses the same thread/loop boundary.
+CANCEL_TIMEOUT_S = 10.0
 #: How long shutdown waits for the sweeper to stop before giving up on it (a wedged
 #: sweeper must never hang the server's shutdown).
 SHUTDOWN_TIMEOUT_S = 5.0
@@ -65,7 +69,10 @@ def _safe_part(value, limit: int = 32) -> str:
 
 def gradio_temp_dir() -> Path | None:
     """Where Gradio copies returned files, if the deployment pointed it somewhere of its
-    own (`GRADIO_TEMP_DIR`, set in the Dockerfile to a path inside the cache volume)."""
+    own (`GRADIO_TEMP_DIR`, set by the server's compose service to a path inside the
+    cache volume). Unset -- the single-operator container -- means Gradio's own default
+    under the system temp dir, which this server must not sweep: it may be shared, and
+    only the server has a sweeper at all."""
     configured = os.environ.get("GRADIO_TEMP_DIR")
     return Path(configured) if configured else None
 
@@ -107,14 +114,23 @@ class _LoginRedirect:
     asks for HTML) is redirected; API calls keep their 401.
     """
 
-    _OPEN = ("/login", "/oauth2/callback", "/logout")
+    #: Reachable without a session. Matched EXACTLY, not by prefix: a prefix rule
+    #: exempts every future path that merely starts with one of these strings
+    #: (`/logout-everyone`, `/login-as-admin`) from the authentication redirect, which
+    #: is how `/login-failed` came to work -- by luck, not by design.
+    _OPEN = frozenset({"/login", oauth.SIGN_IN_FAILED_PATH, "/oauth2/callback", "/logout"})
+    #: Deliberate prefix exemptions, for a subtree such as a static-asset mount. Empty
+    #: today; an entry here is a decision, and `startswith(())` is False, so nothing is
+    #: exempt by accident.
+    _OPEN_PREFIXES: tuple = ()
 
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http" and scope["method"] == "GET" \
-                and not scope["path"].startswith(self._OPEN):
+                and scope["path"] not in self._OPEN \
+                and not scope["path"].startswith(self._OPEN_PREFIXES):
             accept = dict(scope["headers"]).get(b"accept", b"").decode()
             if scope["path"] == "/" or "text/html" in accept:
                 from starlette.requests import Request
@@ -291,8 +307,42 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
                     "The server is busy right now. Please try again in a minute.") from None
 
         @staticmethod
-        def job_status(job_id):
-            job = app.state.queue.status(job_id)
+        def cancel(request):
+            """Stop the caller's own unfinished renders. Returns how many were stopped.
+
+            No job id is accepted. The queue is asked for the jobs owned by the email
+            in THIS request's session, so a client cannot name someone else's render --
+            and a request with no session cancels nothing (it raises).
+            """
+            email = user_of(request)
+            if email is None:
+                raise PermissionError("Your session expired. Sign in again.")
+            # Same boundary as submit: a Gradio worker thread handing work to the loop
+            # the server captured at startup, and bounded so a wedged loop cannot pin
+            # the thread forever.
+            future = asyncio.run_coroutine_threadsafe(
+                app.state.queue.cancel_for(email), app.state.loop)
+            try:
+                return future.result(timeout=CANCEL_TIMEOUT_S)
+            except concurrent.futures.TimeoutError:
+                future.cancel()
+                raise RuntimeError("The server did not answer the stop request. Your "
+                                   "render may still be going; try again.") from None
+
+        @staticmethod
+        def job_status(request, job_id):
+            """This job's state -- for its owner only.
+
+            The id is 128 bits, so guessing one is not a practical attack, but it is the
+            one client-reachable identifier that indexes server state, and `cancel`
+            makes a mistake here matter. An id belonging to someone else is answered
+            exactly like an id that does not exist, so the error is not an oracle.
+            """
+            job = app.state.queue.status(job_id)          # raises UnknownJobError
+            if job.email != user_of(request):             # None never equals an email
+                raise UnknownJobError(
+                    "That render job is not known to the server (it may predate a "
+                    "restart). Submit it again.")
             return {"state": job.state, "message": job.message, "result": job.result,
                     "position": app.state.queue.position(job_id)}
 

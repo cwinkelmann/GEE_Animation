@@ -1001,6 +1001,11 @@ def build_app(context=None):
                     placeholder="my-ee-project" if context is not None else None,
                     value=project_default)
                 go = gr.Button("Generate animation", variant="primary")
+                # Server mode only: the single-operator app renders in this process and
+                # has no queue to stop. Takes no job id -- the server resolves which
+                # renders are yours from your session (see ServerContext.cancel).
+                stop = gr.Button("⏹ Stop my render", variant="stop",
+                                 visible=context is not None)
                 # Not offered in server mode: the inventory calls ee.Initialize, and
                 # ee._state._state is process-wide, so in the shared web process it would
                 # clobber every other user's state (and, with a service-account key on the
@@ -1129,7 +1134,7 @@ def build_app(context=None):
                     deadline = queued_deadline
                     started = False
                     while True:
-                        state = context.job_status(job_id)
+                        state = context.job_status(request, job_id)
                         if state["state"] in ("done", "error", "cancelled"):
                             break
                         if state["state"] == "running" and not started:
@@ -1144,6 +1149,13 @@ def build_app(context=None):
                                  or (f"queued, position {state.get('position')}"
                                      if state["state"] == "queued" else "rendering..."))
                         time.sleep(2)
+                    if state["state"] == "cancelled":
+                        # Not an error: the user asked for this. The loop leaves within
+                        # one poll of the Stop button rather than waiting out the
+                        # job timeout.
+                        return (None, None, None, None, None,
+                                "**Stopped.** Your render was cancelled and its slot "
+                                "released.", None)
                     if state["state"] != "done":
                         return _error(RuntimeError(state.get("message")
                                                    or f"job {state['state']}"))
@@ -1159,6 +1171,18 @@ def build_app(context=None):
             except Exception as exc:   # surface a friendly message in the UI
                 return _error(exc)
 
+        def _cancel(request: gr.Request):
+            """Stop this user's own renders. Server mode only; no Earth Engine."""
+            try:
+                stopped = context.cancel(request)
+            except Exception as exc:
+                return f"**Error:** {exc}"
+            if not stopped:
+                return "Nothing of yours was running or queued."
+            return (f"Stopping {stopped} render{'s' if stopped != 1 else ''} of yours; "
+                    "the slot is released.")
+
+        _cancel.__annotations__["request"] = gr.Request   # see _fill_runs
         _go.__annotations__["request"] = gr.Request   # see _fill_runs
         # Gradio's default is ONE running call per event function, which would serialise
         # every user behind the first render. In server mode each waiting user holds an
@@ -1166,6 +1190,13 @@ def build_app(context=None):
         # Gradio 6.20; max_threads is the ceiling). The JobQueue limits real renders.
         go.click(_go, inputs, outputs,
                  **({"concurrency_limit": None} if context is not None else {}))
+        if context is not None:
+            # Its own event, not a `cancels=` on the click: Gradio's stop cannot
+            # interrupt `_go`, which blocks in `time.sleep` on a worker thread. The
+            # queue is what stops the render; `_go` then sees state "cancelled".
+            # Unlimited for the same reason as `_go`: a user whose render is stuck
+            # must not queue behind another user's Stop.
+            stop.click(_cancel, None, status, concurrency_limit=None)
 
         def _inventory(aoi_file, buffer_m, sensor, index, start, end, cadence,
                        region_cloud, fps, dims, preset, aspect, quality, write_gif,
