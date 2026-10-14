@@ -144,7 +144,17 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
     if not cfg.cookie_secret:
         raise ValueError("AppConfig.cookie_secret must be set (and stable across restarts).")
 
-    secrets_now = lambda: [s.refresh_token for s in app.state.sessions.all()]
+    def secrets_now():
+        """Every refresh token this process could still print: live sessions UNION the
+        tokens of jobs still in flight.
+
+        Sessions alone are not enough. A session is dropped on logout, on expiry and on
+        a re-sign-in, and a render it started can still be holding its token here --
+        so a sessions-only list would silently stop redacting exactly the token a log
+        line might carry. The queue keeps its entry until the job is over.
+        """
+        return [s.refresh_token for s in app.state.sessions.all()] \
+            + app.state.queue.live_secrets()
 
     async def _sweep_once():
         """One retention pass. A transient filesystem error must not end retention for

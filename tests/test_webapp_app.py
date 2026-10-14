@@ -806,6 +806,17 @@ def _wait_state(ctx, job_id, request, want, seconds=5.0):
     raise AssertionError(f"job stayed {state['state']!r} and never reached {want!r}")
 
 
+def _wait_queue_state(app, job_id, want, seconds=5.0):
+    """Like `_wait_state`, but straight off the queue -- for a job whose session has
+    been dropped, where `job_status` rightly refuses to answer. Bounded the same way."""
+    deadline = _time.monotonic() + seconds
+    while _time.monotonic() < deadline:
+        if app.state.queue.status(job_id).state == want:
+            return
+        _time.sleep(0.02)
+    raise AssertionError(f"job never reached {want!r}")
+
+
 def test_a_user_can_stop_their_own_render_and_the_freed_slot_goes_to_the_next_user(
         tmp_path):
     """Spec acceptance criterion 5. Before this, `jobs.cancel` was unreachable: three
@@ -952,3 +963,120 @@ def test_an_open_route_is_matched_exactly_so_a_lookalike_path_still_needs_a_sess
     for open_path in ("/login", "/logout", "/login-failed", "/oauth2/callback"):
         assert client.get(open_path, headers=html).headers.get("location") != "/login", \
             open_path
+
+
+# --- review round C --------------------------------------------------------------------
+
+def test_a_dropped_sessions_token_is_still_redacted_while_its_job_is_in_flight(tmp_path):
+    """The window rounds B's session expiry opened: before it, a session was never
+    dropped, so every live token was always in the redactor's list. Now a logout, an
+    expiry or a re-sign-in can drop a session while a render it started still holds its
+    token in this process -- and a sessions-only list would stop redacting it."""
+    import io
+    import logging
+
+    from gee_animation.webapp.logsafe import RedactingFilter
+    app = _blocking_server(tmp_path, max_concurrency=1)
+    sid = app.state.sessions.new("a@b.de", "SECRET-REFRESH-TOKEN")
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    uv = logging.getLogger("uvicorn.error")
+    uv.addHandler(handler)
+    try:
+        with TestClient(app):
+            ctx = app.state.context
+            request = _req(app, sid)
+            job = ctx.submit(request, _good())
+            _wait_state(ctx, job, request, "running")
+            app.state.sessions.drop(sid)                 # logout / expiry / re-sign-in
+            assert app.state.sessions.all() == []        # the session list is now empty
+            assert app.state.queue.live_secrets() == ["SECRET-REFRESH-TOKEN"]
+            uv.error("boom SECRET-REFRESH-TOKEN")
+            held = stream.getvalue()
+
+            # The session is gone, so `ctx.cancel` would (rightly) refuse: go to the
+            # queue directly, which is what a logged-out user's job needs anyway.
+            import asyncio
+            future = asyncio.run_coroutine_threadsafe(
+                app.state.queue.cancel_for("a@b.de"), app.state.loop)
+            assert future.result(timeout=5) == 1
+            _wait_queue_state(app, job, "cancelled")
+            # The state flips in `cancel`; the token is released a tick later, when the
+            # task unwinds -- deliberately that order, since the handover may be in
+            # progress at the instant of the kill. Bounded, so a token that is never
+            # released fails this test rather than hanging it.
+            deadline = _time.monotonic() + 5
+            while app.state.queue.live_secrets() and _time.monotonic() < deadline:
+                _time.sleep(0.02)
+            assert app.state.queue.live_secrets() == []  # no longer held, no longer listed
+    finally:
+        uv.removeHandler(handler)
+        for name in ("", "uvicorn", "uvicorn.error", "uvicorn.access"):
+            lg = logging.getLogger(name)
+            for f in [f for f in lg.filters if isinstance(f, RedactingFilter)]:
+                lg.removeFilter(f)
+            for h in lg.handlers:
+                for f in [f for f in h.filters if isinstance(f, RedactingFilter)]:
+                    h.removeFilter(f)
+    assert "boom" in held and "SECRET-REFRESH-TOKEN" not in held
+
+
+def test_the_installed_redactor_covers_both_sessions_and_jobs_in_flight(tmp_path):
+    """Neither source may be dropped: a signed-in user who has not submitted anything
+    has no job, and a job whose session is gone has no session. Drives the filter the
+    server really installs, not a list comprehension of the test's own."""
+    import asyncio
+    import io
+    import logging
+
+    from gee_animation.webapp.logsafe import RedactingFilter
+    app = _blocking_server(tmp_path, max_concurrency=2)
+    sid_a = app.state.sessions.new("a@b.de", "TOKEN-A-IN-FLIGHT")
+    app.state.sessions.new("b@b.de", "TOKEN-B-SESSION-ONLY")   # never submitted anything
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    uv = logging.getLogger("uvicorn.error")
+    uv.addHandler(handler)
+    try:
+        with TestClient(app):
+            ctx = app.state.context
+            request = _req(app, sid_a)
+            job = ctx.submit(request, _good())
+            _wait_state(ctx, job, request, "running")
+            app.state.sessions.drop(sid_a)                     # A's session is gone
+            uv.error("one TOKEN-A-IN-FLIGHT two TOKEN-B-SESSION-ONLY three")
+            logged = stream.getvalue()
+            asyncio.run_coroutine_threadsafe(
+                app.state.queue.cancel_for("a@b.de"), app.state.loop).result(timeout=5)
+            _wait_queue_state(app, job, "cancelled")
+    finally:
+        uv.removeHandler(handler)
+        for name in ("", "uvicorn", "uvicorn.error", "uvicorn.access"):
+            lg = logging.getLogger(name)
+            for f in [f for f in lg.filters if isinstance(f, RedactingFilter)]:
+                lg.removeFilter(f)
+            for h in lg.handlers:
+                for f in [f for f in h.filters if isinstance(f, RedactingFilter)]:
+                    h.removeFilter(f)
+    assert "one" in logged and "two" in logged and "three" in logged
+    assert "TOKEN-A-IN-FLIGHT" not in logged      # held by the job, session dropped
+    assert "TOKEN-B-SESSION-ONLY" not in logged   # held by a session, never a job
+
+
+def test_a_finished_job_is_forgotten_once_its_record_has_aged_out(tmp_path):
+    """Finding 11: `Job.result` holds the whole done event (every frame path), and
+    nothing ever pruned. A pruned id reads as unknown, not as a traceback."""
+    from gee_animation.webapp.jobs import UnknownJobError
+    app = _server(tmp_path)
+    sid = app.state.sessions.new("a@b.de", "RT-A")
+    with TestClient(app):
+        ctx = app.state.context
+        request = _req(app, sid)
+        first = ctx.submit(request, _good())
+        _wait_done(ctx, first, request)
+        app.state.queue._retain = -1                  # as if an hour had passed
+        second = ctx.submit(request, _good())         # submit is where pruning happens
+        _wait_done(ctx, second, request)
+        with pytest.raises(UnknownJobError, match="not known"):
+            ctx.job_status(request, first)
+        assert first not in app.state.queue._jobs and first not in app.state.queue._tasks

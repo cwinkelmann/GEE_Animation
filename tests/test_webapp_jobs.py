@@ -293,3 +293,81 @@ async def test_a_cancellation_arriving_while_the_worker_starts_still_kills_it():
     await asyncio.sleep(0.05)
     assert procs[0].killed                      # killed by the CancelledError branch
     assert q.status(job_id).state == "cancelled"
+
+
+# --- review round C: the redactor's view, and pruning -----------------------------------
+
+@pytest.mark.asyncio
+async def test_a_jobs_token_is_listed_while_in_flight_and_dropped_when_it_ends():
+    """The redactor unions this with the live sessions, so an entry missing here is a
+    token that stops being redacted the moment its session is dropped."""
+    q = JobQueue(spawn=lambda job, on_event: FakeProc([], hang=True), max_concurrency=1)
+    job_id = await q.submit("a@hnee.de", {"refresh_token": "tok-live"}, {})
+    await asyncio.sleep(0.05)
+    assert q.live_secrets() == ["tok-live"]
+    await q.cancel(job_id)
+    await asyncio.sleep(0.05)
+    assert q.live_secrets() == []                 # cancelled: no longer held
+
+
+@pytest.mark.asyncio
+async def test_a_tokenless_job_adds_nothing_and_a_queued_jobs_token_is_listed_too():
+    q = JobQueue(spawn=lambda job, on_event: FakeProc([], hang=True), max_concurrency=1)
+    running = await q.submit("a@hnee.de", {"refresh_token": "tok-a"}, {})
+    queued = await q.submit("b@hnee.de", {"refresh_token": "tok-b"}, {})
+    nothing = await q.submit("c@hnee.de", {}, {})          # no credentials at all
+    await asyncio.sleep(0.05)
+    assert q.status(queued).state == "queued"
+    assert sorted(q.live_secrets()) == ["tok-a", "tok-b"]
+    for i in (running, queued, nothing):
+        await q.cancel(i)
+    await asyncio.sleep(0.05)
+    assert q.live_secrets() == []
+
+
+@pytest.mark.asyncio
+async def test_a_finished_jobs_record_is_dropped_once_it_has_aged_out():
+    """Finding 11: nothing ever pruned, and `Job.result` holds the whole done event."""
+    from gee_animation.webapp.jobs import UnknownJobError
+    q = JobQueue(spawn=_spawn_ok(), max_concurrency=1, retain_finished_s=-1)
+    old = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    await _wait_bounded(q, old)
+    assert q.status(old).state == "done"                   # still there until a submit
+    fresh = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    with pytest.raises(UnknownJobError, match="not known"):
+        q.status(old)
+    assert old not in q._tasks                             # the task record went too
+    await _wait_bounded(q, fresh)
+    assert q.status(fresh).state == "done"
+
+
+@pytest.mark.asyncio
+async def test_a_job_within_the_retention_window_is_kept():
+    q = JobQueue(spawn=_spawn_ok(), max_concurrency=1)     # default: one hour
+    old = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    await _wait_bounded(q, old)
+    await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    assert q.status(old).state == "done" and q.status(old).result["mp4"]
+
+
+@pytest.mark.asyncio
+async def test_position_counts_only_the_waiting_queue_not_every_job_ever_submitted():
+    """`position` is polled every 2 s by every waiting user, so it must not scan the
+    history. It also has to stay correct as jobs ahead start and finish."""
+    q = JobQueue(spawn=lambda job, on_event: FakeProc([], hang=True), max_concurrency=1)
+    running = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    first = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    second = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    await asyncio.sleep(0.05)
+    assert q.position(running) == 0                 # running: no position
+    assert (q.position(first), q.position(second)) == (1, 2)
+    assert len(q._order) == 2                       # only the two that are waiting
+
+    await q.cancel(running)
+    await asyncio.sleep(0.05)
+    assert q.status(first).state == "running" and q.position(first) == 0
+    assert q.position(second) == 1                  # moved up as the queue drained
+    await q.cancel(first)
+    await q.cancel(second)
+    await asyncio.sleep(0.05)
+    assert q._order == [] and q.position(second) == 0
