@@ -60,10 +60,10 @@ class JobQueue:
     async def _run(self, job_id: str, payload: dict) -> None:
         job = self._jobs[job_id]
         async with self._sem:
-            # Not dead code: cancel() delivers CancelledError only at the task's next
-            # await, so a job cancelled between acquiring the semaphore and the first
-            # await lands here. Without this we would spawn a worker (and start
-            # fetching under the user's credentials) for an already-cancelled job.
+            # Not expected to fire: asyncio raises CancelledError inside
+            # Semaphore.acquire, before this point. Kept deliberately so that if a
+            # future change adds an await ahead of this line, a cancelled job still
+            # cannot spawn a worker.
             if job.state == "cancelled":
                 return
             job.state = "running"
@@ -76,16 +76,25 @@ class JobQueue:
                 else:
                     job.message = event.get("message", "")
 
-            proc = self._spawn(payload, on_event)
-            job.proc = proc
+            proc = None
             try:
+                proc = self._spawn(payload, on_event)
+                job.proc = proc
                 await asyncio.wait_for(proc.run(on_event), timeout=self._timeout)
             except asyncio.TimeoutError:
                 proc.kill()
-                job.state = "error"
-                job.message = (f"Render timed out after {self._timeout / 60:.0f} minutes "
-                               "and was stopped. Try a shorter date range.")
+                if job.state == "running":    # a job that already reported done stays done
+                    job.state = "error"
+                    job.message = (f"Render timed out after {self._timeout / 60:.0f} minutes "
+                                   "and was stopped. Try a shorter date range.")
             except asyncio.CancelledError:
                 job.state = "cancelled"
+            except Exception:
+                # Generic message on purpose: exception text may carry credentials.
+                if proc is not None:
+                    proc.kill()
+                if job.state == "running":
+                    job.state = "error"
+                    job.message = "The render failed to start."
             if job.state == "running":            # process exited without a done event
                 job.state, job.message = "error", "The render stopped unexpectedly."

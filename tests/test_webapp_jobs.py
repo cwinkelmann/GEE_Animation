@@ -78,12 +78,52 @@ async def test_cancel_kills_the_worker_and_frees_the_slot():
 
 @pytest.mark.asyncio
 async def test_a_stalled_job_is_killed_at_the_timeout_and_says_so():
-    q = JobQueue(spawn=lambda job, on_event: FakeProc([], hang=True),
-                 max_concurrency=1, timeout_s=0.05)
+    procs = []
+
+    def spawn(job, on_event):
+        procs.append(FakeProc([], hang=True))
+        return procs[0]
+
+    q = JobQueue(spawn=spawn, max_concurrency=1, timeout_s=0.05)
     job_id = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
     await q.wait(job_id)
     job = q.status(job_id)
     assert job.state == "error" and "timed out" in job.message.lower()
+    assert procs[0].killed
+
+
+@pytest.mark.asyncio
+async def test_a_spawn_failure_fails_the_job_without_leaking_the_error_text_and_frees_the_slot():
+    calls = []
+
+    def spawn(job, on_event):
+        calls.append(job["id"])
+        if len(calls) == 1:
+            raise OSError("boom refresh_token=SECRET")
+        return FakeProc([json.dumps({"event": "done", "mp4": "/out/y.mp4", "status": "ok"})])
+
+    q = JobQueue(spawn=spawn, max_concurrency=1)
+    first = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    second = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    await q.wait(first)
+    await q.wait(second)
+    assert q.status(first).state == "error"
+    assert "SECRET" not in q.status(first).message and "boom" not in q.status(first).message
+    assert q.status(second).state == "done"           # the slot was freed
+
+
+@pytest.mark.asyncio
+async def test_a_done_job_is_not_turned_into_an_error_by_a_lingering_process():
+    class Lingering(FakeProc):
+        async def run(self, on_event):
+            on_event({"event": "done", "mp4": "/out/z.mp4", "status": "ok"})
+            await asyncio.sleep(3600)
+
+    q = JobQueue(spawn=lambda job, on_event: Lingering([]), max_concurrency=1, timeout_s=0.05)
+    job_id = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    await q.wait(job_id)
+    assert q.status(job_id).state == "done"
+    assert q.status(job_id).result["mp4"] == "/out/z.mp4"
 
 
 @pytest.mark.asyncio
