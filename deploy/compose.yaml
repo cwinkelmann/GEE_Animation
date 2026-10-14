@@ -1,0 +1,28 @@
+# deploy/compose.yaml — carrot.aisl.c4ds.hnee.de
+services:
+  app:
+    build: ..
+    command: ["gee-animation-server"]
+    env_file: .env
+    environment:
+      GEE_OAUTH_REDIRECT_URI: https://carrot.aisl.c4ds.hnee.de/oauth2/callback
+      # GEE_OAUTH_CLIENT_ID / _SECRET and GEE_COOKIE_SECRET come from .env
+    volumes:
+      - out:/data/out
+      - cache:/data/cache
+    expose: ["7860"]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports: ["443:443", "80:80"]
+    environment:
+      # Substituted from deploy/.env; only Caddy needs the DNS-01 token.
+      DNS_API_TOKEN: ${DNS_API_TOKEN:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [app]
+    restart: unless-stopped
+
+volumes: { out: {}, cache: {}, caddy_data: {} }

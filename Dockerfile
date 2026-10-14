@@ -16,12 +16,19 @@ COPY pyproject.toml README.md ./
 COPY gee_animation ./gee_animation
 # `ml` brings scikit-learn/rasterio/joblib for the GUI's "train the sharpening
 # forest locally" option (lst_rf with sharpen: local).
-RUN pip install --no-cache-dir ".[gui,shapefile,ml]"
+RUN pip install --no-cache-dir ".[gui,shapefile,ml,server]"
 
 # Bind Gradio to all interfaces so the app is reachable from the host.
 ENV GRADIO_SERVER_NAME=0.0.0.0 \
     GRADIO_SERVER_PORT=7860 \
     EE_PROJECT=hnee-331218
 EXPOSE 7860
+
+# Non-root; /data holds renders (GEE_OUTPUT_DIR) and the frame cache. The multi-user
+# server (compose, `gee-animation-server`) overrides CMD; see deploy/.
+RUN useradd --create-home --uid 10001 app && mkdir -p /data/out /data/cache && chown -R app /data
+USER app
+ENV GEE_OUTPUT_DIR=/data/out \
+    GEE_ANIMATION_CACHE_DIR=/data/cache
 
 CMD ["gee-animation-gui"]
