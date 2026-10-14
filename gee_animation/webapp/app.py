@@ -48,6 +48,13 @@ class AppConfig:
 #: How long a Gradio worker thread waits for the event loop to accept a job before telling
 #: the user the server is busy, rather than hanging forever on a wedged loop.
 SUBMIT_TIMEOUT_S = 30.0
+#: Extra time allowed for the job id to arrive after the submit timeout has expired, when
+#: the queue may already have created the job. Short on purpose: `JobQueue.submit` has no
+#: awaits in it, so the only work left is a few dict writes and `create_task` --
+#: microseconds. Five seconds buys a loop that is merely slow the chance to deliver the id
+#: the user is entitled to, without making them wait another full timeout; if it has not
+#: arrived by then the loop is wedged rather than slow, and the job is undone instead.
+SUBMIT_GRACE_S = 5.0
 #: The same bound for a cancel. Shorter than submit's because the work is a `killpg` and
 #: a `Task.cancel()` with nothing to await, and the spec asks for the worker to be dead
 #: within 5 s -- but still bounded, because it crosses the same thread/loop boundary.
@@ -58,6 +65,12 @@ SHUTDOWN_TIMEOUT_S = 5.0
 #: Retention is enforced at startup and then this often, so an always-up server keeps
 #: its promise. A module constant so tests can shorten it.
 SWEEP_INTERVAL_S = 24 * 3600
+
+#: How a Gradio worker thread hands a coroutine to the server's event loop. A module
+#: attribute, not a direct call, so a test can drive the "the future finished while we
+#: were giving up on it" branch deterministically -- the window is microseconds wide in
+#: real time and it is the one that used to enqueue an invisible render.
+_run_on_loop = asyncio.run_coroutine_threadsafe
 
 log = logging.getLogger(__name__)
 
@@ -165,8 +178,10 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
         except Exception:
             log.exception("retention sweep failed; will retry")
         # Gradio's own copy of every returned file lives outside output_root. Only swept
-        # when GRADIO_TEMP_DIR points at a dedicated directory (the image sets it): the
-        # default, the system temp dir's /gradio, may be shared with other processes.
+        # when GRADIO_TEMP_DIR points at a dedicated directory (deploy/compose.yaml sets
+        # it for the server; the image deliberately does not, so the single-operator
+        # container keeps Gradio's default): that default, the system temp dir's /gradio,
+        # may be shared with other processes and must not be swept.
         temp_dir = gradio_temp_dir()
         if temp_dir is not None:
             try:
@@ -306,15 +321,43 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
             credentials = {"refresh_token": session.refresh_token,
                            "client_id": cfg.client_id, "client_secret": cfg.client_secret,
                            "project": project_id}
-            future = asyncio.run_coroutine_threadsafe(
-                app.state.queue.submit(session.email, credentials, params),
+            # Our own id, chosen BEFORE the hand-off, so the failure path below can undo
+            # exactly the job this call started -- and nothing else of the user's.
+            job_id = secrets.token_urlsafe(16)
+            future = _run_on_loop(
+                app.state.queue.submit(session.email, credentials, params,
+                                       job_id=job_id),
                 app.state.loop)
             try:
                 return future.result(timeout=SUBMIT_TIMEOUT_S)
             except concurrent.futures.TimeoutError:
-                future.cancel()
-                raise RuntimeError(
-                    "The server is busy right now. Please try again in a minute.") from None
+                pass
+            # Timing out says nothing about whether a job will exist, and neither does
+            # `cancel()`'s return value. Attempting it is still right -- it stops a
+            # hand-off the loop has not picked up -- but True only means the future was
+            # pending, and asyncio delivers that cancellation to the task AFTER the
+            # task's first step, so a loop that recovers now can still run
+            # `queue.submit` to completion. The outcome is what matters, not the guess.
+            future.cancel()
+            try:
+                return future.result(timeout=SUBMIT_GRACE_S)
+            except (concurrent.futures.TimeoutError,
+                    concurrent.futures.CancelledError):
+                pass
+            # No id will reach the browser, so nothing this submit created may be left
+            # able to run: a render nobody can see or cancel would spend the user's
+            # Earth Engine quota and hold a slot for up to four hours. Undo it by the id
+            # WE chose. The cleanup is queued behind the submit on the same loop, so if
+            # the loop recovers it sees the job; if it never recovers, nothing runs
+            # either way. Bounded like every hop across this boundary, and best-effort:
+            # we are already failing, and a cleanup error must not replace the message.
+            try:
+                _run_on_loop(app.state.queue.cancel_if_present(job_id),
+                             app.state.loop).result(timeout=CANCEL_TIMEOUT_S)
+            except Exception:
+                log.exception("could not clean up after a timed-out submit")
+            raise RuntimeError(
+                "The server is busy right now. Please try again in a minute.") from None
 
         @staticmethod
         def cancel(request):
@@ -330,14 +373,20 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
             # Same boundary as submit: a Gradio worker thread handing work to the loop
             # the server captured at startup, and bounded so a wedged loop cannot pin
             # the thread forever.
-            future = asyncio.run_coroutine_threadsafe(
-                app.state.queue.cancel_for(email), app.state.loop)
+            future = _run_on_loop(app.state.queue.cancel_for(email), app.state.loop)
             try:
                 return future.result(timeout=CANCEL_TIMEOUT_S)
             except concurrent.futures.TimeoutError:
-                future.cancel()
+                pass
+            if future.cancel():
                 raise RuntimeError("The server did not answer the stop request. Your "
                                    "render may still be going; try again.") from None
+            # Same race as in `submit`, but harmless here: a cancellation that lands
+            # late still does exactly what the user asked for. Nothing to undo -- only
+            # the confirmation is late, so say that rather than claiming it failed.
+            raise RuntimeError(
+                "The stop request reached the server but it was slow to confirm. Your "
+                "renders are being stopped; reload the page in a moment.") from None
 
         @staticmethod
         def job_status(request, job_id):

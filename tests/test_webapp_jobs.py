@@ -326,6 +326,24 @@ async def test_a_tokenless_job_adds_nothing_and_a_queued_jobs_token_is_listed_to
 
 
 @pytest.mark.asyncio
+async def test_cancel_if_present_undoes_one_job_and_shrugs_at_an_id_that_never_existed():
+    """The submit-timeout cleanup path: the caller does not know whether its job was
+    ever created, so an unknown id must be False rather than an exception -- and it
+    must touch nothing else the same user has running."""
+    q = JobQueue(spawn=lambda job, on_event: FakeProc([], hang=True), max_concurrency=2)
+    mine = await q.submit("a@hnee.de", {"refresh_token": "r"}, {}, job_id="chosen-id")
+    other = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
+    await asyncio.sleep(0.05)
+    assert mine == "chosen-id"                      # the caller's id was honoured
+    assert await q.cancel_if_present("never-created") is False
+    assert await q.cancel_if_present("chosen-id") is True
+    await asyncio.sleep(0.05)
+    assert q.status(mine).state == "cancelled"
+    assert q.status(other).state == "running"       # the user's other render survives
+    await q.cancel(other)
+
+
+@pytest.mark.asyncio
 async def test_a_finished_jobs_record_is_dropped_once_it_has_aged_out():
     """Finding 11: nothing ever pruned, and `Job.result` holds the whole done event."""
     from gee_animation.webapp.jobs import UnknownJobError

@@ -52,9 +52,14 @@ class JobQueue:
         #: job id -> refresh token, for jobs whose payload this process may still hold.
         self._inflight: dict[str, str] = {}
 
-    async def submit(self, email: str, credentials: dict, params: dict) -> str:
+    async def submit(self, email: str, credentials: dict, params: dict,
+                     job_id: str | None = None) -> str:
+        """Queue a render. `job_id` lets the CALLER choose the id before handing this
+        coroutine to the loop, so that a caller which gives up waiting can undo exactly
+        the job it started (see `ServerContext.submit`). It is generated server-side and
+        never arrives from a client."""
         self._prune()
-        job_id = secrets.token_urlsafe(16)
+        job_id = job_id or secrets.token_urlsafe(16)
         self._jobs[job_id] = Job(id=job_id, email=email)
         self._order.append(job_id)
         payload = {"id": job_id, **credentials, "params": params}
@@ -72,10 +77,12 @@ class JobQueue:
         a logout), which would silently stop redacting that token. The redactor takes
         the union of both lists instead.
 
-        Deliberately conservative: an entry is kept until the job reaches a terminal
-        state, which is at or after the moment `WorkerProcess.run` drains the payload
-        and drops its reference. Listing a token slightly longer than it is reachable
-        costs nothing; one missing from the list is a token a log line could print.
+        An entry is kept until the job reaches a terminal state, and that is not merely
+        conservative -- it is accurate: `_run`'s frame holds the payload dict for the
+        whole render (its own argument), so the token really is reachable in this process
+        until the job ends, whatever `WorkerProcess` does with its copy after the drain.
+        Listing a token slightly longer than it is reachable would cost nothing anyway;
+        one missing from the list is a token a log line could print.
         """
         return list(self._inflight.values())
 
@@ -110,6 +117,16 @@ class JobQueue:
         if job.proc is not None:
             job.proc.kill()
         self._tasks[job_id].cancel()
+
+    async def cancel_if_present(self, job_id: str) -> bool:
+        """Cancel one job if it exists; say whether it did. Never raises for an unknown
+        id, because the caller's whole problem is not knowing whether the job was
+        created. For the submit-timeout cleanup path only: the id is one the server
+        generated, never one a client sent, and it cancels nothing else of the user's."""
+        if job_id not in self._jobs:
+            return False
+        await self.cancel(job_id)
+        return True
 
     async def cancel_for(self, email: str) -> int:
         """Cancel every unfinished job owned by `email`; return how many were cancelled.
@@ -171,10 +188,13 @@ class JobQueue:
             try:
                 proc = self._spawn(payload, on_event)
                 job.proc = proc
-                # Hand the credentials over and stop referencing them here. The worker
-                # object holds the payload until it has written it to the subprocess's
-                # stdin, then drops it too -- so the token's reachable lifetime in this
-                # process is the handover, not the whole render.
+                # Hand the credentials over and drop THIS frame's reference. It does not
+                # make the token unreachable: `_run`'s frame still holds the same dict
+                # for the whole render (it is that call's argument, and a review proved
+                # it with `gc.get_referrers`), and `WorkerProcess` holds it until the
+                # drain. Dropping it here only removes one of those references -- which
+                # is why `live_secrets` keeps its entry until the job is over rather
+                # than until the drain. An earlier comment here claimed otherwise.
                 payload = None
                 await asyncio.wait_for(proc.run(on_event), timeout=self._timeout)
             except asyncio.TimeoutError:

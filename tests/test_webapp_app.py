@@ -1080,3 +1080,174 @@ def test_a_finished_job_is_forgotten_once_its_record_has_aged_out(tmp_path):
         with pytest.raises(UnknownJobError, match="not known"):
             ctx.job_status(request, first)
         assert first not in app.state.queue._jobs and first not in app.state.queue._tasks
+
+
+# --- review round D: the submit timeout race -------------------------------------------
+
+import concurrent.futures
+
+
+class _FinishedJustTooLate:
+    """A future that completes in the instant the caller gives up on it.
+
+    `concurrent.futures.Future.cancel()` returns False once the result is already set,
+    and `run_coroutine_threadsafe` sets it from the loop — so a loop that recovers
+    between our `result(timeout)` expiring and our `cancel()` call leaves a real job
+    behind. The window is microseconds wide in real time; this makes it deterministic
+    while keeping the documented contract of the class it stands in for.
+    """
+
+    def __init__(self, real, grace_ok=True):
+        self._real, self._grace_ok, self._first = real, grace_ok, True
+
+    def result(self, timeout=None):
+        if self._first:                      # the caller's first, timed-out attempt
+            self._first = False
+            raise concurrent.futures.TimeoutError
+        if not self._grace_ok:               # a genuinely wedged loop
+            raise concurrent.futures.TimeoutError
+        return self._real.result(timeout)
+
+    def cancel(self):
+        return False                         # too late: the job exists
+
+
+def _late_loop_handoff(monkeypatch, grace_ok=True, only_first=True):
+    """Make the FIRST hand-off to the loop finish just too late, the rest normal."""
+    from gee_animation.webapp import app as app_mod
+    real_run = app_mod.asyncio.run_coroutine_threadsafe
+    state = {"wrapped": 0}
+
+    def handoff(coro, loop):
+        future = real_run(coro, loop)
+        state["wrapped"] += 1
+        if only_first and state["wrapped"] > 1:
+            return future                    # the cleanup hop behaves normally
+        return _FinishedJustTooLate(future, grace_ok=grace_ok)
+
+    monkeypatch.setattr(app_mod, "_run_on_loop", handoff)
+    return state
+
+
+def test_a_submit_that_lands_just_after_the_timeout_returns_the_id_not_busy(
+        tmp_path, monkeypatch):
+    """The bug: the user was told "the server is busy" while the queue went on to spawn
+    a worker whose id never reached the browser — a render billing their Earth Engine
+    quota and holding a slot for four hours, invisible and uncancellable."""
+    _late_loop_handoff(monkeypatch)
+    app = _blocking_server(tmp_path, max_concurrency=1)
+    sid = app.state.sessions.new("a@b.de", "RT-A")
+    with TestClient(app):
+        ctx = app.state.context
+        request = _req(app, sid)
+        job_id = ctx.submit(request, _good())            # no RuntimeError at all
+        state = _wait_state(ctx, job_id, request, "running")
+        assert state["state"] == "running"               # the id the user got is real
+        assert ctx.cancel(request) == 1                  # and it is theirs to cancel
+
+
+def test_when_the_grace_also_expires_submit_fails_and_leaves_no_job_running(
+        tmp_path, monkeypatch):
+    """The fallback: if the id never arrives we do report failure — but nothing of this
+    user's may be left running, or it would run invisibly."""
+    _late_loop_handoff(monkeypatch, grace_ok=False)
+    app = _blocking_server(tmp_path, max_concurrency=1)
+    sid = app.state.sessions.new("a@b.de", "RT-A")
+    with TestClient(app):
+        ctx = app.state.context
+        request = _req(app, sid)
+        with pytest.raises(RuntimeError, match="busy"):
+            ctx.submit(request, _good())
+
+        def mine():
+            return [j for j in app.state.queue._jobs.values() if j.email == "a@b.de"]
+
+        # The loop DID create a job -- that is the race. Wait for it to appear first,
+        # or an empty queue a moment before it is created would pass this vacuously.
+        deadline = _time.monotonic() + 5
+        while not mine() and _time.monotonic() < deadline:
+            _time.sleep(0.02)
+        assert mine(), "no job was ever created: this test would prove nothing"
+        # ...and the fallback must have left none of them able to run.
+        while any(j.state in ("queued", "running") for j in mine()) \
+                and _time.monotonic() < deadline:
+            _time.sleep(0.02)
+        assert [j.state for j in mine()] == ["cancelled"]
+
+
+def test_the_user_either_gets_an_id_or_no_job_exists_when_the_loop_stalls(
+        tmp_path, monkeypatch):
+    """The reviewer's own repro, with the real clock: a loop blocked for longer than
+    SUBMIT_TIMEOUT_S. Whichever side of the race we land on, "busy" and a live job must
+    never both be true."""
+    import threading
+
+    from gee_animation.webapp import app as app_mod
+    monkeypatch.setattr(app_mod, "SUBMIT_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(app_mod, "SUBMIT_GRACE_S", 1.0)
+    app = _blocking_server(tmp_path, max_concurrency=1)
+    sid = app.state.sessions.new("a@b.de", "RT-A")
+    with TestClient(app):
+        ctx = app.state.context
+        request = _req(app, sid)
+        app.state.loop.call_soon_threadsafe(_time.sleep, 0.8)   # stall, then recover
+        try:
+            job_id = ctx.submit(request, _good())
+        except RuntimeError as exc:
+            assert "busy" in str(exc)
+            # Let the loop drain before judging: a sentinel scheduled now runs AFTER the
+            # stall and after the submit hand-off already queued ahead of it, so once it
+            # fires, whatever the race was going to do has happened. Bounded.
+            drained = threading.Event()
+            app.state.loop.call_soon_threadsafe(drained.set)
+            assert drained.wait(10), "the event loop never recovered"
+            _time.sleep(0.1)                     # let a spawned job reach "running"
+            alive = [j.state for j in app.state.queue._jobs.values()
+                     if j.state in ("queued", "running")]
+            assert alive == [], "told the user 'busy' and left a job running"
+        else:
+            assert _wait_state(ctx, job_id, request, "running")["state"] == "running"
+            ctx.cancel(request)
+
+
+def test_a_stop_that_lands_just_after_the_timeout_says_it_is_under_way(tmp_path,
+                                                                       monkeypatch):
+    """Same race on the cancel path, where a late cancellation is benign: it does what
+    the user asked, so the message must not claim it failed."""
+    _late_loop_handoff(monkeypatch, only_first=False)
+    app = _blocking_server(tmp_path, max_concurrency=1)
+    sid = app.state.sessions.new("a@b.de", "RT-A")
+    with TestClient(app):
+        ctx = app.state.context
+        request = _req(app, sid)
+        job = ctx.submit(request, _good())
+        _wait_queue_state(app, job, "running")
+        with pytest.raises(RuntimeError, match="being stopped"):
+            ctx.cancel(request)
+        _wait_queue_state(app, job, "cancelled")      # it really did happen
+
+
+def test_the_compose_healthcheck_hits_a_route_that_answers_without_a_session(tmp_path):
+    """A healthcheck on "/" or /login would pass on a redirect. Ties the deployment file
+    to the middleware's open-route set and to a live anonymous request."""
+    import re
+
+    from authlib.integrations.base_client.errors import OAuthError
+    from gee_animation.webapp.app import _LoginRedirect
+    compose = (Path(__file__).resolve().parent.parent / "deploy" / "compose.yaml").read_text()
+    url = re.search(r"urlopen\('(http://[^']+)'", compose).group(1)
+    path = url.split("7860", 1)[1]
+    assert path in _LoginRedirect._OPEN             # not exempt only by luck
+
+    class Denied:
+        async def authorize_access_token(self, request):
+            raise OAuthError(error="access_denied")
+
+    cfg = AppConfig(client_id="c", client_secret="s", redirect_uri="https://x/cb",
+                    cookie_secret="k", output_root=Path(tmp_path))
+    client = TestClient(create_app(cfg, Denied(), lambda job, on_event: None),
+                        follow_redirects=False)
+    assert client.get(path).status_code == 200      # 200, not a redirect
+    # A memory limit is documented but deliberately not set: too low OOM-kills a render.
+    mem = [line for line in compose.splitlines() if "mem_limit:" in line]
+    assert mem and all(line.lstrip().startswith("#") for line in mem)
