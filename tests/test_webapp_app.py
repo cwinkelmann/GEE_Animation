@@ -1095,6 +1095,13 @@ class _FinishedJustTooLate:
     between our `result(timeout)` expiring and our `cancel()` call leaves a real job
     behind. The window is microseconds wide in real time; this makes it deterministic
     while keeping the documented contract of the class it stands in for.
+
+    Deliberately STRICTER than reality, so do not go hunting for the real code path
+    behind every state it produces. The stdlib never pairs `cancel() == False` with a
+    `result()` that then blocks: such a future is already FINISHED, so the retry returns
+    at once (a `run_coroutine_threadsafe` future is never RUNNING). `grace_ok=False`
+    fabricates that pairing anyway, to prove the cleanup fires even if the premise
+    behind `SUBMIT_GRACE_S` were one day wrong.
     """
 
     def __init__(self, real, grace_ok=True):
@@ -1164,6 +1171,9 @@ def test_when_the_grace_also_expires_submit_fails_and_leaves_no_job_running(
 
         # The loop DID create a job -- that is the race. Wait for it to appear first,
         # or an empty queue a moment before it is created would pass this vacuously.
+        # ONE deadline for both waits on purpose: 5 s total for the pair, not 5 s each.
+        # It fails safe either way -- a deadline already spent makes the second loop
+        # exit immediately and the assertion below is what judges the outcome.
         deadline = _time.monotonic() + 5
         while not mine() and _time.monotonic() < deadline:
             _time.sleep(0.02)

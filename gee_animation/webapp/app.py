@@ -48,12 +48,14 @@ class AppConfig:
 #: How long a Gradio worker thread waits for the event loop to accept a job before telling
 #: the user the server is busy, rather than hanging forever on a wedged loop.
 SUBMIT_TIMEOUT_S = 30.0
-#: Extra time allowed for the job id to arrive after the submit timeout has expired, when
-#: the queue may already have created the job. Short on purpose: `JobQueue.submit` has no
-#: awaits in it, so the only work left is a few dict writes and `create_task` --
-#: microseconds. Five seconds buys a loop that is merely slow the chance to deliver the id
-#: the user is entitled to, without making them wait another full timeout; if it has not
-#: arrived by then the loop is wedged rather than slow, and the job is undone instead.
+#: Backstop on the second `result()` call after the submit timeout, the one that settles
+#: whether a job exists. Do not size work against this number: the call it bounds is not
+#: expected to wait at all, and measurement says it never does. A
+#: `run_coroutine_threadsafe` future is never in the RUNNING state, so by the time we get
+#: there it is either CANCELLED (our `cancel()` won -- `result` raises at once) or FINISHED
+#: (the coroutine won -- the id is already there), and `JobQueue.submit` has no awaits in
+#: it to leave it in between. The *retry* is what carries the design; this timeout only
+#: keeps a Gradio thread from hanging if that reasoning is ever wrong.
 SUBMIT_GRACE_S = 5.0
 #: The same bound for a cancel. Shorter than submit's because the work is a `killpg` and
 #: a `Task.cancel()` with nothing to await, and the spec asks for the worker to be dead
@@ -339,6 +341,10 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
             # task's first step, so a loop that recovers now can still run
             # `queue.submit` to completion. The outcome is what matters, not the guess.
             future.cancel()
+            # Asking again is what settles it, not waiting: the future is CANCELLED (no
+            # job -- raises here) or FINISHED (the id is here), so this returns
+            # immediately either way. SUBMIT_GRACE_S is a backstop, not slack; the
+            # worst case for this whole method is SUBMIT_TIMEOUT_S + CANCEL_TIMEOUT_S.
             try:
                 return future.result(timeout=SUBMIT_GRACE_S)
             except (concurrent.futures.TimeoutError,

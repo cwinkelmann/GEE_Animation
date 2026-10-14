@@ -57,9 +57,16 @@ class JobQueue:
         """Queue a render. `job_id` lets the CALLER choose the id before handing this
         coroutine to the loop, so that a caller which gives up waiting can undo exactly
         the job it started (see `ServerContext.submit`). It is generated server-side and
-        never arrives from a client."""
+        never arrives from a client.
+
+        NOTE: this method must contain no `await` before the job is recorded in
+        `self._jobs`. `ServerContext.submit`'s cleanup path depends on it (see the test
+        that pins it, `test_submit_has_no_suspension_points_...`).
+        """
         self._prune()
-        job_id = job_id or secrets.token_urlsafe(16)
+        # `is None`, not `or`: a falsy id is still the caller's id, and silently
+        # replacing it would leave that caller's cleanup unable to find its own job.
+        job_id = secrets.token_urlsafe(16) if job_id is None else job_id
         self._jobs[job_id] = Job(id=job_id, email=email)
         self._order.append(job_id)
         payload = {"id": job_id, **credentials, "params": params}

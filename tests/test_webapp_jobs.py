@@ -325,6 +325,44 @@ async def test_a_tokenless_job_adds_nothing_and_a_queued_jobs_token_is_listed_to
     assert q.live_secrets() == []
 
 
+def test_submit_has_no_suspension_points_before_the_job_is_recorded():
+    """The premise `ServerContext.submit`'s cleanup rests on, pinned.
+
+    When a submit times out, the web process cannot know whether a job was created, so
+    it chooses the id up front and then asks the queue to undo that id. That only works
+    because `JobQueue.submit` cannot be suspended part-way: once it starts it either
+    creates the whole job record or nothing. An `await` added ahead of
+    `self._jobs[job_id] = Job(...)` would reopen exactly the hole two review rounds went
+    into closing -- a render with no id in the browser, uncancellable, holding a slot
+    for four hours and spending the user's Earth Engine quota.
+
+    If you genuinely need to await in here, DO NOT just delete this test: make the
+    cleanup robust against a half-created job first (e.g. record the id before the
+    await, or have the cleanup remember unresolved ids), then retire it deliberately.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(JobQueue.submit)))
+    suspensions = [node for node in ast.walk(tree)
+                   if isinstance(node, (ast.Await, ast.AsyncWith, ast.AsyncFor))]
+    assert suspensions == [], (
+        "JobQueue.submit gained a suspension point at line(s) "
+        f"{[n.lineno for n in suspensions]}; read this test's docstring")
+
+
+@pytest.mark.asyncio
+async def test_submit_never_silently_replaces_the_id_the_caller_chose():
+    """`or` would re-id a falsy one, and the caller's cleanup would then look for an id
+    that does not exist. Unreachable today (the one caller passes a generated id); this
+    keeps it unreachable by construction rather than by luck."""
+    q = JobQueue(spawn=_spawn_ok(), max_concurrency=1)
+    assert await q.submit("a@hnee.de", {"refresh_token": "r"}, {}, job_id="") == ""
+    assert q.status("").email == "a@hnee.de"
+    await _wait_bounded(q, "")
+
+
 @pytest.mark.asyncio
 async def test_cancel_if_present_undoes_one_job_and_shrugs_at_an_id_that_never_existed():
     """The submit-timeout cleanup path: the caller does not know whether its job was
