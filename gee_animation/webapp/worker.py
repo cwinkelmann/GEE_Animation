@@ -15,6 +15,7 @@ import types
 import ee
 from google.oauth2.credentials import Credentials
 
+from . import project
 from .. import gui
 
 TOKEN_URI = "https://oauth2.googleapis.com/token"
@@ -57,16 +58,24 @@ def main(stdin=None, stdout=None, ee_module=ee, runner=None) -> int:
             client_id=job["client_id"], client_secret=job["client_secret"],
             scopes=["https://www.googleapis.com/auth/earthengine",
                     "https://www.googleapis.com/auth/cloud-platform"])
-        ee_module.Initialize(credentials=creds, project=job["project"])
+        # `project.validate`, not a bare `ee_module.Initialize`: it initialises AND
+        # makes one trivial getInfo call, so the commonest setup error by far -- a Cloud
+        # project that was never registered for Earth Engine -- is reported with the
+        # "enable the API here" link instead of Earth Engine's raw text, and before any
+        # imagery work starts. It runs HERE, in the worker, and not in `submit`: it
+        # needs the network and it calls `ee.Initialize`, and `ee._state._state` is
+        # process-wide, so doing it in the shared web process would clobber every other
+        # user. Its ProjectError falls into the handler below, which classifies the
+        # expired-sign-in case and scrubs the token exactly as for any other failure.
+        project.validate(creds, job["project"], ee_module=ee_module)
         _emit(stdout, event="progress", message="Earth Engine initialised")
         # EE is already live under the user's identity, so run_animation must NOT
         # re-authenticate: its deps.init becomes a no-op (see gui.py:448).
         deps = types.SimpleNamespace(**vars(gui.DEFAULT_DEPS))
         deps.init = lambda project=None: None
-        # The job's project is the authoritative one (the user's own, as typed into
-        # the project field; NOT validated up front, so a wrong one fails right here in
-        # Initialize, with Earth Engine's message); gui's params carry a `project` too,
-        # so drop it or `runner` gets the keyword twice.
+        # The job's project is the authoritative one (the user's own, as typed into the
+        # project field, and checked by `project.validate` above); gui's params carry a
+        # `project` too, so drop it or `runner` gets the keyword twice.
         params = {k: v for k, v in job["params"].items() if k != "project"}
         mp4, gif, pngs, zip_path, status, series = runner(
             project=job["project"], deps=deps, **params)
