@@ -6,13 +6,17 @@ from dataclasses import dataclass
 # Module level, not inside add_routes: with deferred annotations FastAPI must be able
 # to resolve `Request` from module globals, or it treats `request` as a query param.
 from fastapi import Request
-from fastapi.responses import PlainTextResponse, RedirectResponse
+from authlib.integrations.base_client.errors import OAuthError
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
 SCOPES = [
     "https://www.googleapis.com/auth/earthengine",
     "https://www.googleapis.com/auth/cloud-platform",
 ]
 COOKIE = "sid"
+#: Not under /login itself: /login would start Google consent again at once, which for
+#: a user who just denied it is a loop. This page says what happened and offers the link.
+SIGN_IN_FAILED_PATH = "/login-failed"
 
 
 @dataclass
@@ -42,7 +46,12 @@ def add_routes(app, cfg: OAuthConfig, store, client):
 
     @app.get("/oauth2/callback")
     async def callback(request: Request):
-        token = await client.authorize_access_token(request)
+        try:
+            token = await client.authorize_access_token(request)
+        except OAuthError:
+            # Denied consent, an expired or replayed `state`, a failed code exchange.
+            # Not a server error: send the user back to try again.
+            return RedirectResponse(SIGN_IN_FAILED_PATH)
         email = (token.get("userinfo") or {}).get("email")
         if not email:
             # Google only returns userinfo if openid+email were requested (Task 9 does).
@@ -59,6 +68,12 @@ def add_routes(app, cfg: OAuthConfig, store, client):
         response = RedirectResponse("/")
         response.set_cookie(COOKIE, sid, httponly=True, secure=True, samesite="lax")
         return response
+
+    @app.get(SIGN_IN_FAILED_PATH)
+    async def login_failed():
+        return HTMLResponse(
+            "<p>Sign-in failed. Google did not complete the sign-in (it may have been "
+            "cancelled or have timed out).</p><p><a href=\"/login\">Try again</a></p>")
 
     @app.get("/logout")
     async def logout(request: Request):

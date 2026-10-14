@@ -48,3 +48,24 @@ def test_a_reversed_date_range_is_refused():
 def test_an_end_equal_to_the_start_is_refused():
     with pytest.raises(CapExceeded, match="is not after the start date 2024-01-01"):
         check({"start": "2024-01-01", "end": "2024-01-01", "preset": "1080p"})
+
+
+def test_the_largest_allowed_preset_itself_is_accepted():
+    """Pins `<` (not `<=`) on the preset cap: the cap value is allowed, one above is not."""
+    check({"start": "2024-01-01", "end": "2025-01-01", "preset": "1440p"})
+    with pytest.raises(CapExceeded):
+        check({"start": "2024-01-01", "end": "2025-01-01", "preset": "4k"})
+
+
+def test_a_range_of_exactly_the_year_limit_is_accepted_and_one_day_more_is_not():
+    """Pins `>` (not `>=`) on the year cap. 12 years is 4383 days at 365.25 d/yr."""
+    from datetime import date, timedelta
+    start = date(2000, 1, 1)
+    check({"start": start.isoformat(), "end": (start + timedelta(days=4383)).isoformat(),
+           "preset": "1080p"})
+    with pytest.raises(CapExceeded) as exc:
+        check({"start": start.isoformat(), "end": (start + timedelta(days=4384)).isoformat(),
+               "preset": "1080p"})
+    # The message must agree with the decision: it names the rejected length in days and
+    # the limit in days, rather than a rounded "12.0 years" beside a "12 years" limit.
+    assert "4384 days" in str(exc.value) and "4383 days" in str(exc.value)

@@ -115,6 +115,7 @@ def test_the_sweep_runs_at_startup(tmp_path):
     import os
     stale = __import__("time").time() - 30 * 86400
     os.utime(f, (stale, stale))
+    os.utime(old, (stale, stale))     # the sweep also reads the directory's own mtime
     with TestClient(_app(tmp_path)):
         pass
     assert not old.exists()
@@ -458,6 +459,7 @@ def test_the_retention_sweep_repeats_while_the_server_is_up_and_stops_on_shutdow
             f.write_bytes(b"\x00")
             stale = _time.time() - 30 * 86400
             os.utime(f, (stale, stale))
+            os.utime(old, (stale, stale))
             for _ in range(100):
                 if not old.exists():
                     break
@@ -666,3 +668,71 @@ def test_kill_signals_the_whole_process_group_and_survives_an_already_gone_worke
         raise ProcessLookupError
     monkeypatch.setattr(spawn_mod.os, "killpg", gone)
     proc.kill()                                                   # must not raise
+
+
+# --- review round A -----------------------------------------------------------------------
+
+def test_the_job_timeout_is_configurable_defaults_to_four_hours_and_reaches_the_queue(tmp_path):
+    base = dict(client_id="c", client_secret="s", redirect_uri="https://x/cb",
+                cookie_secret="k", output_root=Path(tmp_path))
+    assert AppConfig(**base).job_timeout_s == 14400
+    app = create_app(AppConfig(**base, job_timeout_s=1234), oauth_client=None,
+                     spawn=lambda job, on_event: None)
+    assert app.state.queue._timeout == 1234
+    assert app.state.context.job_timeout_s == 1234     # what the GUI derives its poll bound from
+
+
+def test_the_sweeper_also_reclaims_stale_entries_in_gradios_temp_dir(tmp_path, monkeypatch):
+    import os
+    temp = Path(tmp_path) / "cache" / "gradio-tmp"
+    stale, fresh = temp / "stale", temp / "fresh"
+    for d in (stale, fresh):
+        d.mkdir(parents=True)
+        (d / "x.png").write_bytes(b"png")
+    old = _time.time() - 30 * 86400
+    for p in (stale, stale / "x.png"):
+        os.utime(p, (old, old))
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(temp))
+    with TestClient(_server(Path(tmp_path) / "out")):
+        pass
+    assert not stale.exists() and fresh.exists() and temp.is_dir()
+
+
+def test_without_a_dedicated_gradio_temp_dir_nothing_outside_the_output_root_is_swept(monkeypatch):
+    """The default (the system temp dir's /gradio) may be shared with other processes."""
+    from gee_animation.webapp import app as app_mod
+    monkeypatch.delenv("GRADIO_TEMP_DIR", raising=False)
+    assert app_mod.gradio_temp_dir() is None
+
+
+def test_the_image_keeps_gradios_copies_inside_the_cache_volume():
+    """Not buildable here (no Docker daemon): pin by reading the Dockerfile. Gradio's copy of
+    every output must land in a directory under the cache volume, which exists and is owned
+    by the non-root user before USER app."""
+    import re
+    text = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
+    env = dict(re.findall(r"^\s+(\w+)=(\S+?)(?: \\)?$", text, re.M))
+    cache = env["GEE_ANIMATION_CACHE_DIR"]
+    assert env["GRADIO_TEMP_DIR"].startswith(cache + "/")
+    before_user = text.split("USER app")[0]
+    assert f"mkdir -p /data/out {env['GRADIO_TEMP_DIR']}" in before_user
+    assert "chown -R app /data" in before_user
+
+
+def test_a_failed_google_sign_in_is_a_friendly_page_not_a_500_and_is_reachable_anonymously(
+        tmp_path):
+    from authlib.integrations.base_client.errors import OAuthError
+
+    class Denied:
+        async def authorize_access_token(self, request):
+            raise OAuthError(error="access_denied")
+
+    cfg = AppConfig(client_id="c", client_secret="s", redirect_uri="https://x/cb",
+                    cookie_secret="k", output_root=Path(tmp_path))
+    client = TestClient(create_app(cfg, Denied(), lambda job, on_event: None),
+                        follow_redirects=False)
+    r = client.get("/oauth2/callback")
+    assert r.status_code in (302, 303, 307) and r.headers["location"] == "/login-failed"
+    assert "set-cookie" not in r.headers
+    page = client.get("/login-failed", headers={"accept": "text/html"})
+    assert page.status_code == 200 and "Sign-in failed" in page.text and "/login" in page.text

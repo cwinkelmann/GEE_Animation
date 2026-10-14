@@ -11,6 +11,10 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 
+class UnknownJobError(LookupError):
+    """No job with this id (never submitted, or from before a restart)."""
+
+
 @dataclass
 class Job:
     id: str
@@ -22,7 +26,7 @@ class Job:
 
 
 class JobQueue:
-    def __init__(self, spawn, max_concurrency: int = 3, timeout_s: float = 5400):
+    def __init__(self, spawn, max_concurrency: int = 3, timeout_s: float = 14400):
         self._spawn = spawn
         self._sem = asyncio.Semaphore(max_concurrency)
         self._timeout = timeout_s
@@ -39,7 +43,12 @@ class JobQueue:
         return job_id
 
     def status(self, job_id: str) -> Job:
-        return self._jobs[job_id]
+        try:
+            return self._jobs[job_id]
+        except KeyError:
+            raise UnknownJobError(
+                "That render job is not known to the server (it may predate a restart). "
+                "Submit it again.") from None
 
     def position(self, job_id: str) -> int:
         queued = [i for i in self._order if self._jobs[i].state == "queued"]

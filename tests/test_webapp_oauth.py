@@ -132,3 +132,20 @@ def test_logout_drops_the_session_and_clears_the_cookie():
     request = types.SimpleNamespace(cookies={"sid": sid}, app=types.SimpleNamespace(
         state=types.SimpleNamespace(sessions=store)))
     assert oauth.current_user(request) is None
+
+
+def test_an_oauth_error_from_google_redirects_to_the_failure_page_instead_of_a_500():
+    from authlib.integrations.base_client.errors import OAuthError
+
+    class Denied(FakeClient):
+        async def authorize_access_token(self, request):
+            raise OAuthError(error="access_denied")
+
+    store = SessionStore()
+    app = FastAPI()
+    app.state.sessions = store
+    oauth.add_routes(app, oauth.OAuthConfig("id", "sec", "https://x/cb"), store, Denied(None))
+    tc = TestClient(app, follow_redirects=False)
+    r = tc.get("/oauth2/callback")
+    assert r.status_code == 307 and r.headers["location"] == "/login-failed"
+    assert store.all() == [] and "set-cookie" not in r.headers

@@ -23,6 +23,19 @@ class FakeProc:
         self.killed = True
 
 
+async def _wait_bounded(q, job_id, seconds=5):
+    """`q.wait`, but a queue that never finishes the job FAILS this test in `seconds`
+    instead of hanging the suite. `asyncio.wait`, not `wait_for`: wait_for's timeout path
+    cancels and then awaits the cancellation, which a task that swallows it never ends."""
+    waiter = asyncio.ensure_future(q.wait(job_id))
+    _, pending = await asyncio.wait({waiter}, timeout=seconds)
+    if pending:
+        waiter.cancel()
+        await q.cancel(job_id)
+        pytest.fail(f"job {job_id} was still {q.status(job_id).state!r} after {seconds}s: "
+                    "the queue's wall-clock timeout did not fire")
+
+
 def _spawn_ok(mp4="/out/x.mp4"):
     def spawn(job, on_event):
         return FakeProc([json.dumps({"event": "done", "mp4": mp4, "status": "ok"})])
@@ -86,7 +99,7 @@ async def test_a_stalled_job_is_killed_at_the_timeout_and_says_so():
 
     q = JobQueue(spawn=spawn, max_concurrency=1, timeout_s=0.05)
     job_id = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
-    await q.wait(job_id)
+    await _wait_bounded(q, job_id)
     job = q.status(job_id)
     assert job.state == "error" and "timed out" in job.message.lower()
     assert procs[0].killed
@@ -121,7 +134,7 @@ async def test_a_done_job_is_not_turned_into_an_error_by_a_lingering_process():
 
     q = JobQueue(spawn=lambda job, on_event: Lingering([]), max_concurrency=1, timeout_s=0.05)
     job_id = await q.submit("a@hnee.de", {"refresh_token": "r"}, {})
-    await q.wait(job_id)
+    await _wait_bounded(q, job_id)
     assert q.status(job_id).state == "done"
     assert q.status(job_id).result["mp4"] == "/out/z.mp4"
 
@@ -186,3 +199,16 @@ async def test_a_worker_error_event_becomes_a_failed_job():
     await q.wait(job_id)
     assert q.status(job_id).state == "error"
     assert "sign in again" in q.status(job_id).message
+
+
+def test_the_default_job_timeout_is_four_hours_not_ninety_minutes():
+    """caps allow 12 years at a 10-day cadence; the Caddyfile and README promise 4 h."""
+    assert JobQueue(spawn=None)._timeout == 14400
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_job_id_is_a_described_error_not_a_bare_keyerror():
+    from gee_animation.webapp.jobs import UnknownJobError
+    q = JobQueue(spawn=_spawn_ok())
+    with pytest.raises(UnknownJobError, match="not known"):
+        q.status("nope")

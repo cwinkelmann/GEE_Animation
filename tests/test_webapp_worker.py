@@ -83,3 +83,23 @@ def test_the_error_event_never_echoes_the_token():
                 ee_module=_fake_ee({}), runner=runner)
     assert "r-SECRET" not in out.getvalue()
     assert "bad credential" in out.getvalue()
+
+
+def test_the_series_travels_in_the_done_event_as_strict_json():
+    """The time-series chart was blank in server mode because `series` was dropped here.
+    numpy scalars, NaN and None must all survive a strict JSON round trip."""
+    import numpy as np
+    series = [("2022-05", np.float64(0.5), 0.25), ("2022-06", None, float("nan")),
+              ("2022-07", float("inf"), np.float32(0.5))]
+    runner = lambda **kw: ("/out/x.mp4", None, [], None, "ok", series)
+    out = io.StringIO()
+    worker.main(io.StringIO(_job()), out, ee_module=_fake_ee({}), runner=runner)
+
+    def strict(token):
+        raise AssertionError(f"non-JSON constant {token} on the wire")
+
+    lines = [l for l in out.getvalue().splitlines() if l.strip()]
+    events = [json.loads(l, parse_constant=strict) for l in lines]
+    done = next(e for e in events if e["event"] == "done")
+    assert done["series"] == [["2022-05", 0.5, 0.25], ["2022-06", None, None],
+                              ["2022-07", None, 0.5]]

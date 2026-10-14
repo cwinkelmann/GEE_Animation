@@ -8,6 +8,7 @@ process of its own. Credentials arrive on **stdin** — never argv (world-readab
 from __future__ import annotations
 
 import json
+import math
 import sys
 import types
 
@@ -21,8 +22,26 @@ _REAUTH_HINT = ("Your Google sign-in expired or was revoked. Sign in again and "
                 "re-run; nothing was charged to your project.")
 
 
+def _number(value):
+    """A JSON-safe float, or None. NaN/inf are not JSON (`json.loads` of a bare NaN
+    works in Python but not for strict parsers), and numpy scalars are not serialisable."""
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _series_payload(series) -> list:
+    """`(period, inside, outside)` tuples as plain JSON lists (never pickled)."""
+    return [[str(period), _number(inside), _number(outside)]
+            for period, inside, outside in (series or [])]
+
+
 def _emit(stream, **event) -> None:
-    stream.write(json.dumps(event) + "\n")
+    stream.write(json.dumps(event, allow_nan=False) + "\n")
     stream.flush()
 
 
@@ -52,7 +71,7 @@ def main(stdin=None, stdout=None, ee_module=ee, runner=None) -> int:
         mp4, gif, pngs, zip_path, status, series = runner(
             project=job["project"], deps=deps, **params)
         _emit(stdout, event="done", mp4=mp4, gif=gif, frames=pngs,
-              zip=zip_path, status=status)
+              zip=zip_path, status=status, series=_series_payload(series))
         return 0
     except Exception as exc:                       # reported, never raised at the user
         message = str(exc)

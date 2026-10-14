@@ -287,15 +287,18 @@ The app reads `GEE_OAUTH_CLIENT_ID`, `GEE_OAUTH_CLIENT_SECRET`, `GEE_OAUTH_REDIR
 is git-ignored; never commit it. `EE_PROJECT` (set in the image for the single-user
 container) has no effect in server mode, because each user supplies their own project.
 
-**Limits** (defaults in `AppConfig`, not environment variables): at most 3 renders run
-at once (others wait in the queue), uploads up to 100 MB, an animation spans at most 12
-years and at most 1440p, and finished renders are deleted after 14 days. Renders are long
-(a ten-year monthly animation can take tens of minutes to hours), so the Caddyfile allows
-4-hour proxy timeouts.
+**Limits** (defaults in `AppConfig`): at most 3 renders run at once (others wait in the
+queue), uploads up to 100 MB, an animation spans at most 12 years and at most 1440p, and
+every run directory (finished or not) is deleted after 14 days. Renders are long (a
+ten-year monthly animation can take tens of minutes to hours), so one render may run for
+up to 4 hours (`GEE_JOB_TIMEOUT_S`, default 14400) before its worker is killed, and the
+Caddyfile allows matching 4-hour proxy timeouts. Gradio's copies of returned files live in
+`GRADIO_TEMP_DIR` (`/data/cache/gradio-tmp` in the image) and are swept on the same schedule.
 
 > Renders run as subprocesses on a shared machine. Anyone with Docker access on carrot
 > can read a running worker's memory, which briefly holds your Google refresh token.
-> Use the server only if you accept that; nothing is written to disk.
+> Use the server only if you accept that; no credential is ever written to disk
+> (uploaded AOIs and finished renders are, until the retention sweep removes them).
 
 ## Configuration
 

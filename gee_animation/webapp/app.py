@@ -39,6 +39,10 @@ class AppConfig:
     max_concurrency: int = 3
     max_upload_mb: int = 100
     retention_days: int = 14
+    #: Wall-clock limit for one render, after which its worker is killed. 4 h, matching
+    #: deploy/Caddyfile's proxy timeouts and the README: caps allow 12 years at a 10-day
+    #: cadence with lst_rf, which is far past an hour.
+    job_timeout_s: float = 14400
 
 
 #: How long a Gradio worker thread waits for the event loop to accept a job before telling
@@ -57,6 +61,13 @@ log = logging.getLogger(__name__)
 def _safe_part(value, limit: int = 32) -> str:
     """A path component built only from [A-Za-z0-9_-] (the value is client-supplied)."""
     return re.sub(r"[^A-Za-z0-9_-]", "_", str(value))[:limit] or "x"
+
+
+def gradio_temp_dir() -> Path | None:
+    """Where Gradio copies returned files, if the deployment pointed it somewhere of its
+    own (`GRADIO_TEMP_DIR`, set in the Dockerfile to a path inside the cache volume)."""
+    configured = os.environ.get("GRADIO_TEMP_DIR")
+    return Path(configured) if configured else None
 
 
 def allowed_aoi_roots() -> list[Path]:
@@ -127,6 +138,16 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
                                     max_age_days=cfg.retention_days)
         except Exception:
             log.exception("retention sweep failed; will retry")
+        # Gradio's own copy of every returned file lives outside output_root. Only swept
+        # when GRADIO_TEMP_DIR points at a dedicated directory (the image sets it): the
+        # default, the system temp dir's /gradio, may be shared with other processes.
+        temp_dir = gradio_temp_dir()
+        if temp_dir is not None:
+            try:
+                await asyncio.to_thread(storage.sweep_temp, temp_dir,
+                                        max_age_days=cfg.retention_days)
+            except Exception:
+                log.exception("gradio temp sweep failed; will retry")
 
     async def _sweeper():
         while True:
@@ -171,7 +192,8 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
                        https_only=True, same_site="lax")
     app.add_middleware(_LoginRedirect)
     app.state.sessions = SessionStore()
-    app.state.queue = JobQueue(spawn=spawn, max_concurrency=cfg.max_concurrency)
+    app.state.queue = JobQueue(spawn=spawn, max_concurrency=cfg.max_concurrency,
+                                  timeout_s=cfg.job_timeout_s)
     app.state.max_upload_bytes = cfg.max_upload_mb * 1024 * 1024
     app.state.config = cfg
 
@@ -213,6 +235,10 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
         The single seam where server mode diverges from the single-operator GUI: it is
         what makes the queue, the caps and the per-user output directory reachable.
         """
+
+        #: The GUI derives its poll bound from this, so it never gives up on a job the
+        #: queue would still let run.
+        job_timeout_s = cfg.job_timeout_s
 
         @staticmethod
         def list_runs(request):
@@ -302,7 +328,8 @@ def main() -> None:
         client_secret=os.environ["GEE_OAUTH_CLIENT_SECRET"],
         redirect_uri=os.environ["GEE_OAUTH_REDIRECT_URI"],
         cookie_secret=os.environ["GEE_COOKIE_SECRET"],
-        output_root=Path(os.environ.get("GEE_OUTPUT_DIR", "/data/out")))
+        output_root=Path(os.environ.get("GEE_OUTPUT_DIR", "/data/out")),
+        job_timeout_s=float(os.environ.get("GEE_JOB_TIMEOUT_S", 14400)))
     client = build_oauth_client(cfg)
     from .spawn import spawn_worker
     # Caddy terminates TLS and talks plain HTTP to us; without trusted forwarded headers

@@ -25,11 +25,13 @@ def check(params: dict, max_years: int = 12, max_preset: str = "1440p") -> None:
         raise CapExceeded(
             f"The end date {end.isoformat()} is not after the start date {start.isoformat()}; "
             "a run needs an end date after its start date.")
-    years = (end - start).days / 365.25
-    if years > max_years:
+    days = (end - start).days
+    if days / 365.25 > max_years:
+        # Whole days on both sides: a "12.0 years" figure next to a "12 years" limit
+        # reads as a contradiction when the range is a few days over.
         raise CapExceeded(
-            f"That range is {years:.1f} years; server mode allows {max_years} years "
-            "per render. Split it into two runs.")
+            f"That range is {days} days; server mode allows {max_years} years "
+            f"({int(max_years * 365.25)} days) per render. Split it into two runs.")
     preset = str(params.get("preset") or "")
     if preset not in _ALLOWED_PRESETS:
         raise CapExceeded(
