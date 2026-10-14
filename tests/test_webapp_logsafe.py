@@ -43,6 +43,52 @@ def test_a_secret_logged_on_a_child_logger_is_redacted_before_the_parents_handle
     assert "token is ***" in written
 
 
+TRACEBACK_TOKEN = "exc-SECRET-VALUE"
+
+
+def test_a_secret_inside_an_exception_traceback_is_redacted():
+    # The secret is only in the exception message, never in log arguments, so
+    # only the rendered traceback can leak it. The source line of the raise
+    # shows no literal, so the output can only contain it via the message.
+    # Assert on handler output.
+    parent = logging.getLogger("test.traceback")
+    parent.setLevel(logging.INFO)
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    parent.addHandler(handler)
+    try:
+        install(parent, lambda: [TRACEBACK_TOKEN])
+        try:
+            raise RuntimeError(f"EE refused token {TRACEBACK_TOKEN}")
+        except RuntimeError:
+            logging.getLogger("test.traceback.child").exception("render failed")
+    finally:
+        parent.removeHandler(handler)
+    written = buffer.getvalue()
+    assert "exc-SECRET-VALUE" not in written
+    assert "RuntimeError: EE refused token ***" in written
+
+
+def test_a_secret_in_the_stack_info_source_line_is_redacted():
+    # stack_info prints the source line of the calling frame, so the secret
+    # literal must be written on the call-site line to reach the stack text.
+    # Locals are not printed, so the source line is the only path to test.
+    parent = logging.getLogger("test.stack")
+    parent.setLevel(logging.INFO)
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    parent.addHandler(handler)
+    try:
+        install(parent, lambda: ["stk-SECRET-VALUE"])
+        logging.getLogger("test.stack.child").info("checking", stack_info=True); _ = "stk-SECRET-VALUE"
+    finally:
+        parent.removeHandler(handler)
+    written = buffer.getvalue()
+    assert "Stack (most recent call last)" in written
+    assert "stk-SECRET-VALUE" not in written
+    assert "***" in written
+
+
 def test_messages_without_secrets_are_untouched(caplog):
     log = logging.getLogger("test.redact3")
     install(log, lambda: ["tok-ABC"])
