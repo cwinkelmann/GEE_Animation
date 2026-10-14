@@ -3,6 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# Module level, not inside add_routes: with deferred annotations FastAPI must be able
+# to resolve `Request` from module globals, or it treats `request` as a query param.
+from fastapi import Request
+from fastapi.responses import PlainTextResponse, RedirectResponse
+
 SCOPES = [
     "https://www.googleapis.com/auth/earthengine",
     "https://www.googleapis.com/auth/cloud-platform",
@@ -31,9 +36,6 @@ def add_routes(app, cfg: OAuthConfig, store, client):
 
     `client` is an Authlib OAuth client (injected so tests never touch Google).
     """
-    from fastapi import Request
-    from fastapi.responses import RedirectResponse
-
     @app.get("/login")
     async def login(request: Request):
         return await client.authorize_redirect(request, cfg.redirect_uri)
@@ -42,7 +44,13 @@ def add_routes(app, cfg: OAuthConfig, store, client):
     async def callback(request: Request):
         token = await client.authorize_access_token(request)
         email = token["userinfo"]["email"]
-        sid = store.new(email, token["refresh_token"])
+        refresh_token = token.get("refresh_token")
+        if not refresh_token:
+            # Google omits it if consent was already granted and prompt=consent is missing.
+            return PlainTextResponse(
+                "Google did not issue a refresh token, so renders could not run. "
+                "Please sign in again at /login.", status_code=400)
+        sid = store.new(email, refresh_token)
         response = RedirectResponse("/")
         response.set_cookie(COOKIE, sid, httponly=True, secure=True, samesite="lax")
         return response

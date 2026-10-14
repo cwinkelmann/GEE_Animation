@@ -56,3 +56,13 @@ def test_an_expired_session_says_sign_in_again_not_keyerror():
     assert "session expired" in str(e.value)
     assert "sign in again" in str(e.value)
     assert not isinstance(e.value, KeyError)
+
+
+def test_an_echoed_refresh_token_is_redacted_from_the_error():
+    creds = types.SimpleNamespace(refresh_token="1//SECRET-TOKEN")
+    exc = Exception("bad request {'refresh_token': '1//SECRET-TOKEN'} boom")
+    with pytest.raises(ProjectError) as e:
+        validate(creds, "p", ee_module=_ee(exc))
+    assert "SECRET-TOKEN" not in str(e.value)
+    assert "***" in str(e.value)
+    assert "boom" in str(e.value)

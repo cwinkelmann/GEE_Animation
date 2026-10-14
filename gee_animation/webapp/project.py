@@ -33,6 +33,9 @@ def validate(credentials, project_id: str, ee_module=_ee) -> None:
             raise ProjectError(
                 f"Your account has no permission on project {project_id!r}."
             ) from exc
+        secret = getattr(credentials, "refresh_token", None)
+        if secret:
+            text = text.replace(secret, "***")      # EE errors can echo request details
         raise ProjectError(f"Could not use project {project_id!r}: {text}") from exc
 
 
