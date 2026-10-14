@@ -44,9 +44,14 @@ class AppConfig:
 #: How long a Gradio worker thread waits for the event loop to accept a job before telling
 #: the user the server is busy, rather than hanging forever on a wedged loop.
 SUBMIT_TIMEOUT_S = 30.0
+#: How long shutdown waits for the sweeper to stop before giving up on it (a wedged
+#: sweeper must never hang the server's shutdown).
+SHUTDOWN_TIMEOUT_S = 5.0
 #: Retention is enforced at startup and then this often, so an always-up server keeps
 #: its promise. A module constant so tests can shorten it.
 SWEEP_INTERVAL_S = 24 * 3600
+
+log = logging.getLogger(__name__)
 
 
 def _safe_part(value, limit: int = 32) -> str:
@@ -112,22 +117,50 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
     if not cfg.cookie_secret:
         raise ValueError("AppConfig.cookie_secret must be set (and stable across restarts).")
 
+    secrets_now = lambda: [s.refresh_token for s in app.state.sessions.all()]
+
+    async def _sweep_once():
+        """One retention pass. A transient filesystem error must not end retention for
+        the rest of uptime (or stop the server starting): log it and carry on."""
+        try:
+            await asyncio.to_thread(storage.sweep, cfg.output_root,
+                                    max_age_days=cfg.retention_days)
+        except Exception:
+            log.exception("retention sweep failed; will retry")
+
     async def _sweeper():
         while True:
             await asyncio.sleep(SWEEP_INTERVAL_S)
-            await asyncio.to_thread(storage.sweep, cfg.output_root,
-                                    max_age_days=cfg.retention_days)
+            await _sweep_once()
 
     @asynccontextmanager
     async def lifespan(_app):
-        last_resort = await _on_start()
-        app.state.sweeper = asyncio.create_task(_sweeper())
+        # `logging.lastResort` is process-global: pair the install with its removal in
+        # one try/finally, so a failed startup cannot leak the filter into the process.
+        last_resort = None
+        if logging.lastResort is not None:
+            # With no handler on the root logger (the uvicorn case) a child logger's
+            # record falls through to lastResort, a handler with no filter at all.
+            last_resort = logsafe.RedactingFilter(secrets_now)
+            logging.lastResort.addFilter(last_resort)
         try:
-            yield
+            await _on_start()
+            await _sweep_once()
+            app.state.sweeper = asyncio.create_task(_sweeper())
+            try:
+                yield
+            finally:
+                app.state.sweeper.cancel()
+                # asyncio.wait, not wait_for: wait_for cancels on timeout and then waits
+                # for the cancellation to finish, which a task that swallows
+                # CancelledError would never do -- the very hang being prevented.
+                _, pending = await asyncio.wait({app.state.sweeper},
+                                                timeout=SHUTDOWN_TIMEOUT_S)
+                if pending:
+                    log.error("retention sweeper did not stop within %.0fs of shutdown",
+                              SHUTDOWN_TIMEOUT_S)
         finally:
-            app.state.sweeper.cancel()
-            await asyncio.gather(app.state.sweeper, return_exceptions=True)
-            if logging.lastResort is not None and last_resort is not None:
+            if last_resort is not None and logging.lastResort is not None:
                 logging.lastResort.removeFilter(last_resort)
 
     app = FastAPI(lifespan=lifespan)
@@ -148,21 +181,12 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
         # filter to the handlers that exist when it runs, and uvicorn configures logging
         # during startup. Installing earlier would attach to handlers that are then
         # replaced, and the redaction would silently cover nothing (Task 3, Ruling J).
-        secrets = lambda: [s.refresh_token for s in app.state.sessions.all()]
+        secrets = secrets_now
         logsafe.install(logging.getLogger(), secrets)
         # uvicorn's own loggers carry their own handlers with propagate=False, so a
         # root-only install never sees their records (Ruling K).
         for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
             logsafe.install(logging.getLogger(name), secrets)
-        # With no handler on the root logger (the uvicorn case) a child logger's record
-        # falls through to `logging.lastResort`, a handler with no filter at all.
-        # NB: process-global object; the lifespan removes the filter again on shutdown.
-        last_resort = None
-        if logging.lastResort is not None:
-            last_resort = logsafe.RedactingFilter(secrets)
-            logging.lastResort.addFilter(last_resort)
-        storage.sweep(cfg.output_root, max_age_days=cfg.retention_days)
-        return last_resort
 
     if oauth_client is not None:
         oauth.add_routes(app, oauth.OAuthConfig(cfg.client_id, cfg.client_secret,

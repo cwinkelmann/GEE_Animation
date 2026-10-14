@@ -357,8 +357,9 @@ def test_the_upload_limit_is_enforced_by_the_server(tmp_path):
     assert big.status_code == 413
 
 
+@pytest.mark.parametrize("kind", ["direct", "symlink", "dotdot"])
 def test_an_aoi_path_outside_the_upload_cache_is_refused_and_nothing_is_copied(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, kind):
     monkeypatch.setenv("GRADIO_TEMP_DIR", str(Path(tmp_path) / "gradio_cache"))
     app = _server(tmp_path / "out")
     sid_a = app.state.sessions.new("a@b.de", "RT-A")
@@ -367,14 +368,21 @@ def test_an_aoi_path_outside_the_upload_cache_is_refused_and_nothing_is_copied(
     from gee_animation.webapp.storage import user_dir
     secret = user_dir(tmp_path / "out", "c@d.de") / "victim" / "secret.geojson"
     secret.write_text("OTHER-USERS-FILE")
-    link = Path(tmp_path) / "gradio_cache" / "x" / "link.geojson"      # symlink escape
-    link.parent.mkdir(parents=True)
-    link.symlink_to(secret)
+    cache = Path(tmp_path) / "gradio_cache"
+    cache.mkdir(exist_ok=True)
+    if kind == "direct":
+        evil = secret
+    elif kind == "symlink":                                  # a link INSIDE the cache
+        evil = cache / "link.geojson"
+        evil.symlink_to(secret)
+    else:                                                    # lexically inside, really outside
+        evil = cache / ".." / "out" / "leak.json"
+        evil.resolve().write_text("OTHER-USERS-FILE")
+    assert Path(evil).resolve().is_file()                    # so only containment can refuse it
     with TestClient(app):
-        for evil in (secret, link, Path(tmp_path) / "gradio_cache" / ".." / "out" / "x.json"):
-            with pytest.raises(PermissionError) as err:
-                app.state.context.submit(_req(app, sid_a), _good(aoi_path=str(evil)))
-            assert str(tmp_path) not in str(err.value)          # names no paths
+        with pytest.raises(PermissionError) as err:
+            app.state.context.submit(_req(app, sid_a), _good(aoi_path=str(evil)))
+    assert str(tmp_path) not in str(err.value)               # names no paths
     assert not list((tmp_path / "out").glob("*/*/aoi/*")) and _FakeWorker.payloads == []
     assert not user_dir(tmp_path / "out", "a@b.de").exists()
 
@@ -435,26 +443,97 @@ def test_submit_tells_the_user_the_server_is_busy_when_the_loop_is_wedged(tmp_pa
 
 
 def test_the_retention_sweep_repeats_while_the_server_is_up_and_stops_on_shutdown(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, caplog):
     import os
     from gee_animation.webapp import app as app_mod
     monkeypatch.setattr(app_mod, "SWEEP_INTERVAL_S", 0.05)
+    monkeypatch.setattr(app_mod, "SHUTDOWN_TIMEOUT_S", 1.0)
     app = _server(tmp_path)
-    with TestClient(app):
-        sweeper = app.state.sweeper
-        old = Path(tmp_path) / "u" / "ancient"
-        old.mkdir(parents=True)                                   # created AFTER startup
-        f = old / "ancient.mp4"
-        f.write_bytes(b"\x00")
-        stale = _time.time() - 30 * 86400
-        os.utime(f, (stale, stale))
-        for _ in range(100):
-            if not old.exists():
-                break
-            _time.sleep(0.05)
-        assert not old.exists()
-        assert not sweeper.done()
+    with caplog.at_level("ERROR", logger="gee_animation.webapp.app"):
+        with TestClient(app):
+            sweeper = app.state.sweeper
+            old = Path(tmp_path) / "u" / "ancient"
+            old.mkdir(parents=True)                               # created AFTER startup
+            f = old / "ancient.mp4"
+            f.write_bytes(b"\x00")
+            stale = _time.time() - 30 * 86400
+            os.utime(f, (stale, stale))
+            for _ in range(100):
+                if not old.exists():
+                    break
+                _time.sleep(0.05)
+            assert not old.exists()
+            assert not sweeper.done()
     assert sweeper.cancelled()
+    assert "did not stop" not in caplog.text                      # shutdown did not time out
+
+
+def test_shutdown_is_bounded_when_the_sweeper_will_not_stop(tmp_path, monkeypatch, caplog):
+    """A wedged sweeper must not hang the server's shutdown; it is reported instead."""
+    import asyncio
+    from gee_animation.webapp import app as app_mod
+    monkeypatch.setattr(app_mod, "SHUTDOWN_TIMEOUT_S", 0.3)
+
+    async def stubborn():
+        # Swallows cancellation, but only for a second, so the test loop can still be
+        # torn down afterwards (asyncio.run waits for every task).
+        deadline = _time.monotonic() + 1.0
+        while _time.monotonic() < deadline:
+            try:
+                await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                pass
+
+    app = _server(tmp_path)
+    start = _time.monotonic()
+    with caplog.at_level("ERROR", logger="gee_animation.webapp.app"):
+        with TestClient(app):
+            app.state.sweeper.cancel()
+            app.state.sweeper = asyncio.run_coroutine_threadsafe(
+                _spawn(stubborn), app.state.loop).result()
+    assert _time.monotonic() - start < 5
+    assert "did not stop" in caplog.text
+
+
+async def _spawn(coro_fn):
+    import asyncio
+    return asyncio.create_task(coro_fn())
+
+
+def test_a_sweep_that_raises_does_not_end_retention_or_stop_startup(tmp_path, monkeypatch, caplog):
+    from gee_animation.webapp import app as app_mod
+    monkeypatch.setattr(app_mod, "SWEEP_INTERVAL_S", 0.05)
+    calls = []
+
+    def flaky(root, max_age_days=14):
+        calls.append(1)
+        raise OSError("half-deleted directory")
+
+    monkeypatch.setattr(app_mod.storage, "sweep", flaky)
+    app = _server(tmp_path)
+    with caplog.at_level("ERROR", logger="gee_animation.webapp.app"):
+        with TestClient(app):                                     # startup sweep raised too
+            for _ in range(100):
+                if len(calls) >= 4:
+                    break
+                _time.sleep(0.05)
+            assert len(calls) >= 4 and not app.state.sweeper.done()
+    assert "retention sweep failed" in caplog.text
+
+
+def test_a_failed_startup_does_not_leak_the_last_resort_filter(tmp_path, monkeypatch):
+    import logging
+    from gee_animation.webapp import app as app_mod
+    before = list(logging.lastResort.filters)
+
+    def boom(*a, **k):
+        raise RuntimeError("startup failed")
+
+    monkeypatch.setattr(app_mod.logsafe, "install", boom)
+    with pytest.raises(RuntimeError):
+        with TestClient(_server(tmp_path)):
+            pass
+    assert list(logging.lastResort.filters) == before
 
 
 def test_a_child_logger_record_that_falls_to_last_resort_is_redacted(tmp_path, monkeypatch):
