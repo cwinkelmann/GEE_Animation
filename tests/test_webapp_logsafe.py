@@ -1,4 +1,5 @@
 # tests/test_webapp_logsafe.py
+import io
 import logging
 
 from gee_animation.webapp.logsafe import RedactingFilter, install
@@ -20,6 +21,26 @@ def test_redaction_covers_the_exception_text_too(caplog):
     with caplog.at_level(logging.ERROR, logger="test.redact2"):
         log.error("failed: %s", RuntimeError("bad token tok-ABC"))
     assert "tok-ABC" not in "\n".join(r.getMessage() for r in caplog.records)
+
+
+def test_a_secret_logged_on_a_child_logger_is_redacted_before_the_parents_handler():
+    # Own StringIO handler on the parent, not caplog: the assertion then reads
+    # exactly what the parent's handler wrote, via the propagation path.
+    parent = logging.getLogger("test.propagate")
+    parent.setLevel(logging.INFO)
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    parent.addHandler(handler)
+    try:
+        install(parent, lambda: ["child-SECRET-VALUE"])
+        logging.getLogger("test.propagate.child").info(
+            "token is child-SECRET-VALUE"
+        )
+    finally:
+        parent.removeHandler(handler)
+    written = buffer.getvalue()
+    assert "child-SECRET-VALUE" not in written
+    assert "token is ***" in written
 
 
 def test_messages_without_secrets_are_untouched(caplog):

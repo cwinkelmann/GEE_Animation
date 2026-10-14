@@ -21,6 +21,15 @@ class RedactingFilter(logging.Filter):
 
 
 def install(logger: logging.Logger, secrets) -> RedactingFilter:
+    """Attach a redacting filter to ``logger`` and to every handler it has now.
+
+    Logger filters run only for records logged directly on ``logger``; records
+    from child loggers reach the handlers without passing through it. Handler
+    filters run for every record that reaches the handler, so they catch the
+    propagated ones. Handlers added after this call are not covered.
+    """
     f = RedactingFilter(secrets)
     logger.addFilter(f)
+    for handler in logger.handlers:
+        handler.addFilter(f)
     return f
