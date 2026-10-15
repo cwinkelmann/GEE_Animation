@@ -1,0 +1,68 @@
+# The presentable LST cut, built entirely from CACHED imagery.
+#
+# Same harmonic model and the same viz RANGE as
+# wne_lst_harmonic_2018_2026 -- only client-side settings differ
+# (palette, interpolation, fps, quality), so this costs no Earth Engine
+# compute at all. viz min/max is deliberately left at 15-45 because the
+# range is sent to Earth Engine and changing it would refetch every
+# frame; the PALETTE is applied locally and is free.
+name: wne_lst_pretty_2018_2026
+project: hnee-331218
+title: Grumsin Beech Forest
+subtitle: "Surface temperature \xB7 harmonic seasonal model"
+aoi:
+  frame:
+    bbox:
+    - 13.7311
+    - 52.944
+    - 14.0623
+    - 53.028
+  region:
+    shapefile: docs/aoi/wne/wne.shp
+  region_max_cloud_percent: 20
+start: '2018-01-01'
+end: '2026-08-01'
+sensor: landsat
+index: lst
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+missions:
+- L8
+- L9
+viz:
+  min: 15.0
+  max: 45.0
+  palette:
+  - '#30123b'
+  - '#4145ab'
+  - '#4675ed'
+  - '#39a2fc'
+  - '#1bcfd4'
+  - '#24eca6'
+  - '#61fc6c'
+  - '#a4fc3b'
+  - '#d1e834'
+  - '#f3c63a'
+  - '#fe9b2d'
+  - '#f36315'
+  - '#d93806'
+  - '#b11901'
+  - '#7a0402'
+render:
+  fps: 6
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 10
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: '16:9'
+  upscale: lanczos
+  region_line_width: 5
+  quality: 9
+  raw_frames: false
+  geotiffs: false
+metadata: false
+smooth: harmonic
+harmonics: 2

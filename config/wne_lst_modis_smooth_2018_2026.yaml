@@ -1,0 +1,49 @@
+# MODIS daily surface temperature, smoothed for viewing.
+#
+# Identical data to wne_cinema_lst_modis_2018_2026 -- only the
+# presentation differs, so this re-renders entirely from cache.
+# lanczos upscaling blurs the 1 km cells instead of showing them as
+# blocks; the frame still states '1 km' in the subtitle, so the
+# resolution is declared even though the pixels are smoothed.
+#
+# MODIS covers 103 of 103 months here (Landsat manages 69), so this
+# is the gap-free thermal cut -- coarse, but never missing.
+name: wne_lst_modis_smooth_2018_2026
+project: hnee-331218
+title: Grumsin Beech Forest
+subtitle: "Daily MODIS thermal, 1 km \xB7 smoothed for viewing"
+aoi:
+  frame:
+    bbox:
+    - 13.7311
+    - 52.944
+    - 14.0623
+    - 53.028
+  region:
+    shapefile: docs/aoi/wne/wne.shp
+  region_max_cloud_percent: 20
+start: '2018-01-01'
+end: '2026-08-01'
+sensor: modis_lst
+index: lst_modis
+cadence: monthly
+max_cloud_percent: 100
+draw_region: true
+viz:
+  min: -3
+  max: 46
+render:
+  fps: 4
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 1000
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: '16:9'
+  upscale: lanczos
+  region_line_width: 5
+  quality: 8
+  raw_frames: true
+  geotiffs: true
+metadata: true
