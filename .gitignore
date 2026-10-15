@@ -14,3 +14,21 @@ venv/
 deploy/.env
 deploy/*.key
 deploy/*.crt
+
+# per-developer tooling state (.idea itself is tracked; these two are local churn)
+.claude/settings.local.json
+.claude/worktrees/
+.idea/misc.xml
+.idea/copilot.data.migration.*.xml
+/.playwright-mcp/
+
+# run artefacts: Gradio uploads and presets, fetched data, logs, mkdtemp scratch
+/data/
+/gradio/
+/logs/
+/gee_preset_*/
+/tmp*
+
+# Generated per-property snow configs: they carry street addresses and
+# coordinates from a local property DB, which are not this repo's data.
+/config/hemnet_snow/
