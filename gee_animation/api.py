@@ -164,14 +164,17 @@ def animate(region, *, sensor="landsat", index="lst", start, end,
             buffer_m=1000.0, preset="1080p", aspect="match", fps=2,
             region_max_cloud_percent=60.0, max_cloud_percent=80.0,
             out_dir="out", project="hnee-331218", name=None, write_metadata=True,
-            chart=True, deps=DEFAULT_DEPS) -> Animation:
+            chart=True, geotiffs=False, deps=DEFAULT_DEPS) -> Animation:
     """Build one animation in a single call. Authenticate first via ``auth.init``.
 
     `region` is a GeoJSON path/dict, a ``.shp`` path, or a ``[w, s, e, n]`` bbox. The
     animation frame is the region's bounding box grown by `buffer_m`. `preset` upscales
     the native-resolution imagery to a real screen size (so LST/MODIS aren't tiny);
-    pass ``preset=None`` for a raw native-resolution render. Returns an :class:`Animation`
-    that plays inline in a notebook and carries the output paths.
+    pass ``preset=None`` for a raw native-resolution render. ``geotiffs=True`` also
+    exports every observed frame as a georeferenced GeoTIFF of the composited values
+    (``<out_dir>/geotiffs/<name>/``) — the numbers behind the picture, for GIS and
+    analysis. Returns an :class:`Animation` that plays inline in a notebook and carries
+    the output paths.
     """
     get_product(sensor, index)                      # validate the pair up front
     region_aoi = _to_region_aoi(region)
@@ -191,7 +194,7 @@ def animate(region, *, sensor="landsat", index="lst", start, end,
         viz_min=viz_min, viz_max=viz_max, palette=list(palette) if palette else [],
         fps=float(fps), scale=_SCALE.get(sensor, 30), dimensions=768,
         preset=preset, aspect=aspect, upscale="lanczos", out_dir=out_dir,
-        draw_region=True, metadata=bool(write_metadata))
+        draw_region=True, metadata=bool(write_metadata), geotiffs=bool(geotiffs))
     cfg.validate()   # RunConfig is built directly here, so from_yaml's check is skipped
 
     frames = deps.monthly_median(deps.build(cfg, frame_geom, region_geom), cfg)
