@@ -3,12 +3,13 @@
 Companion to the spec (`2026-10-14-multiuser-webapp-design.md`) and plan
 (`../plans/2026-10-14-multiuser-webapp.md`). Those two say what was intended; this says what
 was **built**, what was **decided along the way**, and what is **still open**. Written at the
-end of implementation so the decisions outlive the session that made them.
+end of implementation so the decisions outlive the session that made them. The long form — every
+review report and all 64 rulings — is in `../reviews/2026-10-14-multiuser-webapp/`.
 
 ## State
 
-45 commits off `main` (`c74da2e`), 32 files, +6729/−24. Unit suite **899 passed, 1 skipped,
-2 deselected, 1 warning** (730 before this branch). `tests/test_gui.py` unchanged throughout,
+46 commits off `main` (`c74da2e`) at the end of implementation, 32 files, +6729/−24.
+Unit suite **899 passed, 1 skipped, 2 deselected, 1 warning** (730 before this branch). `tests/test_gui.py` unchanged throughout,
 82 green. The suite is network-free; the one live-Earth-Engine test stays behind the
 `integration` marker and `GEE_INTEGRATION`.
 
