@@ -14,3 +14,7 @@ venv/
 deploy/.env
 deploy/*.key
 deploy/*.crt
+
+# Per-property snow configs: generated from a local property DB,
+# they carry street addresses and coordinates.
+config/property_snow/

@@ -1,0 +1,39 @@
+# MODIS daily snow cover (MOD10A1 Terra, 500 m) over Värmland + Dalsland.
+#
+# Frame value = MEAN NDSI snow cover (%) over the month's clear-sky, usable-QA
+# days (products._snow_cover / _mean_period). Switch `index: snow_days` for the
+# share of clear-sky days with >= 30 % snow (0-1) instead, and
+# `sensor: modis_snow_terra_aqua` to add the Aqua afternoon pass (more clear
+# looks, higher winter sun).
+#
+# Winter gap: at 59-61 N Terra's ~10:30 overpass sees the sun only a few
+# degrees above the horizon in Dec-Jan, so much of those months is flagged
+# night/low-sun and masked. Such pixels render as the usual no-data grey; a
+# month with no scenes at all is skipped (no frame), never an error.
+#
+# region == frame: there is no single site of interest here, so the cloud
+# filter judges the whole frame and no outline is drawn. 100 keeps every scene
+# that is not cloud over the ENTIRE frame — with daily data the per-pixel
+# monthly mean, not scene selection, is what removes cloud.
+name: snow_varmland
+project: hnee-331218
+title: "Snow cover · Värmland & Dalsland"
+subtitle: "MODIS Terra daily, 500 m · monthly mean over clear-sky days"
+
+aoi:
+  frame:  { bbox: [11.5, 58.7, 14.8, 60.6] }   # 14.8 E reaches the eastern edge of the region
+  region: { bbox: [11.5, 58.7, 14.8, 60.6] }
+  region_max_cloud_percent: 100
+
+sensor: modis_snow
+index: snow_cover
+start: "2021-10-01"
+end: "2026-06-01"                 # exclusive: last frame is May 2026
+cadence: monthly
+max_cloud_percent: 100            # ignored for MODIS (no per-scene cloud metadata)
+draw_region: false
+# viz defaults to 0..100 % with the dark-ground -> ice-blue snow palette.
+
+# preset: fetch at native GSD (~370 x 420 px for this frame at 500 m), then
+# upscale smoothly to 1080p.
+render: { workers: 2, fps: 2, scale: 500, dimensions: 512, crs: auto, preset: 1080p }
