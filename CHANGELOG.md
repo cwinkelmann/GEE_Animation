@@ -3,6 +3,18 @@
 Notable changes to `gee_animation`. Versions follow [semantic versioning](https://semver.org):
 the minor number moves when something is added, the patch number when something is fixed.
 
+## Unreleased
+
+### Added
+
+- `animate(geotiffs=True)` exports every observed frame as a georeferenced GeoTIFF
+  of the composited values (`<out_dir>/geotiffs/<name>/`) alongside the animation —
+  the numbers behind the picture, for GIS and analysis. The default stays off, so
+  nothing changes for existing callers.
+- Two notebooks: one GeoJSON polygon and one month in, one image plus its GeoTIFF
+  out (`single_view_from_geojson`), and what it takes to implement your own index
+  (`custom_index`).
+
 ## 0.2.0 — 2026-10-15
 
 First tagged release. The repository carried `0.1.0` from its first commit and was never

@@ -15,6 +15,10 @@ deploy/.env
 deploy/*.key
 deploy/*.crt
 
+# Per-property snow configs: generated from a local property DB,
+# they carry street addresses and coordinates.
+config/property_snow/
+
 # per-developer tooling state (.idea itself is tracked; these two are local churn)
 .claude/settings.local.json
 .claude/worktrees/
@@ -27,8 +31,4 @@ deploy/*.crt
 /gradio/
 /logs/
 /gee_preset_*/
-/tmp*
-
-# Generated per-property snow configs: they carry street addresses and
-# coordinates from a local property DB, which are not this repo's data.
-/config/hemnet_snow/
+/tmp*/
