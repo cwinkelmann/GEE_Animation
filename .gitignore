@@ -18,6 +18,9 @@ deploy/*.crt
 # Per-property snow configs: generated from a local property DB,
 # they carry street addresses and coordinates.
 config/property_snow/
+# Where the same generator wrote before it was generalised. Nothing produces
+# this any more, but existing working copies still hold those files.
+config/hemnet_snow/
 
 # per-developer tooling state (.idea itself is tracked; these two are local churn)
 .claude/settings.local.json
