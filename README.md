@@ -411,6 +411,8 @@ pytest -m "not integration"          # fast unit tests (no network)
 GEE_INTEGRATION=1 pytest -m integration   # live EE test (needs auth)
 ```
 
+Release history: [CHANGELOG.md](CHANGELOG.md).
+
 ## Service Account Setup
 
 For headless / containerized use (see [Docker](#docker)) Earth Engine
