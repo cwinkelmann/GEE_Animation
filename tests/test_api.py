@@ -121,3 +121,19 @@ def test_animation_repr_html_embeds_video(tmp_path):
                          metadata_db=None, status="done")
     html = anim._repr_html_()
     assert "<video" in html and "data:video/mp4;base64," in html and "done" in html
+
+
+def test_animate_geotiffs_default_off_and_opt_in(tmp_path):
+    """`geotiffs=True` reaches the RunConfig, so a single call can also export the
+    composited values for GIS/analysis (the notebook's "same month as data" step)."""
+    captured = {}
+    api.animate([0, 0, 1, 1], sensor="sentinel2", index="ndvi",
+                start="2023-06-01", end="2023-07-01", out_dir=str(tmp_path),
+                deps=_fake_deps(tmp_path, captured))
+    assert captured["cfg"].geotiffs is False          # unchanged default
+
+    captured = {}
+    api.animate([0, 0, 1, 1], sensor="sentinel2", index="ndvi",
+                start="2023-06-01", end="2023-07-01", out_dir=str(tmp_path),
+                geotiffs=True, deps=_fake_deps(tmp_path, captured))
+    assert captured["cfg"].geotiffs is True
