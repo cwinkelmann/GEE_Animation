@@ -19,7 +19,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4"]
+# pytest-asyncio: tests/test_webapp_jobs.py marks 22 `async def` tests with
+# @pytest.mark.asyncio. Without the plugin pytest does not run them — it errors
+# them with "async def functions are not natively supported", so a machine that
+# merely happened to have it installed was the only place the job queue was
+# ever tested. Strict mode (the default) is what we want: the markers are explicit.
+dev = ["pytest>=7.4", "pytest-asyncio>=0.23"]
 notebook = ["jupyter>=1.0", "ipykernel>=6.0", "nbformat>=5.9", "matplotlib>=3.5"]
 shapefile = ["geopandas>=0.14"]
 gui = ["gradio>=4"]
