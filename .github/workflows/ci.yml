@@ -1,0 +1,38 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch supersedes the run still in flight.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # The version the package is developed against; pyproject's floor is 3.10.
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install the package and every extra the tests import
+        # rasterio (ml) and fastapi (server) are imported at module level in
+        # tests/test_sharpen_local.py and tests/test_webapp_*.py, so without
+        # them the suite does not even collect. gradio (gui) and geopandas
+        # (shapefile) sit behind pytest.importorskip, so leaving them out would
+        # not fail — it would silently skip their tests, which is worse.
+        run: pip install -e ".[dev,gui,server,ml,shapefile]"
+
+      - name: Unit tests
+        # The one integration test hits live Earth Engine and needs credentials
+        # no runner has. It is deselected by its marker, not skipped by luck.
+        run: python -m pytest -m "not integration" -q
