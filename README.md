@@ -3,9 +3,9 @@
 Generate annotated satellite index timelapses (MP4 + GIF) from Google Earth Engine
 imagery (Sentinel-2 or Landsat), assembled frame-by-frame locally.
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cwinkelmann/GEE_Animation/blob/main/notebooks/colab_gee_animation.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cwinkelmann/GEE_Animation/blob/prerelease/single-user-intro/notebooks/01_first_timelapse.ipynb)
 
-No local install needed — **[run it in Google Colab](https://colab.research.google.com/github/cwinkelmann/GEE_Animation/blob/main/notebooks/colab_gee_animation.ipynb)** (builds any index's animation + diagram from your browser).
+No local install needed — **[run it in Google Colab](https://colab.research.google.com/github/cwinkelmann/GEE_Animation/blob/prerelease/single-user-intro/notebooks/01_first_timelapse.ipynb)** (builds any index's animation + diagram from your browser).
 
 ## Install
 
@@ -20,7 +20,7 @@ pip install -e ".[dev,notebook]"              # package + deps into this env
 earthengine authenticate                      # one-time; or the tool prompts on first run
 ```
 
-Run the notebook (`notebooks/colab_gee_animation.ipynb`) with the `GEE_animation`
+Run the notebook (`notebooks/01_first_timelapse.ipynb`) with the `GEE_animation`
 environment selected as the kernel — or open it directly in Colab via the badge above.
 
 ## Usage
