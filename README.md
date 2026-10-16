@@ -218,8 +218,8 @@ docker run --rm -p 7860:7860 \
 ```
 
 This is a **single-operator deployment**: the container answers on `0.0.0.0:7860`
-with no authentication, and every render runs under the one service-account
-identity baked into `EE_PROJECT` — whoever reaches the port renders on that quota
+with no authentication, and every render runs under the operator's service
+account and its `EE_PROJECT` — whoever reaches the port renders on that quota
 and sees everyone's runs. Fine for one trusted operator on a private network; not
 for a group. The [multi-user server](docs/multiuser-server.md) is the successor
 built to fix exactly this.
