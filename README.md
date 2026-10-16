@@ -23,6 +23,23 @@ earthengine authenticate                      # one-time; or the tool prompts on
 Run the notebook (`notebooks/01_first_timelapse.ipynb`) with the `GEE_animation`
 environment selected as the kernel — or open it directly in Colab via the badge above.
 
+## Notebooks
+
+A guided series — read in order, or jump in; every notebook runs in Colab (badge
+inside) or locally, and ends with ways to make the workflow yours:
+
+| # | Notebook | What you learn |
+|---|---|---|
+| 00 | [Setup](notebooks/00_setup.ipynb) | your own Earth Engine project, auth, a smoke render |
+| 01 | [First timelapse](notebooks/01_first_timelapse.ipynb) | `animate()` end to end |
+| 02 | [The Gradio app](notebooks/02_gradio_app.ipynb) | the UI locally, on a server, and as a Colab demo |
+| 03 | [Gridded LST](notebooks/03_gridded_lst.ipynb) | native resolution, `pixel_grid`, config files |
+| 04 | [LST re-sharpening](notebooks/04_lst_sharpening.ipynb) | the 100 m → 20 m random forest, offline on real data |
+| 05 | [Build your own index](notebooks/05_build_your_own_index.ipynb) | from formula to registered product |
+
+Extras: [ndvi_timelapse](notebooks/ndvi_timelapse.ipynb) (the pipeline step by step),
+[single_view_from_geojson](notebooks/single_view_from_geojson.ipynb) (one month, one image + GeoTIFF).
+
 ## Usage
 
 ```bash
@@ -200,6 +217,13 @@ docker run --rm -p 7860:7860 \
   gee-timelapse
 ```
 
+This is a **single-operator deployment**: the container answers on `0.0.0.0:7860`
+with no authentication, and every render runs under the one service-account
+identity baked into `EE_PROJECT` — whoever reaches the port renders on that quota
+and sees everyone's runs. Fine for one trusted operator on a private network; not
+for a group. The [multi-user server](docs/multiuser-server.md) is the successor
+built to fix exactly this.
+
 The container runs as uid 10001, not root, and inside the image `/data/out` and
 `/data/cache` are owned by that uid. On Linux this has two consequences: a mounted
 credential file that is mode 600 and owned by you is unreadable inside the container, and
@@ -249,62 +273,8 @@ docker run --rm -p 7860:7860 \
 
 ## Multi-user server
 
-`gee-animation-server` hosts the same Gradio app for many people at once, behind Google
-sign-in. Each person authorises Earth Engine with their own Google account and renders
-against their own Cloud project; renders run as isolated worker subprocesses, queued
-behind a shared cap. The stack in `deploy/` (app + Caddy for TLS) is meant for
-`carrot.aisl.c4ds.hnee.de`, which is reachable only from the HNEE VPN.
-
-**Prerequisites**
-
-1. A certificate browsers trust. Let's Encrypt HTTP-01 cannot reach a VPN-only host. The
-   working default: obtain a cert and key for `carrot.aisl.c4ds.hnee.de` from the HNEE
-   internal CA (or any browser-trusted source), put them in `deploy/` as `carrot.crt` and
-   `carrot.key`, and uncomment the two matching volume lines in `deploy/compose.yaml`.
-   For automated renewal instead, use DNS-01: build Caddy with your DNS provider's plugin
-   via `xcaddy` (the stock `caddy:2` image cannot), put `DNS_API_TOKEN` in `deploy/.env`,
-   and switch the `tls` line in `deploy/Caddyfile` as its comments describe.
-2. A Google OAuth client whose consent screen is **Internal**, or External in testing
-   mode with `hnee.de` verified and at most 100 named test users. Its authorised redirect
-   URI is `https://carrot.aisl.c4ds.hnee.de/oauth2/callback`.
-
-**Per-user setup.** Every user needs their own Google Cloud project with the Earth Engine
-API enabled and registered for Earth Engine. The project field in the UI starts
-**empty**; each person types their own project id there. Nothing is billed to HNEE's
-project.
-
-**Deploy**
-
-```bash
-cd deploy
-cp .env.example .env && chmod 600 .env   # fill in the OAuth client and cookie secret
-docker compose up -d --build
-```
-
-The app reads `GEE_OAUTH_CLIENT_ID`, `GEE_OAUTH_CLIENT_SECRET`, `GEE_OAUTH_REDIRECT_URI`
-(set by `compose.yaml`) and `GEE_COOKIE_SECRET`, all required, plus the optional
-`GEE_OUTPUT_DIR`, `GEE_ANIMATION_CACHE_DIR` and `GEE_FORWARDED_ALLOW_IPS`. `deploy/.env`
-is git-ignored; never commit it. `EE_PROJECT` (set in the image for the single-user
-container) has no effect in server mode, because each user supplies their own project.
-
-**Limits** (defaults in `AppConfig`): at most 3 renders run at once (others wait in the
-queue), uploads up to 100 MB, an animation spans at most 12 years and at most 1440p, and
-every run directory (finished or not) is deleted after 14 days. Renders are long (a
-ten-year monthly animation can take tens of minutes to hours), so one render may run for
-up to 4 hours (`GEE_JOB_TIMEOUT_S`, default 14400) before its worker is killed, and the
-Caddyfile allows matching 4-hour proxy timeouts. Gradio's copies of returned files live in
-`GRADIO_TEMP_DIR` (`/data/cache/gradio-tmp`, set by the compose service — not by the image,
-which also serves the single-operator GUI, where nothing would reclaim them) and are swept
-on the same schedule. A sign-in lasts 7 days; **Stop all my renders** cancels your own
-queued and running renders — all of them, and only yours — and frees the slots at once.
-The compose service has a healthcheck but **no memory limit**: a ceiling below a render's
-real peak would OOM-kill it hours in, which is worse than no ceiling, so `mem_limit` is
-left commented out in `deploy/compose.yaml` with a note on sizing it from an observed run.
-
-> Renders run as subprocesses on a shared machine. Anyone with Docker access on carrot
-> can read a running worker's memory, which briefly holds your Google refresh token.
-> Use the server only if you accept that; no credential is ever written to disk
-> (uploaded AOIs and finished renders are, until the retention sweep removes them).
+Moved to [docs/multiuser-server.md](docs/multiuser-server.md) — this README
+describes the single-user tool.
 
 ## Configuration
 
