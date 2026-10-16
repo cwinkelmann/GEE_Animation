@@ -3,7 +3,7 @@
 Notable changes to `gee_animation`. Versions follow [semantic versioning](https://semver.org):
 the minor number moves when something is added, the patch number when something is fixed.
 
-## Unreleased
+## 0.3.0 — 2026-10-16
 
 ### Added
 
