@@ -1762,14 +1762,24 @@ def test_colorbar_ticks_zero_dedupes_with_midpoint():
 
 
 def test_colorbar_drops_mid_label_on_narrow_ramp():
-    # Genuinely narrow: bar_w == 80px (comparable to the brief's own "dimensions: 256
-    # -> ~100px bar" example), with the default LST range — the reviewer-verified
-    # real-world case where the mid ("15") label collides with its neighbours. (Width
-    # re-derived for the bundled DejaVu font: its glyphs are narrower than Pillow's
-    # own default, so the same collision needs more of the ramp to reproduce -- at
-    # the old 160px width "15" no longer collides with anything.)
-    from gee_animation.render import _annot_scale, _colorbar_ticks
-    w, h = 200, 300
+    # Genuinely narrow: bar_w == 40px (the brief's own "dimensions: 256 -> ~100px
+    # bar" example is the comparable real-world case), with the default LST range,
+    # where the mid ("15") label overlaps BOTH range ends and no text shaper can
+    # make room for it.
+    #
+    # This width is deliberately far from the collision threshold, because the
+    # threshold is only as wide as `gap` (2px here) and that is not enough to
+    # survive a change of text shaper. At the bar_w == 80 this test used to
+    # assert, "40 °C" measures 32px wide with FreeType alone (macOS) and 31px
+    # with HarfBuzz via Raqm, which Pillow's manylinux wheel bundles (Linux) —
+    # one pixel, and "15" stops colliding and gets drawn. So assert the dropping
+    # DECISION and the collision premise that forces it, not the presence of a
+    # blank gap: for the gap to be visible the neighbour must not overlap it,
+    # and for the label to drop the neighbour must be within `gap` of it, which
+    # pins the usable window to `gap` pixels no matter which width is chosen.
+    from gee_animation.render import (_annot_scale, _colorbar_ticks,
+                                      _resolve_droppables)
+    w, h = 100, 300
     rgb = np.zeros((h, w, 3), np.uint8)
     cfg = types.SimpleNamespace(index="lst", viz_min=-10.0, viz_max=40.0,
                                 palette=["#0000ff", "#ff0000"])
@@ -1798,17 +1808,26 @@ def test_colorbar_drops_mid_label_on_narrow_ramp():
     def _x(v):
         return x0 + (v - (-10.0)) / (40.0 - (-10.0)) * bar_w
 
-    min_lo, min_hi = _bounds("-10", _x(-10.0), "l")
-    mid_lo, mid_hi = _bounds("15", _x(15.0), "m")
-    max_lo, max_hi = _bounds("40 °C", _x(40.0), "r")
+    bounds = [_bounds(label, _x(v), anchor) for v, label, anchor, _d in ticks]
+    (min_lo, min_hi), _zero, (mid_lo, mid_hi), (max_lo, max_hi) = bounds
+    gap = max(2, lw * 2)   # add_colorbar's own clearance
+
+    # The premise, measured rather than assumed: "15" overlaps both ends, with
+    # pixels to spare on each side, so a shaper that measures a character or two
+    # differently cannot turn this into a fit.
+    assert mid_lo - gap < min_hi and mid_hi + gap > max_lo
+
+    # The decision: both droppables yield, the two range ends always draw.
+    assert _resolve_droppables(ticks, bounds, gap) == [True, False, False, True]
 
     band = out[text_y:text_y + 40]
-    # min and max labels survive...
+    # min and max labels are on the frame...
     assert band[:, int(min_lo):int(min_hi) + 1].sum() > 0
     assert band[:, int(max_lo):int(max_hi) + 1].sum() > 0
-    # ...but the mid label was dropped: its own (inset, to dodge rounding at the
-    # boundary with the neighbouring label) columns are untouched.
-    assert band[:, int(mid_lo) + 1:int(mid_hi)].sum() == 0
+    # ...and nothing was drawn outside the span those two occupy, so neither
+    # dropped label was quietly painted somewhere else.
+    ink = np.nonzero(band.sum(axis=(0, 2)))[0]
+    assert ink.min() >= int(min_lo) - 1 and ink.max() <= int(max_hi) + 1
 
 
 def test_thumb_params_preserve_aspect_ratio():
