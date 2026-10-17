@@ -32,6 +32,11 @@ jobs:
         # not fail — it would silently skip their tests, which is worse.
         run: pip install -e ".[dev,gui,server,ml,shapefile]"
 
+      - name: Notebook hygiene
+        # every tracked notebook parses, has no stored outputs or execution
+        # counts, and no code cell hardcodes the operator's EE project
+        run: python scripts/check_notebooks.py
+
       - name: Unit tests
         # The one integration test hits live Earth Engine and needs credentials
         # no runner has. It is deselected by its marker, not skipped by luck.

@@ -3,7 +3,7 @@
 Notable changes to `gee_animation`. Versions follow [semantic versioning](https://semver.org):
 the minor number moves when something is added, the patch number when something is fixed.
 
-## Unreleased
+## 0.3.0 — 2026-10-16
 
 ### Added
 
@@ -14,6 +14,13 @@ the minor number moves when something is added, the patch number when something 
 - Two notebooks: one GeoJSON polygon and one month in, one image plus its GeoTIFF
   out (`single_view_from_geojson`), and what it takes to implement your own index
   (`custom_index`).
+- A numbered teaching notebook series written for students — `00_setup` (your own
+  Earth Engine project), `01_first_timelapse`, `02_gradio_app`, `03_gridded_lst`,
+  `04_lst_sharpening` (moved from `docs/notebooks/`), `05_build_your_own_index`
+  (renamed from `custom_index`) — each ending in extension exercises. The README
+  now leads with the series and tells the single-user story; the multi-user
+  server docs moved to `docs/multiuser-server.md`. CI enforces notebook hygiene
+  (no stored outputs, no execution counts, no hardcoded operator project).
 
 ## 0.2.0 — 2026-10-15
 
