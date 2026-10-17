@@ -753,7 +753,8 @@ def build_app(context=None):
             with gr.Row():
                 preset_name = gr.Dropdown(
                     presets.PRESET_CHOICES, value=presets.NO_PRESET, label="Preset", scale=4,
-                    info="The Tegel cuts: native 100 m thermal (harmonic seasonal model), "
+                    info="Three sites (Tegel R12, Tegel R13, Grumsin), three editions each: "
+                         "native 100 m thermal (harmonic seasonal model), "
                          "the same with the 100 m grid drawn on, and the RF-sharpened 20 m "
                          "edition with locally trained forests. Applying a preset overwrites "
                          "every control below; edit afterwards as you like.")

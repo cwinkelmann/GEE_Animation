@@ -249,7 +249,8 @@ def test_preset_values_are_run_animation_keywords():
 
 
 @pytest.mark.parametrize("name", ["Tegel R12 · native 100 m", "Tegel R12 · 100 m grid",
-                                  "Tegel R12 · RF-sharpened", "Tegel R13 · RF-sharpened"])
+                                  "Tegel R12 · RF-sharpened", "Tegel R13 · RF-sharpened",
+                                  "Grumsin · native 100 m", "Grumsin · RF-sharpened"])
 def test_presets_build_the_matching_config(tmp_path, name):
     from gee_animation import presets
     captured = {}
@@ -267,6 +268,7 @@ def test_presets_build_the_matching_config(tmp_path, name):
         assert cfg.index == "lst_rf" and cfg.sharpen == "local" and cfg.smooth is None
         assert cfg.pool_years == [2017, 2026] and cfg.pool_strategy == "gap_fill" and cfg.scale == 20
     assert ("R12" in name) == ("Tegeler Forst" in cfg.title)
+    assert ("Grumsin" in name) == ("Grumsin" in cfg.title)
 
 
 def test_apply_preset_returns_one_value_per_wired_input():
