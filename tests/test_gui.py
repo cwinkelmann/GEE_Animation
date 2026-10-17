@@ -1015,3 +1015,28 @@ def test_presets_never_carry_a_hardcoded_project():
     for name, values in presets.PRESETS.items():
         assert "project" not in values, name
         assert not any("hnee-331218" in str(v) for v in values.values()), name
+
+
+def test_zip_frames_bundles_the_runs_geotiffs(tmp_path):
+    """The download zip must deliver the GeoTIFFs the render wrote, not only PNGs."""
+    import zipfile
+    png = tmp_path / "o_2022-05.png"
+    png.write_bytes(b"png")
+    tif_dir = tmp_path / "geotiffs" / "o"
+    tif_dir.mkdir(parents=True)
+    (tif_dir / "o_2022-05.tif").write_bytes(b"tif")
+    with zipfile.ZipFile(gui._zip_frames([str(png)], tmp_path, "o")) as zf:
+        names = set(zf.namelist())
+    assert names == {"o_2022-05.png", "geotiffs/o_2022-05.tif"}
+
+
+def test_load_previous_run_zip_includes_geotiffs(tmp_path):
+    import zipfile
+    (tmp_path / "o.mp4").write_bytes(b"\x00mp4")
+    (tmp_path / "o_2022-05.png").write_bytes(b"png")
+    tif_dir = tmp_path / "geotiffs" / "o"
+    tif_dir.mkdir(parents=True)
+    (tif_dir / "o_2022-05.tif").write_bytes(b"tif")
+    *_, frames_zip, _, _ = (*gui.load_previous_run(str(tmp_path / "o.mp4")),)
+    with zipfile.ZipFile(frames_zip) as zf:
+        assert "geotiffs/o_2022-05.tif" in zf.namelist()
