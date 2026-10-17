@@ -153,11 +153,16 @@ def _mean(values):
 
 
 def _zip_frames(png_paths, out_dir, name) -> str:
-    """Bundle the per-frame PNGs into a single ``{name}_frames.zip`` for download."""
+    """Bundle the per-frame PNGs — and the run's GeoTIFFs, if any — into
+    ``{name}_frames.zip`` for download. GeoTIFFs land in ``geotiffs/<name>/``
+    on disk but have no UI component of their own, so the zip is how they
+    reach the user."""
     zip_path = Path(out_dir) / f"{name}_frames.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in png_paths:
             zf.write(p, Path(p).name)
+        for tif in sorted((Path(out_dir) / "geotiffs" / name).glob("*.tif")):
+            zf.write(tif, f"geotiffs/{tif.name}")
     return str(zip_path)
 
 # MODIS is 500 m; the optical/thermal sensors are 30 m — pick the thumbnail scale.
@@ -1053,7 +1058,7 @@ def build_app(context=None):
                 gif = gr.File(label="Animation (GIF, download)")
                 gallery = gr.Gallery(label="Frames (click to preview)", columns=4,
                                      height=200, object_fit="contain")
-                frames_zip = gr.File(label="Frames (ZIP of PNGs, download)")
+                frames_zip = gr.File(label="Frames (ZIP of PNGs + GeoTIFFs when exported)")
                 inventory_csv = gr.File(label="Scene inventory (CSV, download)")
                 chart = gr.LinePlot(x="period", y="value", color="area",
                                     x_title="Period", y_title="Index (mean)",
