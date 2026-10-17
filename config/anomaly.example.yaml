@@ -3,7 +3,7 @@
 # diagnostic — the forest shows up as a coherent thermal unit (its buffering vs the
 # fields), which a raw fixed-range LST can't show. Diverging palette by default.
 name: wne_lst_anomaly
-project: hnee-331218
+project: your-ee-project
 
 aoi:
   frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }

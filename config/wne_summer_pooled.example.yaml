@@ -15,7 +15,7 @@
 # empty (16-day repeat), and the pipeline warns about exactly that. Pooling seven years
 # of candidates fills all 15 bins, giving the smooth phenology a single year cannot.
 name: wne_summer_pooled
-project: hnee-331218
+project: your-ee-project
 
 aoi:
   frame:

@@ -1,7 +1,7 @@
 # Example config for a true-colour (RGB) Sentinel-2 composite animation.
 # Composites render 3 real bands (R=Red, G=Green, B=Blue) — no index palette.
 name: wne_rgb               # output basename -> out/wne_rgb.mp4 / .gif / _<month>.png
-project: hnee-331218
+project: your-ee-project
 
 aoi:
   frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }

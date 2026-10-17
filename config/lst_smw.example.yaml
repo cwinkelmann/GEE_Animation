@@ -3,7 +3,7 @@
 # Level-2 ST product used by `index: lst`. SMW derives LST from TOA brightness
 # temperature + ASTER-GED emissivity + NCEP water vapour (both are in °C here).
 name: wne_lst_smw           # output basename -> out/wne_lst_smw.mp4 / .gif
-project: hnee-331218        # Google Earth Engine project id
+project: your-ee-project        # Google Earth Engine project id
 
 aoi:
   frame:                         # rectangle -> animation extent (aspect ratio preserved)

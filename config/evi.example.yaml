@@ -1,6 +1,6 @@
 # Example run configuration: Sentinel-2 EVI over the WNE AOIs.
 name: wne_evi
-project: hnee-331218
+project: your-ee-project
 
 aoi:
   frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }

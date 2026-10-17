@@ -1,7 +1,7 @@
 # Example config for a colour-infrared (CIR / false-colour) Sentinel-2 composite.
 # Channels: R<-NIR, G<-Red, B<-Green. Healthy vegetation (bright in NIR) reads red.
 name: wne_cir               # output basename -> out/wne_cir.mp4 / .gif / _<month>.png
-project: hnee-331218
+project: your-ee-project
 
 aoi:
   frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }

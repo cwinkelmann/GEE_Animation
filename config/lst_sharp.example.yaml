@@ -2,7 +2,7 @@
 # NOT the real ECOSTRESS mission (which is LA-only in Earth Engine and barely
 # reaches this AOI's latitude) — see the README note.
 name: wne_lst_sharp
-project: hnee-331218
+project: your-ee-project
 
 aoi:
   frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }

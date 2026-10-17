@@ -12,7 +12,7 @@
 # Still read the borrowed frames with care: they are real observations, but from a
 # different year, so do not treat a marked frame as a measurement of this one.
 name: wne_2yr_gapfill
-project: hnee-331218
+project: your-ee-project
 
 aoi:
   frame:
