@@ -6,6 +6,7 @@ tests) load without the optional `gui` extra.
 """
 from __future__ import annotations
 
+import csv
 import logging
 import os
 import re
@@ -259,12 +260,32 @@ def _metadata_summary(db_path: Path, name: str):
     return "; ".join(bits)
 
 
-def load_previous_run(media_path):
-    """Reload a rendered run for display — ``(mp4, gif, frame_pngs, frames_zip, status)``.
+def _read_series(path: Path) -> list:
+    """``[(period, inside, outside)]`` from a run's ``<name>_stats.csv``, ``[]`` if absent."""
+    try:
+        with open(path, newline="") as f:
+            rows = list(csv.reader(f))
+    except OSError:
+        return []
+    out = []
+    for row in rows[1:]:
+        try:
+            out.append((row[0],
+                        float(row[1]) if row[1] != "" else None,
+                        float(row[2]) if row[2] != "" else None))
+        except (IndexError, ValueError):
+            return []
+    return out
 
-    Reads the media file, its sibling per-month frames, zips them, and derives a status
-    line (enriched from ``metadata.db`` when present). No Earth Engine, no network — it
-    mirrors ``run_animation``'s output shape so it drives the same UI components.
+
+def load_previous_run(media_path):
+    """Reload a rendered run — ``(mp4, gif, frame_pngs, frames_zip, status, series)``.
+
+    Reads the media file, its sibling per-month frames, zips them, derives a status
+    line (enriched from ``metadata.db`` when present), and restores the inside/outside
+    chart series from ``<name>_stats.csv`` when the run recorded one. No Earth Engine,
+    no network — it mirrors ``run_animation``'s output shape so it drives the same UI
+    components.
     """
     if not media_path:
         raise ValueError("select a previous run to load")
@@ -282,7 +303,8 @@ def load_previous_run(media_path):
     if summary:
         status.append(f"· {summary}")
     return (str(mp4) if mp4.exists() else None, str(gif) if gif.exists() else None,
-            frame_pngs, frames_zip, " ".join(status) + ".")
+            frame_pngs, frames_zip, " ".join(status) + ".",
+            _read_series(run_dir / f"{name}_stats.csv"))
 
 
 def indices_for(sensor: str) -> list:
@@ -700,6 +722,13 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
     local = cfg.sharpen == "local"
     series = ([] if (composite or local)
               else deps.timeseries(frames, region_geom, frame_geom, cfg.scale))
+    if series:
+        # Persist the chart data with the run so load_previous_run can restore it.
+        with open(Path(out_dir) / f"{cfg.name}_stats.csv", "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["period", "inside", "outside"])
+            w.writerows((p, "" if i is None else i, "" if o is None else o)
+                        for p, i, o in series)
     n_periods = len(period_starts(cfg.start, cfg.end, cfg.cadence))
     dropped = n_periods - len(frames)
     status = (f"Rendered {len(frames)} of {n_periods} {cfg.cadence} periods as "
@@ -1249,8 +1278,8 @@ def build_app(context=None):
         # Load a previously-rendered run into the same output widgets (no Earth Engine).
         def _load(sel):
             try:
-                mp4, gif_path, frame_pngs, zip_path, msg = load_previous_run(sel)
-                return mp4, gif_path, frame_pngs, zip_path, None, msg, None
+                mp4, gif_path, frame_pngs, zip_path, msg, series = load_previous_run(sel)
+                return mp4, gif_path, frame_pngs, zip_path, None, msg, _series_frame(series)
             except Exception as exc:   # surface a friendly message in the UI
                 return _error(exc)
         load.click(_load, [prev], outputs)

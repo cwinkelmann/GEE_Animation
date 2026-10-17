@@ -757,7 +757,7 @@ def test_list_previous_runs_missing_base_returns_empty(tmp_path):
 def test_load_previous_run_returns_media_frames_and_zip(tmp_path):
     d = tmp_path / "run"
     _make_run(d, "a", ["2022-01", "2022-02"])
-    mp4, gif, frames, zip_path, status = gui.load_previous_run(str(d / "a.mp4"))
+    mp4, gif, frames, zip_path, status, _series = gui.load_previous_run(str(d / "a.mp4"))
     assert mp4.endswith("a.mp4") and gif.endswith("a.gif")
     assert len(frames) == 2 and all(f.endswith(".png") for f in frames)
     assert zip_path and Path(zip_path).exists()
@@ -773,7 +773,7 @@ def test_load_previous_run_enriches_status_from_metadata(tmp_path):
     metadata.write_db(d / "metadata.db", {"name": "a", "sensor": "landsat", "index": "lst"},
                       [("2022-01", 3, 0.1, 20.0, None, None, None, None, None),
                        ("2022-02", 4, 0.0, 24.0, None, None, None, None, None)])
-    *_, status = gui.load_previous_run(str(d / "a.mp4"))
+    *_, status, _series = gui.load_previous_run(str(d / "a.mp4"))
     assert "2 months 2022-01→2022-02 in metadata" in status
     assert "mean value 22.0" in status and "range 20.0…24.0" in status   # over aoi_mean
 
@@ -783,7 +783,7 @@ def test_load_previous_run_without_metadata_and_gif_only(tmp_path):
     _make_run(d, "a", ["2022-07"], mp4=False)                      # gif only, no metadata.db
     val = [v for l, v in gui.list_previous_runs(str(tmp_path))][0]
     assert val.endswith("a.gif")
-    mp4, gif, frames, _, status = gui.load_previous_run(val)
+    mp4, gif, frames, _, status, _series = gui.load_previous_run(val)
     assert mp4 is None and gif.endswith("a.gif")
     assert "metadata" not in status and "Loaded **a**" in status
 
@@ -977,3 +977,33 @@ def test_number_value_keeps_negative_and_zero_bounds():
     assert gui._number_value(None) is None
     assert gui._number_value("") is None and gui._number_value("   ") is None
     assert gui._number_value("not a number") is None
+
+
+def test_run_animation_persists_the_chart_series(tmp_path):
+    aoi = _write_geojson(tmp_path)
+    captured = {}
+    gui.run_animation(
+        aoi_path=str(aoi), buffer_m=1000, sensor="sentinel2", index="ndvi",
+        start="2022-05-01", end="2022-07-01", out_dir=str(tmp_path),
+        deps=_fake_deps(tmp_path, captured))
+    stats = tmp_path / f"{captured['cfg'].name}_stats.csv"
+    assert stats.exists()
+    lines = stats.read_text().strip().splitlines()
+    assert lines[0] == "period,inside,outside"
+    assert len(lines) > 1 and all(l.endswith(",0.8,0.5") for l in lines[1:])
+
+
+def test_load_previous_run_restores_the_chart_series(tmp_path):
+    d = tmp_path / "run"
+    _make_run(d, "a", ["2022-01", "2022-02"])
+    (d / "a_stats.csv").write_text(
+        "period,inside,outside\n2022-01,21.5,23.0\n2022-02,22.0,24.5\n")
+    *_, series = gui.load_previous_run(str(d / "a.mp4"))
+    assert series == [("2022-01", 21.5, 23.0), ("2022-02", 22.0, 24.5)]
+
+
+def test_load_previous_run_without_stats_gives_empty_series(tmp_path):
+    d = tmp_path / "run"
+    _make_run(d, "a", ["2022-01"])
+    *_, series = gui.load_previous_run(str(d / "a.mp4"))
+    assert series == []
