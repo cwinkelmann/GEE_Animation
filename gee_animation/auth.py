@@ -23,6 +23,10 @@ def init(project: str, ee_module=ee) -> None:
     JSON key path (and optionally `EE_SERVICE_ACCOUNT` for the email); otherwise the
     cached interactive credentials are used, prompting `Authenticate()` if needed.
     """
+    if not project or not str(project).strip():
+        raise ValueError(
+            "an Earth Engine project id is required — pass your own Google Cloud "
+            "project id (registered for Earth Engine, see the setup notebook)")
     key = os.environ.get("EE_SERVICE_ACCOUNT_KEY")
     if key:
         email = os.environ.get("EE_SERVICE_ACCOUNT") or _service_account_email(key)

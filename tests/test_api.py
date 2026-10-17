@@ -137,3 +137,8 @@ def test_animate_geotiffs_default_off_and_opt_in(tmp_path):
                 start="2023-06-01", end="2023-07-01", out_dir=str(tmp_path),
                 geotiffs=True, deps=_fake_deps(tmp_path, captured))
     assert captured["cfg"].geotiffs is True
+
+
+def test_animate_has_no_implicit_project():
+    import inspect
+    assert inspect.signature(api.animate).parameters["project"].default is None

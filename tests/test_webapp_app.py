@@ -279,11 +279,15 @@ def _project_box(app):
                 and "project" in (c.label or "").lower())
 
 
-def test_server_mode_does_not_prefill_our_project_and_single_user_mode_keeps_it(tmp_path):
+def test_no_mode_prefills_our_project_and_single_user_reads_the_env(tmp_path, monkeypatch):
     from gee_animation.gui import build_app
+    monkeypatch.setenv("EE_PROJECT", "my-ee-project")
     server = _project_box(build_app(context=_server(tmp_path).state.context))
+    # server mode: each user has their own project, even a deployment env var is ignored
     assert server.value in ("", None) and "own" in server.label.lower()
-    assert _project_box(build_app()).value == "hnee-331218"
+    assert _project_box(build_app()).value == "my-ee-project"
+    monkeypatch.delenv("EE_PROJECT")
+    assert _project_box(build_app()).value in ("", None)
 
 
 def test_server_mode_preset_application_does_not_refill_the_project(tmp_path):

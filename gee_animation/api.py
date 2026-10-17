@@ -163,7 +163,7 @@ def _to_region_aoi(region) -> dict:
 def animate(region, *, sensor="landsat", index="lst", start, end,
             buffer_m=1000.0, preset="1080p", aspect="match", fps=2,
             region_max_cloud_percent=60.0, max_cloud_percent=80.0,
-            out_dir="out", project="hnee-331218", name=None, write_metadata=True,
+            out_dir="out", project=None, name=None, write_metadata=True,
             chart=True, geotiffs=False, deps=DEFAULT_DEPS) -> Animation:
     """Build one animation in a single call. Authenticate first via ``auth.init``.
 

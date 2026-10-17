@@ -23,7 +23,6 @@ _SITE_COMMON = dict(
     fps=6, dimensions=1440, preset="1080p", aspect="match", quality="9", write_gif=False,
     interpolate=10, interpolate_mode="auto", min_scenes=1, raw_frames=True,
     viz_min=15.0, viz_max=45.0, missions=["L8", "L9"], crs_choice="auto (UTM zone of the AOI — square pixels)",
-    project="hnee-331218",
 )
 
 _SITES = {

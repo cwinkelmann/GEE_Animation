@@ -44,3 +44,14 @@ def test_init_falls_back_to_interactive_without_service_account(monkeypatch):
     auth.init("proj", ee_module=ee)
     assert ee.rec["init"] == (None, "proj")   # Initialize(project=...) only
     assert "sa" not in ee.rec and "auth" not in ee.rec
+
+
+def test_init_requires_a_project(monkeypatch):
+    """A blank project must fail loudly before any Earth Engine call."""
+    import pytest
+    monkeypatch.delenv("EE_SERVICE_ACCOUNT_KEY", raising=False)
+    ee = _FakeEE()
+    for blank in (None, "", "   "):
+        with pytest.raises(ValueError, match="project"):
+            auth.init(blank, ee_module=ee)
+    assert ee.rec == {}

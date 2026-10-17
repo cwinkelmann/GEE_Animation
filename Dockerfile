@@ -20,8 +20,9 @@ RUN pip install --no-cache-dir ".[gui,shapefile,ml,server]"
 
 # Bind Gradio to all interfaces so the app is reachable from the host.
 ENV GRADIO_SERVER_NAME=0.0.0.0 \
-    GRADIO_SERVER_PORT=7860 \
-    EE_PROJECT=hnee-331218
+    GRADIO_SERVER_PORT=7860
+# EE_PROJECT (the quota project pre-filled in the GUI) is deployment-specific:
+# pass it at run time, e.g.  docker run -e EE_PROJECT=<your-project> ...
 EXPOSE 7860
 
 # Non-root; /data holds renders (GEE_OUTPUT_DIR) and the frame cache. The multi-user

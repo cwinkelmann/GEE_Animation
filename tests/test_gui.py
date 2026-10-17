@@ -1007,3 +1007,11 @@ def test_load_previous_run_without_stats_gives_empty_series(tmp_path):
     _make_run(d, "a", ["2022-01"])
     *_, series = gui.load_previous_run(str(d / "a.mp4"))
     assert series == []
+
+
+def test_presets_never_carry_a_hardcoded_project():
+    """Students render under their own EE project; ours must not ship in the code."""
+    from gee_animation import presets
+    for name, values in presets.PRESETS.items():
+        assert "project" not in values, name
+        assert not any("hnee-331218" in str(v) for v in values.values()), name

@@ -591,7 +591,7 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
 
 def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
                   region_max_cloud_percent=10.0, max_cloud_percent=60.0,
-                  fps=4, dimensions=768, project="hnee-331218", out_dir=None,
+                  fps=4, dimensions=768, project="", out_dir=None,
                   cadence="monthly", preset=DEFAULT_PRESET, aspect=DEFAULT_ASPECT,
                   write_gif=True, pool_start_year=None, pool_end_year=None,
                   pool_strategy="least_cloudy",
@@ -652,7 +652,7 @@ def _with_warnings(status: str, warnings) -> str:
 
 def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
                   region_max_cloud_percent=10.0, max_cloud_percent=60.0,
-                  fps=4, dimensions=768, project="hnee-331218", out_dir=None,
+                  fps=4, dimensions=768, project="", out_dir=None,
                   cadence="monthly", preset=DEFAULT_PRESET, aspect=DEFAULT_ASPECT,
                   write_gif=True, pool_start_year=None, pool_end_year=None,
                   pool_strategy="least_cloudy",
@@ -767,8 +767,10 @@ def build_app(context=None):
 
     sensors = list(SENSORS)
     default_sensor, default_index = "landsat", "lst"
-    # Server mode: each user renders under their OWN project, so never pre-fill ours.
-    project_default = "" if context is not None else os.environ.get("EE_PROJECT", "hnee-331218")
+    # Server mode: each user renders under their OWN project, so never pre-fill one.
+    # Single-user mode: a deployment may pre-fill the box via EE_PROJECT; there is
+    # deliberately no hardcoded fallback — the id is the user's, not the repo's.
+    project_default = "" if context is not None else os.environ.get("EE_PROJECT", "")
 
     with gr.Blocks(title="GEE Index Timelapse") as app:
         gr.Markdown(
@@ -1028,7 +1030,7 @@ def build_app(context=None):
                 project = gr.Textbox(
                     label=("Your own Google Cloud project id (registered for Earth Engine)"
                            if context is not None else "Earth Engine project"),
-                    placeholder="my-ee-project" if context is not None else None,
+                    placeholder="my-ee-project",
                     value=project_default)
                 go = gr.Button("Generate animation", variant="primary")
                 # Server mode only: the single-operator app renders in this process and
