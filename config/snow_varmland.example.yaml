@@ -16,7 +16,7 @@
 # that is not cloud over the ENTIRE frame — with daily data the per-pixel
 # monthly mean, not scene selection, is what removes cloud.
 name: snow_varmland
-project: hnee-331218
+project: your-ee-project
 title: "Snow cover · Värmland & Dalsland"
 subtitle: "MODIS Terra daily, 500 m · monthly mean over clear-sky days"
 

@@ -1,7 +1,7 @@
 # Sentinel-2 NBR (normalised burn ratio) over the WNE AOIs — the standard
 # disturbance index: (NIR − SWIR2)/(NIR + SWIR2) drops where canopy is removed.
 name: wne_nbr
-project: hnee-331218
+project: your-ee-project
 
 aoi:
   frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }

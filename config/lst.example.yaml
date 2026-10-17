@@ -1,6 +1,6 @@
 # Example run configuration for Landsat Land Surface Temperature (LST).
 name: wne_lst               # output basename -> out/wne_lst.mp4 / .gif
-project: hnee-331218        # Google Earth Engine project id
+project: your-ee-project        # Google Earth Engine project id
 
 aoi:
   # AOIs accept bbox, geojson (inline dict or path), or shapefile (auto-reprojected

@@ -212,7 +212,7 @@ docker run --rm -p 7860:7860 \
   -v "$PWD/key/ee-key.json:/secrets/ee-key.json:ro" \
   -v "$PWD/docs/aoi/wne/wne.geojson:/data/aoi.geojson:ro" \
   -e EE_SERVICE_ACCOUNT_KEY=/secrets/ee-key.json \
-  -e EE_PROJECT=hnee-331218 \
+  -e EE_PROJECT=your-ee-project \
   -e GEE_DEFAULT_AOI=/data/aoi.geojson \
   gee-timelapse
 ```
@@ -315,7 +315,7 @@ See `config/example.yaml` (Sentinel-2 NDVI) or `config/lst.example.yaml` (Landsa
   - **Caching:** raw thumbnails are cached on disk (platform cache dir; override with `render.cache_dir` or `$GEE_ANIMATION_CACHE_DIR`), so re-renders that only change client-side settings — fps, interpolation, titles, palette, quality, preset/aspect — skip every download.
 - **`out_dir`**: output directory (default `out`).
 
-Default GEE project is `hnee-331218`.
+There is no default GEE project — every run uses the project id you pass (`project:` in the YAML, the GUI field, or the `EE_PROJECT` env var for the GUI's pre-fill).
 
 Each frame is a monthly cloud-masked median index composite, colorized with the
 fixed `viz` range (or per-index default) so colour is comparable across frames, annotated with
@@ -396,7 +396,7 @@ Create the account, grant the two required roles, and download a key (with
 `gcloud`, or the Cloud Console equivalents):
 
 ```bash
-PROJECT=hnee-331218
+PROJECT=your-ee-project
 gcloud iam service-accounts create gee-animation --project="$PROJECT" \
   --display-name="GEE Animation"
 SA="gee-animation@$PROJECT.iam.gserviceaccount.com"
@@ -421,7 +421,7 @@ Verify from the shell:
 
 ```bash
 EE_SERVICE_ACCOUNT_KEY=key/ee-key.json python -c \
-  "from gee_animation import auth; import ee; auth.init('hnee-331218'); print('EE ok:', ee.Number(1).getInfo())"
+  "from gee_animation import auth; import ee; auth.init('your-ee-project'); print('EE ok:', ee.Number(1).getInfo())"
 ```
 
 The roles map to the pipeline stages you hit in order — missing ones surface as

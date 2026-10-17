@@ -90,7 +90,7 @@ def test_rejects_null_aoi_with_clean_error(tmp_path):
 def test_from_yaml_loads_valid_config(tmp_path):
     p = _write(tmp_path, """
         name: test
-        project: hnee-331218
+        project: my-ee-project
         aoi:
           frame:
             bbox: [13.7, 52.8, 13.9, 52.95]
@@ -109,7 +109,7 @@ def test_from_yaml_loads_valid_config(tmp_path):
     """)
     cfg = RunConfig.from_yaml(p)
     assert cfg.name == "test"
-    assert cfg.project == "hnee-331218"
+    assert cfg.project == "my-ee-project"
     assert cfg.frame_aoi == {"bbox": [13.7, 52.8, 13.9, 52.95]}
     assert cfg.region_aoi == {"bbox": [13.7, 52.8, 13.9, 52.95]}
     assert cfg.viz_min == -0.2 and cfg.viz_max == 1.0
@@ -365,7 +365,7 @@ def test_rejects_empty_palette(tmp_path):
 def test_from_yaml_loads_two_aois(tmp_path):
     p = _write(tmp_path, """
         name: test
-        project: hnee-331218
+        project: my-ee-project
         aoi:
           frame:
             bbox: [13.7, 52.8, 13.9, 52.95]

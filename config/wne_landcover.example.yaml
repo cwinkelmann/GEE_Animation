@@ -12,7 +12,7 @@
 # Dynamic World starts 2015-06-27 and is already cloud-screened at source, so
 # pixels Sentinel-2 could not see come back masked (drawn as no-data grey).
 name: wne_landcover
-project: hnee-331218
+project: your-ee-project
 
 title: Grumsin Beech Forest
 subtitle: UNESCO World Heritage site, Brandenburg, Germany

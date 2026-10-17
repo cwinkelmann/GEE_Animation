@@ -13,7 +13,7 @@
 #     info bar names the pooled range, so a viewer can always see what they are looking
 #     at. Frames that are genuinely from the requested year carry no such mark.
 name: wne_ndvi_pooled
-project: hnee-331218
+project: your-ee-project
 
 aoi:
   frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }

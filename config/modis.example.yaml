@@ -1,6 +1,6 @@
 # MODIS (MOD09A1, 8-day 500 m) NDVI over the WNE AOIs.
 name: wne_modis_ndvi
-project: hnee-331218
+project: your-ee-project
 
 aoi:
   frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }

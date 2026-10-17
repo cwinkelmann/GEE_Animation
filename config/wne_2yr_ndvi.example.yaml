@@ -6,7 +6,7 @@
 # NDVI = (NIR - Red) / (NIR + Red). High where leaves are dense and photosynthesising;
 # near zero over bare soil; negative over water.
 name: wne_2yr_ndvi
-project: hnee-331218
+project: your-ee-project
 
 aoi:
   frame:

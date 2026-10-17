@@ -6,6 +6,7 @@ tests) load without the optional `gui` extra.
 """
 from __future__ import annotations
 
+import csv
 import logging
 import os
 import re
@@ -259,12 +260,32 @@ def _metadata_summary(db_path: Path, name: str):
     return "; ".join(bits)
 
 
-def load_previous_run(media_path):
-    """Reload a rendered run for display — ``(mp4, gif, frame_pngs, frames_zip, status)``.
+def _read_series(path: Path) -> list:
+    """``[(period, inside, outside)]`` from a run's ``<name>_stats.csv``, ``[]`` if absent."""
+    try:
+        with open(path, newline="") as f:
+            rows = list(csv.reader(f))
+    except OSError:
+        return []
+    out = []
+    for row in rows[1:]:
+        try:
+            out.append((row[0],
+                        float(row[1]) if row[1] != "" else None,
+                        float(row[2]) if row[2] != "" else None))
+        except (IndexError, ValueError):
+            return []
+    return out
 
-    Reads the media file, its sibling per-month frames, zips them, and derives a status
-    line (enriched from ``metadata.db`` when present). No Earth Engine, no network — it
-    mirrors ``run_animation``'s output shape so it drives the same UI components.
+
+def load_previous_run(media_path):
+    """Reload a rendered run — ``(mp4, gif, frame_pngs, frames_zip, status, series)``.
+
+    Reads the media file, its sibling per-month frames, zips them, derives a status
+    line (enriched from ``metadata.db`` when present), and restores the inside/outside
+    chart series from ``<name>_stats.csv`` when the run recorded one. No Earth Engine,
+    no network — it mirrors ``run_animation``'s output shape so it drives the same UI
+    components.
     """
     if not media_path:
         raise ValueError("select a previous run to load")
@@ -282,7 +303,8 @@ def load_previous_run(media_path):
     if summary:
         status.append(f"· {summary}")
     return (str(mp4) if mp4.exists() else None, str(gif) if gif.exists() else None,
-            frame_pngs, frames_zip, " ".join(status) + ".")
+            frame_pngs, frames_zip, " ".join(status) + ".",
+            _read_series(run_dir / f"{name}_stats.csv"))
 
 
 def indices_for(sensor: str) -> list:
@@ -569,7 +591,7 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
 
 def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
                   region_max_cloud_percent=10.0, max_cloud_percent=60.0,
-                  fps=4, dimensions=768, project="hnee-331218", out_dir=None,
+                  fps=4, dimensions=768, project="", out_dir=None,
                   cadence="monthly", preset=DEFAULT_PRESET, aspect=DEFAULT_ASPECT,
                   write_gif=True, pool_start_year=None, pool_end_year=None,
                   pool_strategy="least_cloudy",
@@ -630,7 +652,7 @@ def _with_warnings(status: str, warnings) -> str:
 
 def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
                   region_max_cloud_percent=10.0, max_cloud_percent=60.0,
-                  fps=4, dimensions=768, project="hnee-331218", out_dir=None,
+                  fps=4, dimensions=768, project="", out_dir=None,
                   cadence="monthly", preset=DEFAULT_PRESET, aspect=DEFAULT_ASPECT,
                   write_gif=True, pool_start_year=None, pool_end_year=None,
                   pool_strategy="least_cloudy",
@@ -700,6 +722,13 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
     local = cfg.sharpen == "local"
     series = ([] if (composite or local)
               else deps.timeseries(frames, region_geom, frame_geom, cfg.scale))
+    if series:
+        # Persist the chart data with the run so load_previous_run can restore it.
+        with open(Path(out_dir) / f"{cfg.name}_stats.csv", "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["period", "inside", "outside"])
+            w.writerows((p, "" if i is None else i, "" if o is None else o)
+                        for p, i, o in series)
     n_periods = len(period_starts(cfg.start, cfg.end, cfg.cadence))
     dropped = n_periods - len(frames)
     status = (f"Rendered {len(frames)} of {n_periods} {cfg.cadence} periods as "
@@ -738,8 +767,10 @@ def build_app(context=None):
 
     sensors = list(SENSORS)
     default_sensor, default_index = "landsat", "lst"
-    # Server mode: each user renders under their OWN project, so never pre-fill ours.
-    project_default = "" if context is not None else os.environ.get("EE_PROJECT", "hnee-331218")
+    # Server mode: each user renders under their OWN project, so never pre-fill one.
+    # Single-user mode: a deployment may pre-fill the box via EE_PROJECT; there is
+    # deliberately no hardcoded fallback — the id is the user's, not the repo's.
+    project_default = "" if context is not None else os.environ.get("EE_PROJECT", "")
 
     with gr.Blocks(title="GEE Index Timelapse") as app:
         gr.Markdown(
@@ -753,7 +784,8 @@ def build_app(context=None):
             with gr.Row():
                 preset_name = gr.Dropdown(
                     presets.PRESET_CHOICES, value=presets.NO_PRESET, label="Preset", scale=4,
-                    info="The Tegel cuts: native 100 m thermal (harmonic seasonal model), "
+                    info="Three sites (Tegel R12, Tegel R13, Grumsin), three editions each: "
+                         "native 100 m thermal (harmonic seasonal model), "
                          "the same with the 100 m grid drawn on, and the RF-sharpened 20 m "
                          "edition with locally trained forests. Applying a preset overwrites "
                          "every control below; edit afterwards as you like.")
@@ -998,7 +1030,7 @@ def build_app(context=None):
                 project = gr.Textbox(
                     label=("Your own Google Cloud project id (registered for Earth Engine)"
                            if context is not None else "Earth Engine project"),
-                    placeholder="my-ee-project" if context is not None else None,
+                    placeholder="my-ee-project",
                     value=project_default)
                 go = gr.Button("Generate animation", variant="primary")
                 # Server mode only: the single-operator app renders in this process and
@@ -1248,8 +1280,8 @@ def build_app(context=None):
         # Load a previously-rendered run into the same output widgets (no Earth Engine).
         def _load(sel):
             try:
-                mp4, gif_path, frame_pngs, zip_path, msg = load_previous_run(sel)
-                return mp4, gif_path, frame_pngs, zip_path, None, msg, None
+                mp4, gif_path, frame_pngs, zip_path, msg, series = load_previous_run(sel)
+                return mp4, gif_path, frame_pngs, zip_path, None, msg, _series_frame(series)
             except Exception as exc:   # surface a friendly message in the UI
                 return _error(exc)
         load.click(_load, [prev], outputs)

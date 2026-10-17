@@ -5,7 +5,7 @@
 # temperature. Honest resolution 20 m (B11 is a 20 m band), not 10 m.
 # Validation and gate: docs/superpowers/plans/2026-09-17-lst-rf-sharpening.md.
 name: wne_lst_rf
-project: hnee-331218
+project: your-ee-project
 
 aoi:
   frame:  { shapefile: docs/aoi/wne/frame_timelaps_wne.shp }

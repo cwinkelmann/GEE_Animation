@@ -6,7 +6,7 @@
 # render. The thermal band is 100 m — the same frame is only ~137 px, upscaled ~8x.
 # That is a property of the sensors, not of the renderer.
 name: wne_2yr_rgb
-project: hnee-331218
+project: your-ee-project
 
 aoi:
   frame:

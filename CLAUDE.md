@@ -9,7 +9,7 @@ Sentinel-2 time series over a forest area into an annotated **NDVI timelapse**
 (MP4 + GIF). Frames are assembled **locally, frame-by-frame** (download → colorize
 → annotate → encode), not server-side, so per-frame styling (month label, shared
 NDVI colorbar, no-data masking) is under our control. Built for vegetation/forest
-work at HNEE; the default Earth Engine project is `hnee-331218`.
+work at HNEE; there is no default Earth Engine project — each user passes their own (config `project:`, GUI field, or `EE_PROJECT` for the GUI pre-fill).
 
 Design spec and implementation plan live in `docs/superpowers/`.
 

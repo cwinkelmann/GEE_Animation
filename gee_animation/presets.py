@@ -4,7 +4,8 @@ Each preset is a dict of :func:`gee_animation.gui.run_animation` keyword argumen
 so applying one is the same as filling the form by hand, and the config it builds
 is the one the corresponding YAML in the experiment branch describes (the Tegel
 cuts: ``r12_zoom_lst_pretty_10yr``, ``_grid``, ``r12_zoom_lst_rf_local_10yr`` and
-the R13 equivalents). The footprints ship as package data under ``presets/aoi``
+the R13 equivalents; Grumsin runs the same three editions over the
+Weltnaturerbe footprint). The footprints ship as package data under ``presets/aoi``
 so the presets also work inside the container, where ``docs/`` is absent.
 """
 from __future__ import annotations
@@ -13,21 +14,22 @@ from pathlib import Path
 
 _AOI_DIR = Path(__file__).resolve().parent / "presets_aoi"
 
-# The Tegel showcase frame is the footprint's bounds + 0.4 km on every side.
-_TEGEL_BUFFER_M = 400
+# Each showcase frame is the site footprint's bounds + 0.4 km on every side.
+_SITE_BUFFER_M = 400
 
-_TEGEL_COMMON = dict(
-    buffer_m=_TEGEL_BUFFER_M, sensor="landsat", start="2017-01-01", end="2026-09-01",
+_SITE_COMMON = dict(
+    buffer_m=_SITE_BUFFER_M, sensor="landsat", start="2017-01-01", end="2026-09-01",
     cadence="monthly", region_max_cloud_percent=20, max_cloud_percent=70,
     fps=6, dimensions=1440, preset="1080p", aspect="match", quality="9", write_gif=False,
     interpolate=10, interpolate_mode="auto", min_scenes=1, raw_frames=True,
     viz_min=15.0, viz_max=45.0, missions=["L8", "L9"], crs_choice="auto (UTM zone of the AOI — square pixels)",
-    project="hnee-331218",
 )
 
 _SITES = {
-    "R12": dict(aoi_path=str(_AOI_DIR / "r12_footprint.geojson"), title="Tegeler Forst, Revier 12"),
-    "R13": dict(aoi_path=str(_AOI_DIR / "r13_footprint.geojson"), title="Spandauer Forst, Revier 13"),
+    "Tegel R12": dict(aoi_path=str(_AOI_DIR / "r12_footprint.geojson"), title="Tegeler Forst, Revier 12"),
+    "Tegel R13": dict(aoi_path=str(_AOI_DIR / "r13_footprint.geojson"), title="Spandauer Forst, Revier 13"),
+    "Grumsin": dict(aoi_path=str(_AOI_DIR / "grumsin_footprint.geojson"),
+                    title="Weltnaturerbe Buchenwald Grumsin"),
 }
 
 _EDITIONS = {
@@ -47,7 +49,7 @@ _EDITIONS = {
 }
 
 PRESETS: dict[str, dict] = {
-    f"Tegel {site} · {edition}": {**_TEGEL_COMMON, **site_values, **edition_values}
+    f"{site} · {edition}": {**_SITE_COMMON, **site_values, **edition_values}
     for site, site_values in _SITES.items()
     for edition, edition_values in _EDITIONS.items()
 }

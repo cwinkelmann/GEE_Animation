@@ -14,7 +14,7 @@ def test_tiny_three_frame_render(tmp_path):
     from gee_animation import auth, aoi, collection, compositing, render
 
     cfg = RunConfig(
-        name="itest", project=os.environ.get("GEE_PROJECT", "hnee-331218"),
+        name="itest", project=os.environ["GEE_PROJECT"],
         frame_aoi={"bbox": [13.80, 52.85, 13.83, 52.87]},
         region_aoi={"bbox": [13.805, 52.855, 13.825, 52.865]},
         region_max_cloud_percent=80,     # relaxed so the tiny test reliably finds scenes
@@ -53,7 +53,7 @@ def test_build_preserves_per_scene_metadata_through_index_compute():
     from gee_animation import auth, aoi, collection
 
     cfg = RunConfig(
-        name="itest-props", project=_os.environ.get("GEE_PROJECT", "hnee-331218"),
+        name="itest-props", project=_os.environ["GEE_PROJECT"],
         frame_aoi={"bbox": [13.80, 52.85, 13.83, 52.87]},
         region_aoi={"bbox": [13.805, 52.855, 13.825, 52.865]},
         region_max_cloud_percent=80,     # relaxed so the tiny test reliably finds scenes
