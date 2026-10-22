@@ -77,6 +77,7 @@ remember:
 | `sentinel2` | `Contains modified Copernicus Sentinel data {year}` (or `{year0}–{year1}` for a multi-year run; widened to cover `pool_years` when pooling is on) | every Sentinel-2 render |
 | `landsat` | `Landsat imagery courtesy of the U.S. Geological Survey` | every Landsat render |
 | `modis` / `modis_lst` | `MODIS data courtesy of NASA LP DAAC` | every MODIS render |
+| `sentinel1` | `Contains modified Copernicus Sentinel data {year}` — the same notice as Sentinel-2 (same licence) | every Sentinel-1 render |
 
 An explicit `credit: "..."` in the config overrides this verbatim (use it to add a
 project/funder line — it replaces the auto text rather than appending to it, so if you

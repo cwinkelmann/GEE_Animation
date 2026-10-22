@@ -53,6 +53,7 @@ product.
 | `landsat` | `QA_PIXEL` flag bits 1–5 (dilated cloud, cirrus, cloud, shadow, snow) **AND** medium-or-higher confidence for cloud (bits 8–9), shadow (10–11), cirrus (14–15) | The confidence pairs are the Landsat counterpart of the s2cloudless screen. |
 | `modis` | `StateQA` cloud state, cloud shadow, internal cloud flag | Coarse; MODIS has no per-scene cloud metadata, so `max_cloud_percent` is ignored and only the region filter applies. |
 | `modis_lst` | `QC_Day` mandatory-QA ≤ 1 | LST is only retrieved under clear sky, so the band is already masked; this drops "not produced" pixels too. |
+| `sentinel1` | none | Radar sees through cloud. The cloud band is all zeros, so every pass survives both cloud filters; `max_cloud_percent` is ignored. |
 
 Additionally, the `lst` product gates on **`ST_QA` ≤ 5 K** retrieval
 uncertainty. Cloud-contaminated thermal retrievals carry high uncertainty even
@@ -83,6 +84,8 @@ B8, Landsat NIR = SR_B5 for OLI). Reflectance scaling is per sensor: Sentinel-2
 | `lst_rf` (experimental) | Landsat (+ Sentinel-2 predictors) | **20** m | −10 … 40 | °C | cooler → warmer |
 | `lst_modis` | MODIS (MOD11A1) | 1000 m | −10 … 40 | °C | cooler → warmer |
 | `landcover` | Dynamic World | 10 m | *(classes)* | — | 9 labelled swatches |
+| `sar_vv` | Sentinel-1 (GRD, IW) | 10 m | −25 … 0 (unmeasured guess) | dB | smooth / open water → rough / ice, built-up |
+| `sar_vh` | Sentinel-1 (GRD, IW) | 10 m | −30 … −5 (unmeasured guess) | dB | smooth / open water → rough / ice, built-up |
 
 ### Vegetation and water indices
 
@@ -222,3 +225,16 @@ marker). `geotiffs: true` writes `out/geotiffs/<name>/<name>_<period>.tif`:
 real float values rather than colours, on the native grid in the run's CRS,
 cast to float32 and clamped so the request stays under Earth Engine's 48 MiB
 synchronous download cap.
+
+## Radar (`sentinel1`)
+
+`sar_vv` and `sar_vh` are Sentinel-1 GRD backscatter in dB (`COPERNICUS/S1_GRD`
+is already calibrated and log-scaled), IW swath mode only (the land/coast mode;
+EW is the polar wide swath with another noise floor), both orbit directions
+pooled. A period's image is the plain median of its passes, which is also the
+speckle filter — the more passes in a bin, the smoother the frame, so `10day`
+or `semimonthly` suits a repeat cycle of 6 days better than `monthly` does.
+Incidence angles differ between ascending and descending passes, so a scene
+edge can show as a brightness step inside a median. Open water is dark
+(specular), rough ice, built-up areas and forest are bright; VH is roughly
+7 dB below VV and separates open water from ice more cleanly.

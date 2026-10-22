@@ -81,6 +81,8 @@ def test_indices_for_filters_by_sensor():
     assert "lst" in gui.indices_for("landsat") and "lst_sharp" in gui.indices_for("landsat")
     assert "lst" not in gui.indices_for("sentinel2")
     assert set(gui.indices_for("modis")) == {"ndvi", "evi", "ndwi", "ndmi", "nbr", "rgb", "cir"}
+    assert set(gui.indices_for("sentinel1")) == {"sar_vv", "sar_vh"}   # radar-only products
+    assert "sar_vv" not in gui.indices_for("sentinel2")
 
 
 def test_region_aoi_from_upload_geojson(tmp_path):

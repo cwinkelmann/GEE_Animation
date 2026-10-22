@@ -987,7 +987,7 @@ def _default_credit(cfg) -> str:
     completely default config still carries correct attribution: that zero-config
     behaviour is the whole point, not a nice-to-have.
 
-    Sentinel-2's notice is the exact required Copernicus wording plus the year(s)
+    Sentinel-2's (and Sentinel-1's) notice is the exact required Copernicus wording plus the year(s)
     actually shown (`_credit_years`); Landsat/MODIS get a fixed courtesy line
     (`_SENSOR_CREDITS`). An unrecognised/absent sensor gets no auto-credit ("").
     """
@@ -995,7 +995,7 @@ def _default_credit(cfg) -> str:
     if explicit is not None:
         return explicit
     sensor = getattr(cfg, "sensor", None)
-    if sensor == "sentinel2":
+    if sensor in ("sentinel2", "sentinel1"):      # both Copernicus: same required notice
         years = _credit_years(cfg)
         return f"Contains modified Copernicus Sentinel data {years}".rstrip() \
             if years else "Contains modified Copernicus Sentinel data"

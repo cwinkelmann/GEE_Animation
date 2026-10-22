@@ -76,6 +76,7 @@ PNG per month. Bands below are canonical roles (NIR/Red/Green/Blue/SWIR1/Thermal
 | LST-sharp | Landsat | `LST − 16·(NDVI − NDVI₁₀₀ₘ)` — NDVI-sharpened LST (approximation) | `config/lst_sharp.example.yaml` (`wne_lst_sharp`) |
 | LST-RF (experimental) | Landsat + Sentinel-2 | random forest `LST₁₀₀ₘ ~ NDVI, NIRv, NDBI, MNDWI, DEM`, applied at 20 m, coarse residual added back | `config/lst_rf.example.yaml` (`wne_lst_rf`) |
 | Land cover | Dynamic World | 9-class map (Google/WRI, 10 m); categorical — swatch legend, no interpolation | `config/wne_landcover.example.yaml` (`wne_landcover`) |
+| Radar backscatter | Sentinel-1 | `sar_vv` / `sar_vh` in dB (GRD, IW mode, both orbits); no clouds, so every period has data and the period median doubles as the speckle filter | `config/sar_vv.example.yaml` (`baltic_ice_sar_vv`) |
 | NDVI  | MODIS | `(NIR − Red) / (NIR + Red)` on MOD09A1 (500 m) | `config/modis.example.yaml` (`wne_modis_ndvi`) |
 
 Two Landsat LST methods are available: `lst` = the USGS Collection-2 Level-2

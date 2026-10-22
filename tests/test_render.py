@@ -3277,3 +3277,12 @@ def test_render_skips_the_pixel_grid_without_an_upscale_and_warns(tmp_path, monk
     with caplog.at_level("WARNING"):
         render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
     assert "pixel_grid" in caplog.text
+
+
+def test_default_credit_sentinel1_carries_the_same_copernicus_notice():
+    # Sentinel-1 is Copernicus data under the same licence as Sentinel-2, so a radar
+    # render gets the required wording plus the years shown, not a blank line.
+    from gee_animation.render import _default_credit
+    cfg = types.SimpleNamespace(credit=None, sensor="sentinel1", start="2025-12-01",
+                                end="2026-05-01", pool_years=None)
+    assert _default_credit(cfg) == "Contains modified Copernicus Sentinel data 2025–2026"
