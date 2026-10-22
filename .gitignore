@@ -35,3 +35,6 @@ config/hemnet_snow/
 /logs/
 /gee_preset_*/
 /tmp*/
+
+# GDAL/QGIS statistics sidecars written next to notebook rasters
+*.aux.xml
