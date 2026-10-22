@@ -39,6 +39,7 @@ inside) or locally, and ends with ways to make the workflow yours:
 | 06 | [Cluster the landscape](notebooks/06_kmeans_clustering.ipynb) | k-means — groups without names |
 | 07 | [Land cover from a random forest](notebooks/07_rf_classification.ipynb) | supervised classification, Dynamic World labels, confusion matrix |
 | 08 | [Segment the landscape](notebooks/08_unet_segmentation.ipynb) | a U-Net (`smp`) on downloaded tensors — context vs pixels |
+| 09 | [Radar through the winter](notebooks/09_sar_baltic_ice.ipynb) | Sentinel-1 SAR, Baltic sea ice 2025/26 — when optical goes blind |
 
 Extras: [ndvi_timelapse](notebooks/ndvi_timelapse.ipynb) (the pipeline step by step),
 [single_view_from_geojson](notebooks/single_view_from_geojson.ipynb) (one month, one image + GeoTIFF).
