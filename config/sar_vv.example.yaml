@@ -17,7 +17,7 @@ cadence: 10day                    # Sentinel-1 repeats every 6 days; 10-day bins
 max_cloud_percent: 100            # ignored: Sentinel-1 has no per-scene cloud metadata
 draw_region: false
 
-viz: { min: -25, max: 0 }         # dB; the product default — water ~ -25, ice/land ~ -10
+viz: { min: -25, max: -5 }        # dB; the product default — calm water ~ -22, land/ice ~ -10 .. -7
 
 render:
   fps: 2

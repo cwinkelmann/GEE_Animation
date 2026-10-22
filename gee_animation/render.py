@@ -182,6 +182,10 @@ EE_SYNC_DOWNLOAD_MAX_BYTES = 50331648
 
 #: Bytes per sample once the export is cast to float32 (see `_export_geotiffs`).
 _GEOTIFF_BYTES_PER_SAMPLE = 4
+#: ... plus the one-byte validity mask Earth Engine charges per pixel: a one-band
+#: float32 request is sized at 5 bytes/pixel in its "Total request size" check
+#: (measured: 12.7 Mpx refused as 63,494,800 bytes).
+_GEOTIFF_MASK_BYTES_PER_PIXEL = 1
 
 
 def _geotiff_source(image, bands):
@@ -204,7 +208,9 @@ def _geotiff_fit_scale(cfg, bounds, bands: int, scale: float) -> float:
     EE refuses outright. Casting to float32 (`_export_geotiffs`) halves that and
     is the real fix; this is the backstop for a frame wide enough that even
     float32 does not fit — better an honest 14 m export with a logged warning
-    than no file at all.
+    than no file at all. EE sizes the request at 4 bytes per band sample plus one
+    mask byte per pixel; estimating without the mask byte coarsened a one-band
+    export to a scale EE still refused.
     """
     if not bounds or not scale:
         return scale
@@ -212,7 +218,8 @@ def _geotiff_fit_scale(cfg, bounds, bands: int, scale: float) -> float:
     mid = math.radians((miny + maxy) / 2.0)
     w_m = (maxx - minx) * 111320.0 * math.cos(mid)
     h_m = (maxy - miny) * 111320.0
-    predicted = (w_m / scale) * (h_m / scale) * bands * _GEOTIFF_BYTES_PER_SAMPLE
+    predicted = (w_m / scale) * (h_m / scale) * (bands * _GEOTIFF_BYTES_PER_SAMPLE
+                                                 + _GEOTIFF_MASK_BYTES_PER_PIXEL)
     if predicted <= EE_SYNC_DOWNLOAD_MAX_BYTES:
         return scale
     # Area scales with 1/scale^2, so the linear factor is the square root.

@@ -80,7 +80,16 @@
 
 - [ ] `EE_PROJECT=… gee-animation --config config/sar_vv.example.yaml` from the worktree with `PYTHONPATH=$PWD`; expect 15 observed periods (Dec 1 … Apr 20), the scene count in the log, and frames that match the notebook's hand-rolled version (Feb: ice in the lagoons, Apr: open water).
 - [ ] From the exported GeoTIFFs (`geotiffs: true`), report p2/p98 of VV for 2025-12-01 and 2026-02-09; adjust `default_viz` if the ice/water contrast sits outside −25 … 0. Same for VH on one period. Record the numbers in this plan.
-- [ ] Commit any viz change with the numbers in the message.
+- [x] Commit any viz change with the numbers in the message.
+
+**Task 4 record (2026-10-22, live run of `config/sar_vv.example.yaml`):** 15 observed
+periods, 155 frames with interpolation, scene counts 12–21 per period (same archive the
+notebook's inventory counts). 10-day medians at 100 m over the AOI, p2 / p50 / p98:
+VV −22.5 / −18.8 / −7.0 (Dec), −19.8 / −16.0 / −9.1 (Feb, ice), −22.4 / −17.8 / −8.4 (Apr);
+VH −36.1 / −32.7 / −13.6 (Dec), −35.1 / −30.3 / −14.9 (Feb). Defaults set to VV −25…−5,
+VH −35…−10. **Finding:** every GeoTIFF export was refused — the size backstop estimated
+4 bytes/sample and EE charges a fifth byte (mask) per pixel; fixed in `render.py`
+(`_GEOTIFF_MASK_BYTES_PER_PIXEL`, test `test_geotiff_fit_scale_counts_the_mask_byte_ee_charges_for`).
 
 ### Task 5 — rebuild notebook 09 on the package
 

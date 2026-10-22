@@ -84,8 +84,8 @@ B8, Landsat NIR = SR_B5 for OLI). Reflectance scaling is per sensor: Sentinel-2
 | `lst_rf` (experimental) | Landsat (+ Sentinel-2 predictors) | **20** m | −10 … 40 | °C | cooler → warmer |
 | `lst_modis` | MODIS (MOD11A1) | 1000 m | −10 … 40 | °C | cooler → warmer |
 | `landcover` | Dynamic World | 10 m | *(classes)* | — | 9 labelled swatches |
-| `sar_vv` | Sentinel-1 (GRD, IW) | 10 m | −25 … 0 (unmeasured guess) | dB | smooth / open water → rough / ice, built-up |
-| `sar_vh` | Sentinel-1 (GRD, IW) | 10 m | −30 … −5 (unmeasured guess) | dB | smooth / open water → rough / ice, built-up |
+| `sar_vv` | Sentinel-1 (GRD, IW) | 10 m | −25 … −5 (Baltic p2–p98: −22 … −7) | dB | smooth / open water → rough / ice, built-up |
+| `sar_vh` | Sentinel-1 (GRD, IW) | 10 m | −35 … −10 (Baltic p2–p98: −36 … −14) | dB | smooth / open water → rough / ice, built-up |
 
 ### Vegetation and water indices
 
@@ -237,4 +237,4 @@ or `semimonthly` suits a repeat cycle of 6 days better than `monthly` does.
 Incidence angles differ between ascending and descending passes, so a scene
 edge can show as a brightness step inside a median. Open water is dark
 (specular), rough ice, built-up areas and forest are bright; VH is roughly
-7 dB below VV and separates open water from ice more cleanly.
+13 dB below VV and separates open water from ice more cleanly.

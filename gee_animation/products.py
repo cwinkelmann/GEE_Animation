@@ -695,12 +695,13 @@ INDICES["lst_modis"] = Index("lst_modis", frozenset({"modis_lst"}),
                              display_name="Land surface temperature (MODIS)",
                              low_label="cooler", high_label="warmer")
 
-# Radar backscatter in dB. Default ranges are a first guess from the Baltic sea-ice
-# and the Tegel windthrow renders (VV water ≈ −25, ice/land ≈ −10; VH runs ~7 dB
-# lower); a grey ramp is what radar viewers expect. Check against a frame's p2/p98
-# before publishing (see docs/superpowers/plans/2026-10-22-sentinel1-sar-product.md).
+# Radar backscatter in dB on a grey ramp (what radar viewers expect). Ranges were
+# measured on 10-day medians over the Baltic sea-ice AOI (open sea + lowland coast,
+# Dec 2025 – Apr 2026): VV p2 ≈ −22 (calm water) … p98 ≈ −7 (land, ice); VH runs
+# 13 dB lower, p2 ≈ −36 … p98 ≈ −14. The ranges leave the ramp ends ~3 dB beyond
+# those, so calm water is black, not clipped, and towns are white.
 _SAR_PALETTE = ["#000000", "#ffffff"]
-for _pol, _lo, _hi in (("VV", -25.0, 0.0), ("VH", -30.0, -5.0)):
+for _pol, _lo, _hi in (("VV", -25.0, -5.0), ("VH", -35.0, -10.0)):
     INDICES[f"sar_{_pol.lower()}"] = Index(
         f"sar_{_pol.lower()}", frozenset({"sentinel1"}), (_lo, _hi, _SAR_PALETTE),
         _sar_band(_pol), build_collection=_sar_collection(_pol),
