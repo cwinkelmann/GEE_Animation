@@ -1,0 +1,45 @@
+# Grumsin control: the wne_lst_harmonic_2018_2026 surface-temperature cut WITH
+# the pixel raster drawn on (the control twin of r12_lst_pretty_10yr_grid).
+# Same fetch key as the harmonic run (pure cache hit): only pixel_grid, upscale
+# and the subtitle differ, all client-side.
+#
+# smooth: harmonic -- every frame is a per-pixel seasonal curve fitted across
+# 2018-2026 and evaluated at that month; hole-free, labelled 'modelled' on-frame.
+# Do NOT render this through scripts/render_chunked.py: each chunk would fit its
+# own curve and the model would jump at every chunk boundary. Landsat 8/9 only.
+name: wne_lst_pretty_grid_2018_2026
+project: ag-dataplatform
+title: Grumsin Beech Forest
+subtitle: "Surface temperature · harmonic seasonal model · 100 m grid"
+aoi:
+  frame: { bbox: [13.7311, 52.9440, 14.0623, 53.0280] }  # 22.2 x 9.35 km fills the 16:9 place box
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 20
+start: "2018-01-01"
+end: "2026-08-01"
+sensor: landsat
+index: lst
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+missions: [L8, L9]
+smooth: harmonic
+harmonics: 2
+metadata: false
+viz: { min: 15.0, max: 45.0 }
+
+render:
+  fps: 2
+  interpolate: 5
+  interpolate_mode: auto
+  scale: 10
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: "16:9"
+  upscale: nearest               # flat blocks: the mesh sits on real cell edges
+  region_line_width: 5
+  quality: 8
+  raw_frames: false
+  geotiffs: false
+  pixel_grid: true               # trace the fetched ~100 m thermal raster
