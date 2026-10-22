@@ -3,9 +3,9 @@
 Generate annotated satellite index timelapses (MP4 + GIF) from Google Earth Engine
 imagery (Sentinel-2 or Landsat), assembled frame-by-frame locally.
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cwinkelmann/GEE_Animation/blob/main/notebooks/01_first_timelapse.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cwinkelmann/GEE_Animation/blob/main/notebooks/02_first_timelapse.ipynb)
 
-No local install needed — **[run it in Google Colab](https://colab.research.google.com/github/cwinkelmann/GEE_Animation/blob/main/notebooks/01_first_timelapse.ipynb)** (builds any index's animation + diagram from your browser).
+No local install needed — **[run it in Google Colab](https://colab.research.google.com/github/cwinkelmann/GEE_Animation/blob/main/notebooks/02_first_timelapse.ipynb)** (builds any index's animation + diagram from your browser).
 
 ## Install
 
@@ -20,7 +20,7 @@ pip install -e ".[dev,notebook]"              # package + deps into this env
 earthengine authenticate                      # one-time; or the tool prompts on first run
 ```
 
-Run the notebook (`notebooks/01_first_timelapse.ipynb`) with the `GEE_animation`
+Run the notebook (`notebooks/02_first_timelapse.ipynb`) with the `GEE_animation`
 environment selected as the kernel — or open it directly in Colab via the badge above.
 
 ## Notebooks
@@ -31,14 +31,13 @@ inside) or locally, and ends with ways to make the workflow yours:
 | # | Notebook | What you learn |
 |---|---|---|
 | 00 | [Setup](notebooks/00_setup.ipynb) | your own Earth Engine project, auth, a smoke render |
-| 01 | [First timelapse](notebooks/01_first_timelapse.ipynb) | `animate()` end to end |
-| 02 | [The Gradio app](notebooks/02_gradio_app.ipynb) | the UI locally, on a server, and as a Colab demo |
+| 01 | [The pipeline, step by step](notebooks/01_pipeline_walkthrough.ipynb) | the four modules behind `animate()`, run by hand |
+| 02 | [First timelapse](notebooks/02_first_timelapse.ipynb) | `animate()` end to end |
 | 03 | [Gridded LST](notebooks/03_gridded_lst.ipynb) | native resolution, `pixel_grid`, config files |
 | 04 | [LST re-sharpening](notebooks/04_lst_sharpening.ipynb) | the 100 m → 20 m random forest, offline on real data |
 | 05 | [Build your own index](notebooks/05_build_your_own_index.ipynb) | from formula to registered product |
 
-Extras: [ndvi_timelapse](notebooks/ndvi_timelapse.ipynb) (the pipeline step by step),
-[single_view_from_geojson](notebooks/single_view_from_geojson.ipynb) (one month, one image + GeoTIFF).
+Extra: [single_view_from_geojson](notebooks/single_view_from_geojson.ipynb) (one month, one image + GeoTIFF).
 
 ## Usage
 

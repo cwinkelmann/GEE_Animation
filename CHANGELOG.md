@@ -3,6 +3,20 @@
 Notable changes to `gee_animation`. Versions follow [semantic versioning](https://semver.org):
 the minor number moves when something is added, the patch number when something is fixed.
 
+## Unreleased
+
+### Changed
+
+- Notebook series reordered: the step-by-step pipeline walkthrough (formerly the
+  unnumbered `ndvi_timelapse`) is now `01_pipeline_walkthrough` and runs in Colab
+  (bbox frame + downloaded GeoJSON instead of repo shapefiles); the `animate()`
+  quickstart moved to `02_first_timelapse`.
+
+### Removed
+
+- `02_gradio_app` notebook. The GUI is documented in the README (`gee-animation-gui`)
+  and `docs/multiuser-server.md`; the notebook added nothing a student needs.
+
 ## 0.3.0 — 2026-10-16
 
 ### Added
