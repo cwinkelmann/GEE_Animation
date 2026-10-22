@@ -177,7 +177,7 @@ def _modis_lst_cloud_band(image, ee_module=ee):
 
 
 def _no_reflectance(image, ee_module=ee):
-    raise NotImplementedError("modis_lst is a thermal sensor; it has no reflectance bands")
+    raise NotImplementedError("this sensor (thermal or radar) has no reflectance bands")
 
 
 def _lst_modis(sensor, image, ee_module=ee):
@@ -185,6 +185,51 @@ def _lst_modis(sensor, image, ee_module=ee):
     return (image.select("LST_Day_1km").multiply(0.02).subtract(273.15)
             .rename(INDEX_BAND)
             .set("system:time_start", image.get("system:time_start")))
+
+
+# --- Sentinel-1 radar ----------------------------------------------------------
+# COPERNICUS/S1_GRD is Ground Range Detected backscatter, already calibrated and
+# log-scaled (dB) by Earth Engine. Radar sees through cloud and darkness, so the
+# sensor carries no scene-cloud metadata and its cloud band is all zeros: every
+# scene passes the region-cloud filter, and a period's image is the plain median of
+# its passes — which is also the speckle filter. Only the IW swath mode (the
+# land/coast mode, 10 m pixels) is used; EW is the polar wide swath with a different
+# noise floor, and mixing the two in one median would put a seam at the mode edge.
+# Both orbit directions are pooled; their incidence angles differ, so a scene edge
+# can show as a brightness step inside a period median.
+_S1_ID = "COPERNICUS/S1_GRD"
+
+
+def _s1_collection(ee_module=ee):
+    return (ee_module.ImageCollection(_S1_ID)
+            .filter(ee_module.Filter.eq("instrumentMode", "IW")))
+
+
+def _s1_mask_clouds(image, ee_module=ee):
+    return image                                   # radar: nothing to mask
+
+
+def _s1_cloud_band(image, ee_module=ee):
+    return ee_module.Image.constant(0).rename("cloud")   # region_cloud_fraction == 0
+
+
+def _sar_band(band):
+    """Compute fn for one polarisation: the S1_GRD band as-is (dB), as INDEX."""
+    def compute(sensor, image, ee_module=ee):
+        return (image.select(band).rename(INDEX_BAND)
+                .set("system:time_start", image.get("system:time_start")))
+    return compute
+
+
+def _sar_collection(band):
+    """build_collection for one polarisation: only scenes that carry that band
+    (a VV-only acquisition has no VH to select and would break the map)."""
+    def build(cfg, frame_geom, ee_module=ee):
+        return (_s1_collection(ee_module)
+                .filterDate(cfg.start, cfg.end)
+                .filterBounds(frame_geom)
+                .filter(ee_module.Filter.listContains("transmitterReceiverPolarisation", band)))
+    return build
 
 
 # --- Index computations -----------------------------------------------------
@@ -470,6 +515,8 @@ SENSORS = {
                            _dw_mask_clouds, _dw_cloud_band, _no_reflectance),
     "modis_lst": Sensor("modis_lst", _merged(_MOD11_TERRA), None,
                         _modis_lst_mask_clouds, _modis_lst_cloud_band, _no_reflectance),
+    "sentinel1": Sensor("sentinel1", _s1_collection, None,
+                        _s1_mask_clouds, _s1_cloud_band, _no_reflectance),
 }
 
 # Reflectance-based indices work on any sensor that exposes the band aliases.
@@ -481,7 +528,8 @@ THERMAL_INDICES = frozenset({"lst", "lst_smw", "lst_sharp", "lst_modis", "lst_rf
 
 # Coarsest-relevant native ground sampling (metres) per sensor, with overrides.
 _SENSOR_NATIVE_M = {"sentinel2": 10, "landsat": 30, "modis": 500, "modis_lst": 1000,
-                    "dynamicworld": 10}   # Sentinel-2 derived, so Sentinel-2's grid
+                    "dynamicworld": 10,   # Sentinel-2 derived, so Sentinel-2's grid
+                    "sentinel1": 10}      # S1 GRD IW: 10 m pixels (~20 m resolution)
 _S2_20M_INDICES = frozenset({"ndmi", "ndre", "nbr"})   # ndmi/nbr: 20 m SWIR (B11/B12); ndre: 20 m red edge (B5)
 
 
@@ -646,6 +694,24 @@ INDICES["lst_modis"] = Index("lst_modis", frozenset({"modis_lst"}),
                              formula="LST_Day_1km * 0.02 - 273.15 [C]", units="°C",
                              display_name="Land surface temperature (MODIS)",
                              low_label="cooler", high_label="warmer")
+
+# Radar backscatter in dB. Ranges were measured on 10-day medians over the Baltic
+# sea-ice AOI (open sea + lowland coast, Dec 2025 – Apr 2026): VV p2 ≈ −22 (calm
+# water) … p98 ≈ −7 (land, ice); VH runs 13 dB lower at the dark end, p2 ≈ −36 …
+# p98 ≈ −14. The ranges leave ~3 dB beyond those so calm water is not clipped.
+# Not a grey ramp: frames paint no-data in a light neutral grey (render.NODATA_RGB),
+# which on black→white would sit at about −6 dB, inside the bright "ice" end, so a
+# swath gap would read as ice. This is the ramp of the delivered windthrow radar
+# videos (navy water → teal → pale yellow), whose every stop stays clear of that grey.
+_SAR_PALETTE = ["#0b0f2b", "#1e3a8a", "#2f7fb8", "#5ec2c0", "#b7e3a4", "#f1f1a1"]
+for _pol, _lo, _hi in (("VV", -25.0, -5.0), ("VH", -35.0, -10.0)):
+    INDICES[f"sar_{_pol.lower()}"] = Index(
+        f"sar_{_pol.lower()}", frozenset({"sentinel1"}), (_lo, _hi, _SAR_PALETTE),
+        _sar_band(_pol), build_collection=_sar_collection(_pol),
+        bands=f"S1 GRD IW {_pol} (10 m, both orbit passes)",
+        formula=f"{_pol} backscatter coefficient, 10·log10(σ⁰) [dB]", units="dB",
+        display_name=f"Radar backscatter, {_pol} (Sentinel-1)",
+        low_label="smooth / open water", high_label="rough / ice, built-up")
 
 
 def get_product(sensor: str, index: str):

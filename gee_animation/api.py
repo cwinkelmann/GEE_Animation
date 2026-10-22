@@ -74,7 +74,8 @@ DEFAULT_DEPS = types.SimpleNamespace(
 )
 
 # Region-cloud / index scale used for the AOI cloud filter + metadata (per sensor GSD).
-_SCALE = {"sentinel2": 10, "landsat": 30, "modis": 500, "modis_lst": 1000}
+_SCALE = {"sentinel2": 10, "landsat": 30, "modis": 500, "modis_lst": 1000,
+          "sentinel1": 20}   # GRD IW: 10 m pixels of ~20 m resolution; 20 m halves the fetch
 
 
 @dataclass
@@ -160,7 +161,7 @@ def _to_region_aoi(region) -> dict:
         "or a [west, south, east, north] bbox")
 
 
-def animate(region, *, sensor="landsat", index="lst", start, end,
+def animate(region, *, sensor="landsat", index="lst", start, end, cadence="monthly",
             buffer_m=1000.0, preset="1080p", aspect="match", fps=2,
             region_max_cloud_percent=60.0, max_cloud_percent=80.0,
             out_dir="out", project=None, name=None, write_metadata=True,
@@ -170,7 +171,9 @@ def animate(region, *, sensor="landsat", index="lst", start, end,
     `region` is a GeoJSON path/dict, a ``.shp`` path, or a ``[w, s, e, n]`` bbox. The
     animation frame is the region's bounding box grown by `buffer_m`. `preset` upscales
     the native-resolution imagery to a real screen size (so LST/MODIS aren't tiny);
-    pass ``preset=None`` for a raw native-resolution render. ``geotiffs=True`` also
+    pass ``preset=None`` for a raw native-resolution render. ``cadence`` is one of
+    ``monthly`` (default), ``semimonthly``, ``10day`` or ``quarterly`` — a radar run
+    (``sensor="sentinel1"``) has no cloud gaps and usually wants ``10day``. ``geotiffs=True`` also
     exports every observed frame as a georeferenced GeoTIFF of the composited values
     (``<out_dir>/geotiffs/<name>/``) — the numbers behind the picture, for GIS and
     analysis. Returns an :class:`Animation` that plays inline in a notebook and carries
@@ -188,7 +191,7 @@ def animate(region, *, sensor="landsat", index="lst", start, end,
 
     cfg = RunConfig(
         name=name, project=project, frame_aoi=frame_aoi, region_aoi=region_aoi,
-        start=str(start), end=str(end), sensor=sensor, index=index, cadence="monthly",
+        start=str(start), end=str(end), sensor=sensor, index=index, cadence=str(cadence),
         max_cloud_percent=float(max_cloud_percent),
         region_max_cloud_percent=float(region_max_cloud_percent),
         viz_min=viz_min, viz_max=viz_max, palette=list(palette) if palette else [],

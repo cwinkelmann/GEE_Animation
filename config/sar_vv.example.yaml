@@ -1,0 +1,29 @@
+# Sentinel-1 radar backscatter (VV, dB) over the Baltic coast off Rügen/Usedom:
+# the 2025/26 ice season at a 10-day cadence. Radar sees through cloud and polar
+# night, so every period has data; the period median is also the speckle filter.
+name: baltic_ice_sar_vv
+project: your-ee-project
+
+aoi:
+  frame:  { geojson: docs/aoi/balticsea_ice/aoi.geojson }   # the lagoons and the open sea
+  region: { geojson: docs/aoi/balticsea_ice/aoi.geojson }
+  region_max_cloud_percent: 100   # irrelevant for radar (cloud fraction is always 0)
+
+sensor: sentinel1
+index: sar_vv                     # or sar_vh (cross-polarised: open water darker still)
+start: "2025-12-01"
+end: "2026-05-01"
+cadence: 10day                    # Sentinel-1 repeats every 6 days; 10-day bins hold 12-21 passes here
+max_cloud_percent: 100            # ignored: Sentinel-1 has no per-scene cloud metadata
+draw_region: false
+
+viz: { min: -25, max: -5 }        # dB; the product default — calm water ~ -22, land/ice ~ -10 .. -7
+
+render:
+  fps: 2
+  scale: 20                       # GRD: 10 m pixels of ~20 m resolution
+  dimensions: 1024                # longest side fetched from Earth Engine; preset upscales
+  preset: 1080p
+  interpolate: 10                 # generated frames between 10-day observations
+  interpolate_mode: auto          # data-space blend for a single-band index
+  geotiffs: false                 # true: one float32 GeoTIFF per period under out/geotiffs/<name>/

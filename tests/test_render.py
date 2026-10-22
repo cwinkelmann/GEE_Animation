@@ -3277,3 +3277,35 @@ def test_render_skips_the_pixel_grid_without_an_upscale_and_warns(tmp_path, monk
     with caplog.at_level("WARNING"):
         render([Frame("2022-01", object())], cfg, fetch=fake_fetch, geometry=None)
     assert "pixel_grid" in caplog.text
+
+
+def test_default_credit_sentinel1_carries_the_same_copernicus_notice():
+    # Sentinel-1 is Copernicus data under the same licence as Sentinel-2, so a radar
+    # render gets the required wording plus the years shown, not a blank line.
+    from gee_animation.render import _default_credit
+    cfg = types.SimpleNamespace(credit=None, sensor="sentinel1", start="2025-12-01",
+                                end="2026-05-01", pool_years=None)
+    assert _default_credit(cfg) == "Contains modified Copernicus Sentinel data 2025–2026"
+
+
+def test_geotiff_fit_scale_counts_the_mask_byte_ee_charges_for():
+    # Live failure (Baltic sea-ice AOI, one float32 band): the backstop coarsened
+    # 20 m to 30.4 m from a 4-bytes-per-sample estimate and Earth Engine still
+    # refused with "Total request size (63494800 bytes)": it charges float32 plus
+    # a one-byte mask per pixel, 5 bytes for one band. The fitted scale must keep
+    # the request under the cap by EE's own arithmetic, not by ours.
+    import math
+    import gee_animation.render as R
+    cfg = types.SimpleNamespace()
+    baltic = (12.9242, 53.8773, 14.6162, 54.8270)
+    out = R._geotiff_fit_scale(cfg, baltic, 1, 20.0)
+    minx, miny, maxx, maxy = baltic
+    w = (maxx - minx) * 111320.0 * math.cos(math.radians((miny + maxy) / 2))
+    h = (maxy - miny) * 111320.0
+    assert out > 30.4                                   # the old answer, refused live
+    # Second live refusal, at 34.0 m: EE counted 50,788,030 bytes where this estimate
+    # gives 50.2 M — its projected grid is ~1 % larger than the equirectangular
+    # bbox plus whole-pixel padding. The fit must leave a margin for that.
+    predicted = (w / out) * (h / out) * (1 * 4 + 1)
+    assert predicted * R._GEOTIFF_SIZE_MARGIN <= R.EE_SYNC_DOWNLOAD_MAX_BYTES + 1
+    assert R._GEOTIFF_SIZE_MARGIN >= 1.05

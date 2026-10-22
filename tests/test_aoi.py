@@ -94,6 +94,22 @@ def test_frame_bbox_from_region_buffers_and_bounds():
     assert bbox == [0.0, 0.0, 2.0, 3.0]
 
 
+def test_frame_bbox_from_region_with_zero_buffer_skips_the_buffer_call():
+    # animate(buffer_m=0) — "frame = the region itself" — must not reach Earth Engine
+    # as geom.buffer(0): EE refuses it ("Can't buffer with a 0 error margin").
+    from gee_animation.aoi import frame_bbox_from_region
+    rec = {}
+    class FakeBounds:
+        def coordinates(self):
+            return types.SimpleNamespace(
+                getInfo=lambda: [[[0.0, 0.0], [2.0, 0.0], [2.0, 3.0], [0.0, 3.0], [0.0, 0.0]]])
+    class FakeGeom:
+        def buffer(self, m): raise AssertionError("buffer(0) must not be called")
+        def bounds(self): rec["bounds"] = True; return FakeBounds()
+    assert frame_bbox_from_region(FakeGeom(), 0) == [0.0, 0.0, 2.0, 3.0]
+    assert rec["bounds"] is True
+
+
 def test_parse_requires_something():
     ee = _fake_ee()
     with pytest.raises(ValueError, match="aoi"):

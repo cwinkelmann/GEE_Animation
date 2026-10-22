@@ -8,9 +8,12 @@ _REFL_INDICES = frozenset({"sentinel2", "landsat", "modis"})
 
 def test_registry_contents():
     assert set(P.SENSORS) == {"sentinel2", "landsat", "modis", "modis_lst",
-                              "dynamicworld"}
+                              "dynamicworld", "sentinel1"}
     assert set(P.INDICES) == {"ndvi", "lst", "lst_smw", "evi", "ndwi", "ndmi", "ndre", "nbr",
-                              "rgb", "cir", "lst_sharp", "lst_modis", "landcover", "lst_rf"}
+                              "rgb", "cir", "lst_sharp", "lst_modis", "landcover", "lst_rf",
+                              "sar_vv", "sar_vh"}
+    assert P.INDICES["sar_vv"].sensors == frozenset({"sentinel1"})   # radar: its own sensor
+    assert P.SENSORS["sentinel1"].scene_cloud_property is None       # radar sees through cloud
     assert P.INDICES["lst_modis"].sensors == frozenset({"modis_lst"})   # MODIS-only LST
     assert P.SENSORS["modis_lst"].scene_cloud_property is None          # no per-scene cloud
     assert "lst_modis" in P.THERMAL_INDICES
@@ -39,6 +42,7 @@ def test_native_scale_m_per_product():
     assert P.native_scale_m("landsat", "nbr") == 30
     assert P.native_scale_m("modis", "ndvi") == 500
     assert P.native_scale_m("modis_lst", "lst_modis") == 1000   # MOD11A1 1 km thermal
+    assert P.native_scale_m("sentinel1", "sar_vv") == 10        # S1 GRD IW: 10 m pixels
 
 
 def test_get_product_ok():
@@ -613,3 +617,89 @@ def test_lst_rf_is_a_landsat_only_thermal_product_honest_at_20m():
     assert P.INDICES["lst_rf"].units == "°C"
     with pytest.raises(ValueError):
         P.get_product("sentinel2", "lst_rf")
+
+
+# --- Sentinel-1 radar -----------------------------------------------------------
+
+def test_sentinel1_collection_is_grd_in_iw_mode():
+    rec = {}
+    class FakeColl:
+        def __init__(self, cid): rec["id"] = cid
+        def filter(self, f): rec["filter"] = f; return self
+    ee = types.SimpleNamespace(ImageCollection=FakeColl,
+                               Filter=types.SimpleNamespace(eq=lambda k, v: ("eq", k, v)))
+    P.SENSORS["sentinel1"].collection(ee_module=ee)
+    assert rec["id"] == "COPERNICUS/S1_GRD"
+    assert rec["filter"] == ("eq", "instrumentMode", "IW")   # the land/coast mode; EW is polar
+
+
+def test_sar_indices_select_the_polarisation_band_in_db_and_keep_time():
+    for name, band in (("sar_vv", "VV"), ("sar_vh", "VH")):
+        rec = {}
+        class FakeBand:
+            def rename(self, n): rec["rename"] = n; return self
+            def set(self, k, v): rec["set"] = (k, v); return "sar_band"
+        class FakeImg:
+            def select(self, b): rec["select"] = b; return FakeBand()
+            def get(self, k): rec["get"] = k; return "TS"
+        out = P.INDICES[name].compute(P.SENSORS["sentinel1"], FakeImg(), ee_module=None)
+        assert rec["select"] == band                      # S1_GRD is already log-scaled (dB)
+        assert rec["rename"] == "INDEX" and rec["set"] == ("system:time_start", "TS")
+        assert out == "sar_band"
+        assert P.INDICES[name].units == "dB"
+
+
+def test_sar_build_collection_keeps_only_scenes_with_that_polarisation():
+    rec = {}
+    class FakeColl:
+        def __init__(self, cid): rec["id"] = cid
+        def filter(self, f): rec.setdefault("filters", []).append(f); return self
+        def filterDate(self, a, b): rec["dates"] = (a, b); return self
+        def filterBounds(self, g): rec["bounds"] = g; return self
+    ee = types.SimpleNamespace(
+        ImageCollection=FakeColl,
+        Filter=types.SimpleNamespace(eq=lambda k, v: ("eq", k, v),
+                                     listContains=lambda k, v: ("has", k, v)))
+    cfg = types.SimpleNamespace(start="2025-12-01", end="2026-05-01")
+    P.INDICES["sar_vh"].build_collection(cfg, "GEOM", ee)
+    assert rec["id"] == "COPERNICUS/S1_GRD"
+    assert rec["dates"] == ("2025-12-01", "2026-05-01") and rec["bounds"] == "GEOM"
+    assert ("eq", "instrumentMode", "IW") in rec["filters"]
+    assert ("has", "transmitterReceiverPolarisation", "VH") in rec["filters"]
+
+
+def test_sentinel1_has_no_clouds_to_mask():
+    img = object()
+    assert P.SENSORS["sentinel1"].mask_clouds(img, None) is img       # nothing to mask
+    rec = {}
+    class FakeConst:
+        def rename(self, n): rec["rename"] = n; return "zeros"
+    ee = types.SimpleNamespace(Image=types.SimpleNamespace(
+        constant=lambda v: (rec.__setitem__("const", v) or FakeConst())))
+    assert P.SENSORS["sentinel1"].cloud_band(img, ee) == "zeros"      # region_cloud_fraction = 0
+    assert rec["const"] == 0 and rec["rename"] == "cloud"
+    with pytest.raises(NotImplementedError):
+        P.SENSORS["sentinel1"].reflectance(img)
+
+
+def test_sar_is_sentinel1_only_and_sentinel1_is_sar_only():
+    assert P.get_product("sentinel1", "sar_vv")[1].name == "sar_vv"
+    with pytest.raises(ValueError, match="not available"):
+        P.get_product("sentinel2", "sar_vv")
+    with pytest.raises(ValueError, match="not available"):
+        P.get_product("sentinel1", "ndvi")
+    for name in ("sar_vv", "sar_vh"):
+        lo, hi, pal = P.INDICES[name].default_viz
+        assert lo < hi and pal and P.INDICES[name].low_label and P.INDICES[name].high_label
+
+
+def test_sar_palette_never_approaches_the_nodata_grey():
+    # Frames paint no-data as render.NODATA_RGB (a light neutral grey). A black-to-
+    # white ramp puts that grey at about -6 dB on sar_vv — inside the bright "ice /
+    # built-up" end — so a swath gap would read as ice. Every ramp stop must sit
+    # well away from that grey (and the legend's no-data swatch) in at least one channel.
+    from gee_animation.render import NODATA_RGB
+    for name in ("sar_vv", "sar_vh"):
+        for stop in P.INDICES[name].default_viz[2]:
+            rgb = tuple(int(stop.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+            assert max(abs(a - b) for a, b in zip(rgb, NODATA_RGB)) >= 48, (name, stop)

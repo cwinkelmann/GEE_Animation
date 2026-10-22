@@ -3,6 +3,27 @@
 Notable changes to `gee_animation`. Versions follow [semantic versioning](https://semver.org):
 the minor number moves when something is added, the patch number when something is fixed.
 
+## Unreleased
+
+### Added
+
+- Sentinel-1 radar as a sensor (`sentinel1`, GRD in IW mode) with two products,
+  `sar_vv` and `sar_vh` (backscatter in dB). Radar sees through cloud, so every
+  pass survives the cloud filters and the period median doubles as the speckle
+  filter. `config/sar_vv.example.yaml` renders the 2025/26 Baltic ice season.
+- `animate(cadence=...)`: `monthly` (default), `semimonthly`, `10day` or `quarterly`.
+- Notebook `09_sar_baltic_ice` now runs on `animate()` instead of a hand-rolled
+  Earth Engine pipeline, with the optical counterpart beside each radar frame.
+
+### Fixed
+
+- GeoTIFF export over a wide frame: the size backstop undercounted Earth Engine's
+  request size (it charges a mask byte per pixel on top of float32, on a grid
+  ~1 % larger than the estimate), so every period's export was refused; the
+  estimate now includes the mask byte and a 10 % margin.
+- `animate(buffer_m=0)` crashed in Earth Engine ("Can't buffer with a 0 error
+  margin"); a zero buffer now means the region's own bounds.
+
 ## 0.3.0 — 2026-10-16
 
 ### Added
