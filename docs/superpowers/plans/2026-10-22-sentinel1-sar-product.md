@@ -92,6 +92,11 @@ VH −35…−10. **Finding:** every GeoTIFF export was refused — the size bac
 (`_GEOTIFF_MASK_BYTES_PER_PIXEL`, test `test_geotiff_fit_scale_counts_the_mask_byte_ee_charges_for`). A second refusal by 0.9 % at the refitted 34 m (EE's projected grid is ~1 % larger than
 the estimate) added a 10 % margin (`_GEOTIFF_SIZE_MARGIN`). Third run: 15 GeoTIFFs at 35.6 m,
 UTM 33N, 29 MiB each, no gaps; p2/p50/p98 −23.3/−18.9/−6.9 dB (Dec), −20.7/−16.3/−9.3 (Feb).
+**Review Focus 1 closed:** the notebook run's metadata shows 224 passes over the 15 periods
+(12–23 each) against the inventory's 209 — more, because the frame is the AOI's bounding box
+while the inventory filters on the polygon — and `aoi_cloud_fraction` 0.0 on every frame.
+**Review fix:** the grey ramp was replaced by the windthrow videos' navy → teal → pale-yellow
+ramp, because the frame's no-data grey (240) would sit at −6 dB on black → white and read as ice.
 
 ### Task 5 — rebuild notebook 09 on the package
 

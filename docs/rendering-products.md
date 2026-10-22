@@ -237,4 +237,6 @@ or `semimonthly` suits a repeat cycle of 6 days better than `monthly` does.
 Incidence angles differ between ascending and descending passes, so a scene
 edge can show as a brightness step inside a median. Open water is dark
 (specular), rough ice, built-up areas and forest are bright; VH is roughly
-13 dB below VV and separates open water from ice more cleanly.
+13 dB below VV and separates open water from ice more cleanly. The ramp is the
+navy → teal → pale-yellow one of the windthrow radar videos rather than grey: the
+no-data grey of a swath gap would sit inside a grey ramp's bright end and read as ice.

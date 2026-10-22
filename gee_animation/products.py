@@ -695,12 +695,15 @@ INDICES["lst_modis"] = Index("lst_modis", frozenset({"modis_lst"}),
                              display_name="Land surface temperature (MODIS)",
                              low_label="cooler", high_label="warmer")
 
-# Radar backscatter in dB on a grey ramp (what radar viewers expect). Ranges were
-# measured on 10-day medians over the Baltic sea-ice AOI (open sea + lowland coast,
-# Dec 2025 – Apr 2026): VV p2 ≈ −22 (calm water) … p98 ≈ −7 (land, ice); VH runs
-# 13 dB lower, p2 ≈ −36 … p98 ≈ −14. The ranges leave the ramp ends ~3 dB beyond
-# those, so calm water is black, not clipped, and towns are white.
-_SAR_PALETTE = ["#000000", "#ffffff"]
+# Radar backscatter in dB. Ranges were measured on 10-day medians over the Baltic
+# sea-ice AOI (open sea + lowland coast, Dec 2025 – Apr 2026): VV p2 ≈ −22 (calm
+# water) … p98 ≈ −7 (land, ice); VH runs 13 dB lower at the dark end, p2 ≈ −36 …
+# p98 ≈ −14. The ranges leave ~3 dB beyond those so calm water is not clipped.
+# Not a grey ramp: frames paint no-data in a light neutral grey (render.NODATA_RGB),
+# which on black→white would sit at about −6 dB, inside the bright "ice" end, so a
+# swath gap would read as ice. This is the ramp of the delivered windthrow radar
+# videos (navy water → teal → pale yellow), whose every stop stays clear of that grey.
+_SAR_PALETTE = ["#0b0f2b", "#1e3a8a", "#2f7fb8", "#5ec2c0", "#b7e3a4", "#f1f1a1"]
 for _pol, _lo, _hi in (("VV", -25.0, -5.0), ("VH", -35.0, -10.0)):
     INDICES[f"sar_{_pol.lower()}"] = Index(
         f"sar_{_pol.lower()}", frozenset({"sentinel1"}), (_lo, _hi, _SAR_PALETTE),

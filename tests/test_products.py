@@ -691,3 +691,15 @@ def test_sar_is_sentinel1_only_and_sentinel1_is_sar_only():
     for name in ("sar_vv", "sar_vh"):
         lo, hi, pal = P.INDICES[name].default_viz
         assert lo < hi and pal and P.INDICES[name].low_label and P.INDICES[name].high_label
+
+
+def test_sar_palette_never_approaches_the_nodata_grey():
+    # Frames paint no-data as render.NODATA_RGB (a light neutral grey). A black-to-
+    # white ramp puts that grey at about -6 dB on sar_vv — inside the bright "ice /
+    # built-up" end — so a swath gap would read as ice. Every ramp stop must sit
+    # well away from that grey (and the legend's no-data swatch) in at least one channel.
+    from gee_animation.render import NODATA_RGB
+    for name in ("sar_vv", "sar_vh"):
+        for stop in P.INDICES[name].default_viz[2]:
+            rgb = tuple(int(stop.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+            assert max(abs(a - b) for a, b in zip(rgb, NODATA_RGB)) >= 48, (name, stop)
