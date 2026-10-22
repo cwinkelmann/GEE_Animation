@@ -89,7 +89,9 @@ VV −22.5 / −18.8 / −7.0 (Dec), −19.8 / −16.0 / −9.1 (Feb, ice), −2
 VH −36.1 / −32.7 / −13.6 (Dec), −35.1 / −30.3 / −14.9 (Feb). Defaults set to VV −25…−5,
 VH −35…−10. **Finding:** every GeoTIFF export was refused — the size backstop estimated
 4 bytes/sample and EE charges a fifth byte (mask) per pixel; fixed in `render.py`
-(`_GEOTIFF_MASK_BYTES_PER_PIXEL`, test `test_geotiff_fit_scale_counts_the_mask_byte_ee_charges_for`).
+(`_GEOTIFF_MASK_BYTES_PER_PIXEL`, test `test_geotiff_fit_scale_counts_the_mask_byte_ee_charges_for`). A second refusal by 0.9 % at the refitted 34 m (EE's projected grid is ~1 % larger than
+the estimate) added a 10 % margin (`_GEOTIFF_SIZE_MARGIN`). Third run: 15 GeoTIFFs at 35.6 m,
+UTM 33N, 29 MiB each, no gaps; p2/p50/p98 −23.3/−18.9/−6.9 dB (Dec), −20.7/−16.3/−9.3 (Feb).
 
 ### Task 5 — rebuild notebook 09 on the package
 
