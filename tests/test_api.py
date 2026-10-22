@@ -142,3 +142,19 @@ def test_animate_geotiffs_default_off_and_opt_in(tmp_path):
 def test_animate_has_no_implicit_project():
     import inspect
     assert inspect.signature(api.animate).parameters["project"].default is None
+
+
+def test_animate_cadence_defaults_to_monthly_and_passes_through(tmp_path):
+    """Radar has no cloud gaps, so a 10-day cadence is the natural ask; `cadence`
+    reaches the RunConfig unchanged and still defaults to monthly."""
+    captured = {}
+    api.animate([0, 0, 1, 1], sensor="sentinel2", index="ndvi",
+                start="2023-06-01", end="2023-07-01", out_dir=str(tmp_path),
+                deps=_fake_deps(tmp_path, captured))
+    assert captured["cfg"].cadence == "monthly"
+    captured = {}
+    api.animate([0, 0, 1, 1], sensor="sentinel1", index="sar_vv",
+                start="2025-12-01", end="2026-05-01", out_dir=str(tmp_path),
+                cadence="10day", deps=_fake_deps(tmp_path, captured))
+    assert captured["cfg"].cadence == "10day"
+    assert captured["cfg"].scale == 20      # GRD: 10 m pixels of ~20 m resolution
