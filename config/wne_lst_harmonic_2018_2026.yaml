@@ -10,7 +10,7 @@
 # Do NOT render this through scripts/render_chunked.py: each chunk would
 # fit its own curve, so the model would jump at every chunk boundary.
 name: wne_lst_harmonic_2018_2026
-project: hnee-331218
+project: ag-dataplatform
 title: Grumsin Beech Forest
 subtitle: Surface temperature, harmonic seasonal model
 aoi:

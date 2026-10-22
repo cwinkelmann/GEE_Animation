@@ -1,0 +1,36 @@
+# Grumsin control: NBR in the showcase look of wne_cinema_ndvi_2018_2026 --
+# the burn/disturbance ratio over the undamaged reference stand, for comparison
+# with the R12/R13 windthrow cuts (registry default viz, like r12_zoom_nbr_10yr).
+name: wne_cinema_nbr_2018_2026
+project: ag-dataplatform
+title: Grumsin Beech Forest
+subtitle: UNESCO World Heritage site, Brandenburg, Germany
+aoi:
+  frame: { bbox: [13.7311, 52.9440, 14.0623, 53.0280] }  # 22.2 x 9.35 km fills the 16:9 place box
+  region: { shapefile: docs/aoi/wne/wne.shp }
+  region_max_cloud_percent: 20
+start: "2018-01-01"
+end: "2026-08-01"
+sensor: sentinel2
+index: nbr
+cadence: monthly
+max_cloud_percent: 70
+draw_region: true
+
+pool_years: [2018, 2026]
+pool_strategy: gap_fill
+
+render:
+  fps: 2
+  interpolate: 10
+  interpolate_mode: auto
+  scale: 20                      # NBR uses the 20 m SWIR band
+  dimensions: 1440
+  crs: auto
+  preset: 1080p
+  aspect: "16:9"
+  upscale: lanczos
+  region_line_width: 5
+  quality: 8
+  raw_frames: true
+  geotiffs: true
