@@ -186,6 +186,11 @@ _GEOTIFF_BYTES_PER_SAMPLE = 4
 #: float32 request is sized at 5 bytes/pixel in its "Total request size" check
 #: (measured: 12.7 Mpx refused as 63,494,800 bytes).
 _GEOTIFF_MASK_BYTES_PER_PIXEL = 1
+#: Safety factor on the estimate: EE's request grid is the region's bbox in the
+#: export CRS, padded to whole pixels, which came out ~1 % larger than the
+#: equirectangular estimate on a 110 km frame (50,788,030 bytes against a
+#: 50,331,648 cap at 34 m). 10 % covers that with room for a wider frame.
+_GEOTIFF_SIZE_MARGIN = 1.1
 
 
 def _geotiff_source(image, bands):
@@ -219,7 +224,7 @@ def _geotiff_fit_scale(cfg, bounds, bands: int, scale: float) -> float:
     w_m = (maxx - minx) * 111320.0 * math.cos(mid)
     h_m = (maxy - miny) * 111320.0
     predicted = (w_m / scale) * (h_m / scale) * (bands * _GEOTIFF_BYTES_PER_SAMPLE
-                                                 + _GEOTIFF_MASK_BYTES_PER_PIXEL)
+                                                 + _GEOTIFF_MASK_BYTES_PER_PIXEL) * _GEOTIFF_SIZE_MARGIN
     if predicted <= EE_SYNC_DOWNLOAD_MAX_BYTES:
         return scale
     # Area scales with 1/scale^2, so the linear factor is the square root.

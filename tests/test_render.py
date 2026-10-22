@@ -3303,4 +3303,9 @@ def test_geotiff_fit_scale_counts_the_mask_byte_ee_charges_for():
     w = (maxx - minx) * 111320.0 * math.cos(math.radians((miny + maxy) / 2))
     h = (maxy - miny) * 111320.0
     assert out > 30.4                                   # the old answer, refused live
-    assert (w / out) * (h / out) * (1 * 4 + 1) <= R.EE_SYNC_DOWNLOAD_MAX_BYTES + 1
+    # Second live refusal, at 34.0 m: EE counted 50,788,030 bytes where this estimate
+    # gives 50.2 M — its projected grid is ~1 % larger than the equirectangular
+    # bbox plus whole-pixel padding. The fit must leave a margin for that.
+    predicted = (w / out) * (h / out) * (1 * 4 + 1)
+    assert predicted * R._GEOTIFF_SIZE_MARGIN <= R.EE_SYNC_DOWNLOAD_MAX_BYTES + 1
+    assert R._GEOTIFF_SIZE_MARGIN >= 1.05
