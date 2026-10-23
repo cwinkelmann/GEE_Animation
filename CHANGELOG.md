@@ -5,6 +5,15 @@ the minor number moves when something is added, the patch number when something 
 
 ## Unreleased
 
+### Added
+
+- Notebook `10_cli_multi_year`: the CLI path the showcase videos are made with — a
+  YAML config key by key, `--inventory` before rendering, a two-year cut rendered in
+  chunks with `scripts/render_chunked.py`, the metadata plot, and the ten-year recipe
+  (chunk length, cache economics, stalled-run handling) as commands.
+- Notebook 02 lists every registered product in a table, linked to the README and
+  `docs/rendering-products.md`, and prints the live registry.
+
 ### Changed
 
 - Notebook series reordered: the step-by-step pipeline walkthrough (formerly the
