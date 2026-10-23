@@ -164,7 +164,9 @@ Four different things, all reported in °C:
   (EE exports the two 20 m GeoTIFFs per frame; scikit-learn fits one forest per
   frame, out-of-bag scored, models saved under `<out_dir>/models/<name>/`).
   Validation against degraded real data showed no gain over the coarse field,
-  so the 20 m detail is a visualisation. Two knobs make the *within-frame*
+  so the 20 m detail is a visualisation — [`lst-sharpening-explained.md`](lst-sharpening-explained.md)
+  explains why the method can work at all, what the tests found, and how it
+  compares with Hutengs & Vohland (2016). Two knobs make the *within-frame*
   contrast usable: `region_only: true` masks everything outside `aoi.region`
   so the colour range is spent on the subject, and `relative: region_mean`
   renders each frame as value − its own region mean (K), with a symmetric
