@@ -362,7 +362,9 @@ costs: [`docs/rendering-products.md`](docs/rendering-products.md).
   20 m because NDBI and MNDWI need the 20 m SWIR band. A pre-registered degrade-and-recover
   test (300 m → 100 m) showed it does **not** beat "no sharpening" on measured data — the
   Landsat thermal field has almost no variance below ~300 m — so treat the 20 m detail as
-  index texture carrying the observed coarse temperature, and use only the within-frame
+  index texture carrying the observed coarse temperature
+  ([why it can work at all, and how it compares with Hutengs & Vohland 2016](docs/lst-sharpening-explained.md)),
+  and use only the within-frame
   contrast quantitatively (`region_only` + `relative: region_mean`). `sharpen: local`
   moves the training off Earth Engine; see the decision log in
   `docs/superpowers/plans/2026-09-17-lst-rf-sharpening.md`.
