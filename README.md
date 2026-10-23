@@ -40,6 +40,7 @@ inside) or locally, and ends with ways to make the workflow yours:
 | 07 | [Land cover from a random forest](notebooks/07_rf_classification.ipynb) | supervised classification, Dynamic World labels, confusion matrix |
 | 08 | [Segment the landscape](notebooks/08_unet_segmentation.ipynb) | a U-Net (`smp`) on downloaded tensors — context vs pixels |
 | 09 | [Radar through the winter](notebooks/09_sar_baltic_ice.ipynb) | Sentinel-1 SAR, Baltic sea ice 2025/26 — when optical goes blind |
+| 10 | [From config to multi-year video](notebooks/10_cli_multi_year.ipynb) | the CLI, a YAML config, gap-filling, interpolation, chunked ten-year renders |
 
 Extra: [single_view_from_geojson](notebooks/single_view_from_geojson.ipynb) (one month, one image + GeoTIFF).
 

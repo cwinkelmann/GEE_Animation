@@ -41,3 +41,5 @@ config/hemnet_snow/
 
 # AOI files that 01/02 download into the working directory when run locally
 notebooks/*.geojson
+notebooks/*.yaml
+notebooks/.ffmpeg_bin/
