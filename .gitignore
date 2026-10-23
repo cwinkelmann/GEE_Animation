@@ -38,3 +38,6 @@ config/hemnet_snow/
 
 # GDAL/QGIS statistics sidecars written next to notebook rasters
 *.aux.xml
+
+# AOI files that 01/02 download into the working directory when run locally
+notebooks/*.geojson
