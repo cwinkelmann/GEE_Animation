@@ -1,14 +1,19 @@
 // Create your plot
 // (you can also do it manually directly on the map)
-var geometry = ee.Geometry.Polygon(
-        [[[13.848353, 52.065431],
-        [13.884300,  52.067489],
-        [13.892349,  52.042273],
-        [13.882110,  52.029619],
-        [13.853082, 52.030024]]]);
+var PLOTS = {
+  forest: ee.Geometry.Polygon([[[13.848353, 52.065431], [13.884300, 52.067489],
+                                [13.892349, 52.042273], [13.882110, 52.029619],
+                                [13.853082, 52.030024]]]),   // course plot, 77 % tree cover
+  water:  ee.Geometry.Rectangle([13.871193, 52.010102, 13.889732, 52.024259]),   // 28 % water
+  city:   ee.Geometry.Rectangle([13.386093, 52.465775, 13.437419, 52.488881])    // Berlin, 42 % built-up
+};
+var PLOT = 'water';                 // <-- 'forest', 'water' or 'city'
+var EXAMPLE_DATE = '2025-09-07';    // scene shown in the mask layers (first scene on/after this date)
 
-// Apply negative buffer to geometry
-var geometryBuff = geometry.buffer(-20)
+var geometry = PLOTS[PLOT];
+var geometryBuff = geometry.buffer(-20);
+Map.centerObject(geometry, 14);
+
 
 // Add plot and buffer to the map
 // and specify fill color and layer name
@@ -39,6 +44,12 @@ function keepFieldPixel(image) {
   var mask = (veg.neq(1)).or(soil.neq(1));
   return image.updateMask(mask);
 }
+
+// Show that mask on the first scene (1 = pixel kept), over the scene itself.
+var first = ee.Image(S2.first());
+var firstMask = (first.select('SCL').eq(4).neq(1)).or(first.select('SCL').eq(5).neq(1));
+Map.addLayer(first, {bands: ['B4', 'B3', 'B2'], min: 0, max: 3000}, 'First scene, true colour');
+Map.addLayer(firstMask.selfMask().clip(geometry), {palette: ['red']}, 'First scene, SCL mask (1 = kept)', true, 0.6);
 
 // Apply custom filter to S2 collection
 var S2 = S2.map(keepFieldPixel);
