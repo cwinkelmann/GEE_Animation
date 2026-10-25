@@ -1,261 +1,119 @@
-// gee_timeseries_masks.js — second version of gee_timeseries.js.
+// gee_timeseries_masks.js — gee_timeseries.js with the masks made visible.
 //
-// Same plot, same collection, same NDVI chart — but every mask is put on the
-// map as its own layer, so you can SEE what is being thrown away and what is
-// not, instead of trusting a chart.
+// The first script's SCL filter keeps every pixel:
+//     var mask = (veg.neq(1)).or(soil.neq(1));   // "not veg OR not soil" is always true
+// so villages, water, clouds and shadows all end up in the NDVI chart.
+// The fix is `veg.or(soil)`. This script uses the fixed filter, shows each
+// mask as a map layer, and charts the first version against the fixed one.
 //
-// Why this version exists. The first version has a logic error in its SCL
-// filter:
-//
-//     var mask = (veg.neq(1)).or(soil.neq(1));     // first version
-//
-// "not vegetation" OR "not soil" is true for every pixel (no pixel is both),
-// so that mask keeps everything. Villages, water, clouds, shadows all survive
-// the "SCL filter" and only the coarse QA60 bits ever remove anything. The
-// fix is one line:
-//
-//     var mask = veg.or(soil);                      // this version
-//
-// Two more things the layers below make visible:
-//  * SCL has NO built-up class. Houses and roads are class 5 "not vegetated",
-//    the same class as bare soil. If you keep class 5 for the fields you keep
-//    the villages too. Masking them needs another source (here: ESA WorldCover
-//    class 50, built-up).
-//  * SCL flags clouds that are not there: bright dry fields, roofs, and the
-//    edges of real clouds. The "cloud frequency" layer counts how often each
-//    pixel is flagged across all scenes; pixels flagged in most scenes of a
-//    clear plot are false positives, not weather.
-//
-// Do not expect the charts to look different on THIS plot. It is 99.7 % field
-// with no water, so the corrected filter removes almost nothing from a plot
-// mean, and the 15 % scene filter already dropped the cloudy dates. Over two
-// years only one scene, 2025-09-07, has real cloud over the field: there the
-// first version's mean is 0.64 and the clean one 0.82. The opposite case is
-// 2026-03-13: SCL calls 45 % of the plot cloud, s2cloudless 0 %, and masking
-// those pixels changes the mean by 0.001, because they are the same bare
-// March soil as their neighbours. Look at both dates in the layers (set
-// `example` to them). On a plot that contains a village or a pond the lines
-// separate on every date.
+// Every layer name starts with the data it comes from:
+//   S2         = the Sentinel-2 scene itself (bands B2/B3/B4/B8, band SCL)
+//   s2cloudless = COPERNICUS/S2_CLOUD_PROBABILITY, one image per scene, 0–100 %
+//   WorldCover = ESA/WorldCover/v200, one static 10 m land-cover map (2021)
 
-// ---------------------------------------------------------------- 1. Plot
+// ---------------------------------------------------------------- 1. Choose a plot
 
-var geometry = ee.Geometry.Polygon(
-        [[[13.848353, 52.065431],
-        [13.884300,  52.067489],
-        [13.892349,  52.042273],
-        [13.882110,  52.029619],
-        [13.853082, 52.030024]]]);
+var PLOTS = {
+  forest: ee.Geometry.Polygon([[[13.848353, 52.065431], [13.884300, 52.067489],
+                                [13.892349, 52.042273], [13.882110, 52.029619],
+                                [13.853082, 52.030024]]]),   // course plot, 77 % tree cover
+  water:  ee.Geometry.Rectangle([13.871193, 52.010102, 13.889732, 52.024259]),   // 28 % water
+  city:   ee.Geometry.Rectangle([13.386093, 52.465775, 13.437419, 52.488881])    // Berlin, 42 % built-up
+};
+var PLOT = 'water';                 // <-- 'forest', 'water' or 'city'
+var EXAMPLE_DATE = '2025-09-07';    // scene shown in the mask layers (first scene on/after this date)
+
+var geometry = PLOTS[PLOT];
 var geometryBuff = geometry.buffer(-20);
-
 Map.centerObject(geometry, 14);
 
-// ---------------------------------------------------------------- 2. Collection
-
-var START = '2024-10-15';
-var END   = '2026-10-15';
-var CLOUD_PROB_MAX = 40;   // s2cloudless probability (%) above which a pixel is cloud
+// ---------------------------------------------------------------- 2. Load the scenes
 
 var S2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
   .filterMetadata('CLOUDY_PIXEL_PERCENTAGE', 'less_than', 15)
-  .filterDate(START, END)
+  .filterDate('2024-10-15', '2026-10-15')
   .filterBounds(geometryBuff);
 
-// Join the s2cloudless probability image onto every granule as band 'cloud_prob'.
-// SCL alone misses thin cloud, haze and cloud edges; s2cloudless catches those.
-// The join is inner: a granule without a probability image is dropped (one of
-// 56 scenes on this plot), which is what the gee_animation package does too.
-var prob = ee.ImageCollection('COPERNICUS/S2_CLOUD_PROBABILITY')
-  .filterDate(START, END)
-  .filterBounds(geometryBuff);
-S2 = ee.ImageCollection(ee.Join.saveFirst('cloud_prob_img').apply({
-  primary: S2,
-  secondary: prob,
-  condition: ee.Filter.equals({leftField: 'system:index', rightField: 'system:index'})
-})).map(function (img) {
-  return img.addBands(
-    ee.Image(img.get('cloud_prob_img')).select('probability').rename('cloud_prob'));
-});
+// Attach the s2cloudless probability of the same scene as band 'cloud_prob'.
+var s2cloudless = ee.ImageCollection('COPERNICUS/S2_CLOUD_PROBABILITY');
+S2 = ee.ImageCollection(ee.Join.saveFirst('probImage').apply(
+    S2, s2cloudless,
+    ee.Filter.equals({leftField: 'system:index', rightField: 'system:index'})))
+  .map(function (img) {
+    return img.addBands(ee.Image(img.get('probImage')).select('probability').rename('cloud_prob'));
+  });
 
-print('Scenes in collection:', S2.size());
-
-// ---------------------------------------------------------------- 3. Masks, as functions that RETURN the mask
-
-// SCL classes (Sen2Cor scene classification):
-//  1 saturated/defective  2 dark area  3 cloud shadow  4 vegetation
-//  5 not vegetated (bare soil AND built-up)  6 water  7 unclassified
-//  8 cloud medium prob.  9 cloud high prob.  10 thin cirrus  11 snow/ice
-
-function sclIn(image, classes) {
-  var scl = image.select('SCL');
-  return scl.remap(classes, classes.map(function () { return 1; }), 0).rename('mask');
-}
-
-// (a) the first version's filter, reproduced: always 1
-function maskBuggy(image) {
-  var scl = image.select('SCL');
-  return scl.eq(4).neq(1).or(scl.eq(5).neq(1)).rename('mask');
-}
-// (b) the intended filter: keep vegetation and bare soil
-function maskField(image)  { return sclIn(image, [4, 5]); }
-// (c) SCL cloud, shadow, cirrus, snow — what the gee_animation package removes
-function maskSclCloud(image) { return sclIn(image, [3, 8, 9, 10, 11]); }
-// (d) QA60 bits 10 (cloud) and 11 (cirrus)
-function maskQA60(image) {
-  var qa = image.select('QA60');
-  return qa.bitwiseAnd(1 << 10).neq(0).or(qa.bitwiseAnd(1 << 11).neq(0)).rename('mask');
-}
-// (e) s2cloudless above threshold
-function maskProb(image) { return image.select('cloud_prob').gt(CLOUD_PROB_MAX).rename('mask'); }
-
-// Built-up from ESA WorldCover 2021 (10 m, static). Class 50 = built-up.
+// One static land-cover map; class 50 = built-up.
 var worldcover = ee.ImageCollection('ESA/WorldCover/v200').first();
-var builtUp = worldcover.eq(50).rename('mask');
-var wcWater = worldcover.eq(80).rename('mask');
 
-// Final keep-mask used for the clean chart: field pixel, not SCL cloud,
-// not s2cloudless cloud, not built-up.
-function keepClean(image) {
-  var keep = maskField(image)
-    .and(maskSclCloud(image).not())
-    .and(maskProb(image).not())
-    .and(builtUp.not());
-  return image.updateMask(keep);
+print('Plot:', PLOT, '  scenes:', S2.size());
+
+// ---------------------------------------------------------------- 3. The masks (1 = pixel is in that class)
+
+// SCL classes: 3 cloud shadow · 4 vegetation · 5 not vegetated (bare soil AND
+// buildings — SCL has no built-up class) · 6 water · 8/9 cloud · 10 cirrus · 11 snow
+function sclIs(img, classes) {
+  return img.select('SCL').remap(classes, classes.map(function () { return 1; }), 0);
+}
+function mFieldBuggy(img) { return sclIs(img, [4]).neq(1).or(sclIs(img, [5]).neq(1)); } // first version
+function mField(img)      { return sclIs(img, [4, 5]); }                                  // fixed
+function mCloudSCL(img)   { return sclIs(img, [3, 8, 9, 10, 11]); }
+function mCloudProb(img)  { return img.select('cloud_prob').gt(40); }
+var mBuilt = worldcover.eq(50);
+
+// The mask the chart's third line uses: vegetation or soil, no cloud by either
+// source, no building.
+function mClean(img) {
+  return mField(img).and(mCloudSCL(img).not()).and(mCloudProb(img).not()).and(mBuilt.not());
 }
 
-// ---------------------------------------------------------------- 4. One example scene, every mask as a layer
+// ---------------------------------------------------------------- 4. Look at the masks on one scene
 
-// The scene with the most SCL cloud INSIDE the plot: that is where false flags
-// live. (CLOUDY_PIXEL_PERCENTAGE is for the whole 100 km tile and says nothing
-// about your field.) To look at a specific date instead:
-//   var example = ee.Image(S2.filterDate('2025-06-01', '2025-06-30').first());
-var withPlotCloud = S2.map(function (img) {
-  var frac = maskSclCloud(img).reduceRegion({
-    reducer: ee.Reducer.mean(), geometry: geometry, scale: 20}).get('mask');
-  return img.set('plot_cloud_frac', frac);
-});
-var example = ee.Image(withPlotCloud.sort('plot_cloud_frac', false).first());
-print('Example scene:', example.get('system:index'),
-      'SCL cloud fraction inside plot', example.get('plot_cloud_frac'),
-      'tile CLOUDY_PIXEL_PERCENTAGE', example.get('CLOUDY_PIXEL_PERCENTAGE'));
+// ONE scene. The RGB layer is this scene; every mask layer below it is cut
+// from the same scene (its SCL band, its s2cloudless image), so you can
+// judge each mask against what the scene actually shows.
+var example = ee.Image(S2.filterDate(EXAMPLE_DATE, '2026-12-31').first());
+print('Example scene:', example.get('system:index'));
 
-var rgbVis = {bands: ['B4', 'B3', 'B2'], min: 0, max: 3000};
-var sclVis = {min: 1, max: 11, palette: [
-  '#ff0004', '#868686', '#774b0a', '#10d22c', '#ffff52', '#0000ff',
-  '#818181', '#c0c0c0', '#f1f1f1', '#bac5eb', '#52fff9']};
-// SCL legend:  1 red saturated · 2 grey dark · 3 brown shadow · 4 green veg ·
-//              5 yellow not-veg · 6 blue water · 7 grey unclassified ·
-//              8 light-grey cloud med · 9 white cloud high · 10 pale-blue cirrus · 11 cyan snow
+Map.addLayer(example, {bands: ['B4', 'B3', 'B2'], min: 0, max: 3000},
+             'S2 · true colour of the example scene, unclipped');
 
-function show(mask, color, name, shown) {
-  Map.addLayer(mask.selfMask(), {palette: [color]}, name, shown);
+function show(mask, color, name, visible) {   // masks are drawn at 70 % so the RGB shows through
+  Map.addLayer(mask.selfMask().clip(geometry), {palette: [color]}, name, visible, 0.7);
 }
+show(sclIs(example, [5]),   '#e3c16f', 'S2 SCL · 5 not vegetated (soil + buildings)', true);
+show(sclIs(example, [6]),   '#0000ff', 'S2 SCL · 6 water',                            true);
+show(mCloudSCL(example),    '#ff7f00', 'S2 SCL · cloud, shadow, cirrus, snow',        true);
+show(mCloudProb(example),   '#b2182b', 's2cloudless · probability > 40 %',            true);
+show(mBuilt,                '#fa0000', 'WorldCover · built-up',                       true);
+show(mClean(example),       '#1b9e77', 'kept by the fixed mask',                      false);
 
-Map.addLayer(example, rgbVis, '0 · example scene, true colour');
-Map.addLayer(example.select('SCL'), sclVis, '1 · SCL all classes', false);
+// ---------------------------------------------------------------- 5. NDVI series: first version vs fixed
 
-show(sclIn(example, [4]),         '#10d22c', '2 · SCL 4 vegetation',           false);
-show(sclIn(example, [5]),         '#e3c16f', '2 · SCL 5 not vegetated (soil + built)', true);
-show(sclIn(example, [6]),         '#0000ff', '2 · SCL 6 water',                true);
-show(sclIn(example, [3]),         '#5e3c99', '2 · SCL 3 cloud shadow',         true);
-show(sclIn(example, [8, 9]),      '#ff7f00', '2 · SCL 8+9 cloud',              true);
-show(sclIn(example, [10]),        '#fdbf6f', '2 · SCL 10 thin cirrus',         true);
-show(sclIn(example, [11]),        '#52fff9', '2 · SCL 11 snow/ice',            false);
-show(sclIn(example, [1, 2, 7]),   '#999999', '2 · SCL 1/2/7 saturated, dark, unclassified', false);
-
-show(maskQA60(example),           '#e41a1c', '3 · QA60 cloud|cirrus bits',     false);
-Map.addLayer(example.select('cloud_prob'), {min: 0, max: 100, palette: ['#000000', '#ffffff']},
-             '3 · s2cloudless probability 0–100', false);
-show(maskProb(example),           '#b2182b', '3 · s2cloudless > ' + CLOUD_PROB_MAX + ' %', true);
-
-show(builtUp,                     '#fa0000', '4 · WorldCover built-up',        true);
-show(wcWater,                     '#0064c8', '4 · WorldCover water',           false);
-
-show(maskBuggy(example),          '#777777', '5 · first-version mask (keeps everything)', false);
-show(maskField(example),          '#4daf4a', '5 · field mask veg|soil (fixed)', false);
-show(maskField(example).and(maskSclCloud(example).not()).and(maskProb(example).not()).and(builtUp.not()),
-                                  '#1b9e77', '5 · final keep mask',             false);
-
-// ---------------------------------------------------------------- 5. Across the collection: how often is a pixel called cloud?
-
-// Mean of the SCL cloud flag over all scenes = fraction of scenes in which the
-// pixel was flagged. In a plot that passed a 15 % scene filter, a pixel flagged
-// in > 30 % of scenes is almost certainly a bright surface, not a cloud.
-var cloudFreq = S2.map(function (img) { return sclIn(img, [8, 9, 10]); }).mean();
-Map.addLayer(cloudFreq.clip(geometry), {min: 0, max: 0.5, palette: ['#ffffff', '#ff7f00', '#7f0000']},
-             '6 · SCL cloud frequency 0–50 % of scenes', false);
-var probFreq = S2.map(maskProb).mean();
-Map.addLayer(probFreq.clip(geometry), {min: 0, max: 0.5, palette: ['#ffffff', '#b2182b', '#67001f']},
-             '6 · s2cloudless cloud frequency 0–50 % of scenes', false);
-
-// ---------------------------------------------------------------- 6. NDVI charts: buggy vs fixed vs clean
-
-function addNDVI(image) {
-  return image.addBands(image.normalizedDifference(['B8', 'B4']));
-}
-
-var S2buggy = S2.map(function (img) { return img.updateMask(maskBuggy(img)); }).map(addNDVI);
-var S2field = S2.map(function (img) { return img.updateMask(maskField(img)); }).map(addNDVI);
-var S2clean = S2.map(keepClean).map(addNDVI);
-
-function ndviChart(coll, label, color) {
-  return ui.Chart.image.seriesByRegion(coll, geometryBuff, ee.Reducer.mean(), 'nd', 10)
-    .setChartType('LineChart')
-    .setSeriesNames([label])
-    .setOptions({
-      interpolateNulls: true, lineWidth: 1, pointSize: 3,
-      title: 'Mean NDVI in plot — ' + label,
-      hAxis: {title: 'Date'}, vAxis: {title: 'NDVI', minValue: 0, maxValue: 1},
-      series: {0: {color: color}}
-    });
-}
-
-print(ndviChart(S2buggy, 'first-version mask (nothing masked)', '#777777'));
-print(ndviChart(S2field, 'SCL veg|soil only', '#4daf4a'));
-print(ndviChart(S2clean, 'veg|soil, no cloud, no built-up', '#1b9e77'));
-
-// All three in one chart, plus the per-date difference buggy − clean. One
-// image per scene with one band per mask; ui.Chart.image.series draws each
-// band as a line. The difference is the plot mean of the masked NDVI minus
-// the plot mean of the unmasked one, so it shows exactly what the first
-// version got wrong on each date (one date on this plot).
-var perMask = S2.map(function (img) {
-  var nd = img.normalizedDifference(['B8', 'B4']);
-  var clean = maskField(img).and(maskSclCloud(img).not()).and(maskProb(img).not()).and(builtUp.not());
+// One image per scene with the plot-mean NDVI under each mask as a band;
+// ui.Chart.image.series draws one line per band.
+var ndviPerMask = S2.map(function (img) {
+  var ndvi = img.normalizedDifference(['B8', 'B4']);
   return ee.Image.cat(
-      nd.rename('buggy'),
-      nd.updateMask(maskField(img)).rename('field'),
-      nd.updateMask(clean).rename('clean'))
+      ndvi.updateMask(mFieldBuggy(img)).rename('buggy'),
+      ndvi.updateMask(mField(img)).rename('fixed'),
+      ndvi.updateMask(mClean(img)).rename('clean'))
     .copyProperties(img, ['system:time_start']);
 });
-print(ui.Chart.image.series(perMask, geometryBuff, ee.Reducer.mean(), 10)
+
+print(ui.Chart.image.series(ndviPerMask, geometryBuff, ee.Reducer.mean(), 10)
   .setChartType('LineChart')
+  .setSeriesNames(['first version (nothing masked)', 'SCL veg|soil, fixed', 'fixed + no cloud + no buildings'])
   .setOptions({
-    title: 'Mean NDVI in plot — the three masks together',
+    title: 'Mean NDVI in plot "' + PLOT + '"',
     interpolateNulls: true, lineWidth: 1, pointSize: 3,
     hAxis: {title: 'Date'}, vAxis: {title: 'NDVI', minValue: 0, maxValue: 1},
     series: {0: {color: '#777777'}, 1: {color: '#4daf4a'}, 2: {color: '#1b9e77'}}
   }));
 
-var diff = perMask.map(function (img) {
-  var m = img.reduceRegion({reducer: ee.Reducer.mean(), geometry: geometryBuff, scale: 10});
-  var c = m.get('clean');   // null when the clean mask leaves no pixel in the plot
-  var d = ee.Algorithms.If(ee.Algorithms.IsEqual(c, null), null,
-                           ee.Number(m.get('buggy')).subtract(ee.Number(c)));
-  return ee.Feature(null, {date: img.date().format('YYYY-MM-dd'), 'buggy - clean': d})
-    .set('system:time_start', img.get('system:time_start'));
-}).filter(ee.Filter.notNull(['buggy - clean']));
-print(ui.Chart.feature.byFeature(diff, 'system:time_start', ['buggy - clean'])
-  .setChartType('ColumnChart')
-  .setOptions({
-    title: 'Where the first version was wrong: plot-mean NDVI, buggy − clean',
-    hAxis: {title: 'Date'}, vAxis: {title: 'ΔNDVI'},
-    legend: {position: 'none'}, colors: ['#b2182b']
-  }));
-
-// ---------------------------------------------------------------- 7. Median NDVI of the clean collection
+// ---------------------------------------------------------------- 6. Median NDVI of the clean series
 
 var pal = ['#d73027', '#f46d43', '#fdae61', '#fee08b', '#d9ef8b', '#a6d96a'];
-Map.addLayer(S2clean.select('nd').median().clip(geometryBuff),
-             {min: 0.1, max: 0.9, palette: pal}, '7 · median NDVI, clean', true);
-Map.addLayer(geometry, {color: 'green'}, 'Border');
-Map.addLayer(geometryBuff, {color: 'red'}, 'Buffer', false);
+Map.addLayer(ndviPerMask.select('clean').median().clip(geometryBuff),
+             {min: 0.1, max: 0.9, palette: pal}, 'median NDVI, clean', false);
+Map.addLayer(geometry, {color: 'green'}, 'plot border');
