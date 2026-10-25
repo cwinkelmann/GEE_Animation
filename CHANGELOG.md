@@ -5,6 +5,12 @@ the minor number moves when something is added, the patch number when something 
 
 ## Unreleased
 
+### Added
+
+- `docs/lst-sharpening-explained.md`: why thermal sharpening can work at all (mixed-pixel
+  unmixing), what the repo's own degrade-and-recover tests found, what to trust in a
+  sharpened frame, and a step-by-step conformance check against Hutengs & Vohland (2016).
+
 ### Changed
 
 - Notebook series reordered: the step-by-step pipeline walkthrough (formerly the
