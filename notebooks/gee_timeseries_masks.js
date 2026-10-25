@@ -25,6 +25,17 @@
 //    edges of real clouds. The "cloud frequency" layer counts how often each
 //    pixel is flagged across all scenes; pixels flagged in most scenes of a
 //    clear plot are false positives, not weather.
+//
+// Do not expect the charts to look different on THIS plot. It is 99.7 % field
+// with no water, so the corrected filter removes almost nothing from a plot
+// mean, and the 15 % scene filter already dropped the cloudy dates. Over two
+// years only one scene, 2025-09-07, has real cloud over the field: there the
+// first version's mean is 0.64 and the clean one 0.82. The opposite case is
+// 2026-03-13: SCL calls 45 % of the plot cloud, s2cloudless 0 %, and masking
+// those pixels changes the mean by 0.001, because they are the same bare
+// March soil as their neighbours. Look at both dates in the layers (set
+// `example` to them). On a plot that contains a village or a pond the lines
+// separate on every date.
 
 // ---------------------------------------------------------------- 1. Plot
 
@@ -201,6 +212,45 @@ function ndviChart(coll, label, color) {
 print(ndviChart(S2buggy, 'first-version mask (nothing masked)', '#777777'));
 print(ndviChart(S2field, 'SCL veg|soil only', '#4daf4a'));
 print(ndviChart(S2clean, 'veg|soil, no cloud, no built-up', '#1b9e77'));
+
+// All three in one chart, plus the per-date difference buggy − clean. One
+// image per scene with one band per mask; ui.Chart.image.series draws each
+// band as a line. The difference is the plot mean of the masked NDVI minus
+// the plot mean of the unmasked one, so it shows exactly what the first
+// version got wrong on each date (one date on this plot).
+var perMask = S2.map(function (img) {
+  var nd = img.normalizedDifference(['B8', 'B4']);
+  var clean = maskField(img).and(maskSclCloud(img).not()).and(maskProb(img).not()).and(builtUp.not());
+  return ee.Image.cat(
+      nd.rename('buggy'),
+      nd.updateMask(maskField(img)).rename('field'),
+      nd.updateMask(clean).rename('clean'))
+    .copyProperties(img, ['system:time_start']);
+});
+print(ui.Chart.image.series(perMask, geometryBuff, ee.Reducer.mean(), 10)
+  .setChartType('LineChart')
+  .setOptions({
+    title: 'Mean NDVI in plot — the three masks together',
+    interpolateNulls: true, lineWidth: 1, pointSize: 3,
+    hAxis: {title: 'Date'}, vAxis: {title: 'NDVI', minValue: 0, maxValue: 1},
+    series: {0: {color: '#777777'}, 1: {color: '#4daf4a'}, 2: {color: '#1b9e77'}}
+  }));
+
+var diff = perMask.map(function (img) {
+  var m = img.reduceRegion({reducer: ee.Reducer.mean(), geometry: geometryBuff, scale: 10});
+  var c = m.get('clean');   // null when the clean mask leaves no pixel in the plot
+  var d = ee.Algorithms.If(ee.Algorithms.IsEqual(c, null), null,
+                           ee.Number(m.get('buggy')).subtract(ee.Number(c)));
+  return ee.Feature(null, {date: img.date().format('YYYY-MM-dd'), 'buggy - clean': d})
+    .set('system:time_start', img.get('system:time_start'));
+}).filter(ee.Filter.notNull(['buggy - clean']));
+print(ui.Chart.feature.byFeature(diff, 'system:time_start', ['buggy - clean'])
+  .setChartType('ColumnChart')
+  .setOptions({
+    title: 'Where the first version was wrong: plot-mean NDVI, buggy − clean',
+    hAxis: {title: 'Date'}, vAxis: {title: 'ΔNDVI'},
+    legend: {position: 'none'}, colors: ['#b2182b']
+  }));
 
 // ---------------------------------------------------------------- 7. Median NDVI of the clean collection
 
