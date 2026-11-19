@@ -271,6 +271,35 @@ def test_presets_build_the_matching_config(tmp_path, name):
     assert ("Grumsin" in name) == ("Grumsin" in cfg.title)
 
 
+def test_menabe_preset_builds_a_dynamic_world_config(tmp_path):
+    from gee_animation import presets
+    captured = {}
+    name = "Menabe (Madagascar) · land cover"
+    gui.run_animation(**presets.PRESETS[name], out_dir=str(tmp_path),
+                      deps=_fake_deps(tmp_path, captured))
+    cfg = captured["cfg"]
+    assert cfg.sensor == "dynamicworld" and cfg.index == "landcover"
+    assert cfg.cadence == "quarterly" and cfg.start == "2016-01-01"
+    assert cfg.interpolate == 0 and cfg.upscale == "nearest"   # categorical product
+    assert cfg.preset == "1080p" and "Menabe" in cfg.title
+    assert captured["buffer"] == 500.0
+    assert cfg.pool_years is None and cfg.sharpen is None
+
+
+def test_apply_preset_leaves_the_run_name_alone():
+    pytest.importorskip("gradio")
+    app = gui.build_app()
+    for block_fn in app.fns.values():
+        if getattr(block_fn.fn, "__name__", None) == "_apply_preset":
+            values = block_fn.fn("Menabe (Madagascar) · land cover")
+            assert len(values) == len(block_fn.outputs)
+            assert "value" not in values[-1]        # run_name: gr.update() with no value
+            assert values[2]["value"] == "dynamicworld"   # sensor did change
+            break
+    else:
+        pytest.fail("_apply_preset not wired")
+
+
 def test_apply_preset_returns_one_value_per_wired_input():
     pytest.importorskip("gradio")
     import tempfile
@@ -340,6 +369,44 @@ def test_default_out_dir_is_a_timestamped_folder_under_output_dir(tmp_path, monk
     out_dir = Path(captured["cfg"].out_dir)
     assert out_dir.parent == tmp_path / "runs"
     assert out_dir.name.startswith("sentinel2_ndvi_") and len(out_dir.name) == len("sentinel2_ndvi_20260101-120000")
+
+
+def test_run_name_leads_the_output_folder(tmp_path, monkeypatch):
+    # A student types a name; the folder starts with it, the media keeps the product
+    # name, and the status line tells them where to find it again.
+    monkeypatch.setattr(gui, "OUTPUT_DIR", str(tmp_path / "runs"))
+    captured = {}
+    *_, status, _series = gui.run_animation(
+        aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="sentinel2",
+        index="ndvi", start="2022-05-01", end="2022-07-01", run_name=" Anna Grumsin/ndvi! ",
+        deps=_fake_deps(tmp_path, captured))
+    out_dir = Path(captured["cfg"].out_dir)
+    assert out_dir.parent == tmp_path / "runs"
+    assert out_dir.name.startswith("Anna_Grumsin_ndvi_")
+    assert len(out_dir.name) == len("Anna_Grumsin_ndvi_20260101-120000")
+    assert captured["cfg"].name == "sentinel2_ndvi"          # media name unchanged
+    assert out_dir.name in status and "Load a previous animation" in status
+
+
+def test_explicit_out_dir_wins_over_run_name(tmp_path):
+    captured = {}
+    gui.run_animation(aoi_path=str(_write_geojson(tmp_path)), buffer_m=1000, sensor="sentinel2",
+                      index="ndvi", start="2022-05-01", end="2022-07-01",
+                      out_dir=str(tmp_path / "here"), run_name="anna",
+                      deps=_fake_deps(tmp_path, captured))
+    assert Path(captured["cfg"].out_dir) == tmp_path / "here"
+
+
+@pytest.mark.parametrize("raw, slug", [
+    (None, ""), ("", ""), ("   ", ""),
+    ("anna_grumsin", "anna_grumsin"),
+    (" Anna Grumsin/ndvi! ", "Anna_Grumsin_ndvi"),
+    ("../../etc", "etc"),
+    ("Müller & Söhne", "M_ller_S_hne"),
+    ("x" * 80, "x" * 60),
+])
+def test_run_slug(raw, slug):
+    assert gui.run_slug(raw) == slug
 
 
 def test_run_animation_requires_aoi(tmp_path):
@@ -661,6 +728,7 @@ def test_build_app_input_order_matches_handler_param_order():
         ("smooth", "Seasonal smoothing"), ("harmonics", "Harmonics"),
         ("anomaly_mode", "Anomaly mode"),
         ("baseline_start", "Baseline from year"), ("baseline_end", "Baseline to year"),
+        ("run_name", "Run name"),
     ]
     app = gui.build_app()
     checked = []
@@ -748,6 +816,16 @@ def test_list_previous_runs_does_not_grab_sibling_prefix(tmp_path):
     labels = [l for l, _ in gui.list_previous_runs(str(tmp_path))]
     assert any(l.startswith("wne_lst ") and "(1 frame)" in l for l in labels)
     assert any(l.startswith("wne_lst_smw ") and "(2 frames)" in l for l in labels)
+
+
+def test_list_previous_runs_newest_first(tmp_path):
+    import os
+    _make_run(tmp_path / "old_run", "a", ["2022-01"])
+    _make_run(tmp_path / "new_run", "a", ["2022-01"])
+    os.utime(tmp_path / "old_run" / "a.mp4", (1_600_000_000, 1_600_000_000))
+    os.utime(tmp_path / "new_run" / "a.mp4", (1_700_000_000, 1_700_000_000))
+    labels = [l for l, _ in gui.list_previous_runs(str(tmp_path))]
+    assert labels[0].startswith("new_run/") and labels[1].startswith("old_run/")
 
 
 def test_list_previous_runs_missing_base_returns_empty(tmp_path):

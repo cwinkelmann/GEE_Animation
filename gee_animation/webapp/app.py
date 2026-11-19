@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
+from .. import gui
 from . import caps, logsafe, oauth, project, storage
 from .jobs import JobQueue, UnknownJobError
 from .session import SessionStore
@@ -307,8 +308,11 @@ def create_app(cfg: AppConfig, oauth_client, spawn) -> FastAPI:
                     "Enter your own Google Cloud project id, the one you registered for "
                     "Earth Engine, in the project field (e.g. my-ee-project).")
             project.remember(app.state.sessions, sid, project_id)
-            run_dir = (storage.user_dir(cfg.output_root, session.email)
-                       / f"{_safe_part(params.get('sensor'))}_{_safe_part(params.get('index'))}_{stamp}")
+            # The typed run name leads the folder, as in the single-operator GUI, so
+            # the user's own list shows it; blank falls back to <sensor>_<index>.
+            lead = (gui.run_slug(params.get("run_name"))
+                    or f"{_safe_part(params.get('sensor'))}_{_safe_part(params.get('index'))}")
+            run_dir = storage.user_dir(cfg.output_root, session.email) / f"{lead}_{stamp}"
             params["out_dir"] = str(run_dir)
             # The render runs in another process, later, possibly after Gradio has
             # cleaned its upload cache: hand it a copy that lives with the run (and is

@@ -5,8 +5,10 @@ so applying one is the same as filling the form by hand, and the config it build
 is the one the corresponding YAML in the experiment branch describes (the Tegel
 cuts: ``r12_zoom_lst_pretty_10yr``, ``_grid``, ``r12_zoom_lst_rf_local_10yr`` and
 the R13 equivalents; Grumsin runs the same three editions over the
-Weltnaturerbe footprint). The footprints ship as package data under ``presets/aoi``
-so the presets also work inside the container, where ``docs/`` is absent.
+Weltnaturerbe footprint), plus stand-alone demos such as the Dynamic World land
+cover of Menabe Antimena. The footprints ship as package data under
+``presets_aoi/`` so the presets also work inside the container, where ``docs/``
+is absent.
 """
 from __future__ import annotations
 
@@ -48,10 +50,34 @@ _EDITIONS = {
                          upscale="lanczos", pixel_grid=False, geotiffs=True),
 }
 
+# Stand-alone demo presets: complete on their own, not a site × edition product.
+_DEMOS = {
+    # Dynamic World land cover over the Menabe Antimena dry forest (west Madagascar),
+    # where slash-and-burn clearing for maize and peanuts has eaten into the Kirindy
+    # forest since the mid-2010s: in this frame the "trees" class drops from 67 % of
+    # the area in 2016 to 54 % in 2024 (Dynamic World mode label, May–Oct). Quarterly
+    # cadence keeps the argmax stable; interpolate 0 and nearest upscaling are what
+    # a categorical product requires (see config/wne_landcover.example.yaml).
+    "Menabe (Madagascar) · land cover": dict(
+        aoi_path=str(_AOI_DIR / "menabe_footprint.geojson"), buffer_m=500,
+        title="Menabe Antimena, Madagascar",
+        subtitle="Kirindy dry forest and its clearing front · 2016–2025",
+        sensor="dynamicworld", index="landcover", start="2016-01-01", end="2026-01-01",
+        cadence="quarterly", region_max_cloud_percent=40, max_cloud_percent=100,
+        fps=2, dimensions=1440, preset="1080p", aspect="match", quality="8",
+        write_gif=False, interpolate=0, interpolate_mode="auto", min_scenes=1,
+        raw_frames=False, upscale="nearest", pixel_grid=False, geotiffs=False,
+        crs_choice="auto (UTM zone of the AOI — square pixels)",
+    ),
+}
+
 PRESETS: dict[str, dict] = {
-    f"{site} · {edition}": {**_SITE_COMMON, **site_values, **edition_values}
-    for site, site_values in _SITES.items()
-    for edition, edition_values in _EDITIONS.items()
+    **{
+        f"{site} · {edition}": {**_SITE_COMMON, **site_values, **edition_values}
+        for site, site_values in _SITES.items()
+        for edition, edition_values in _EDITIONS.items()
+    },
+    **_DEMOS,
 }
 
 NO_PRESET = "— none —"

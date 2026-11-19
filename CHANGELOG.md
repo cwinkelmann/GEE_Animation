@@ -7,6 +7,13 @@ the minor number moves when something is added, the patch number when something 
 
 ### Added
 
+- GUI: a **Run name** field. It leads the output folder (`<name>_<date>`), so a
+  student finds their own render under "Load a previous animation", whose list is
+  now newest-first; the status line names the folder. Applying a preset leaves the
+  name as typed. The multi-user server uses the same name for its per-user folders.
+- GUI preset **Menabe (Madagascar) · land cover**: Dynamic World over the Menabe
+  Antimena dry forest, 2016–2025 quarterly, for a land cover demo (tree class 67 % →
+  54 % of the frame between 2016 and 2024).
 - Notebook `10_cli_multi_year`: the CLI path the showcase videos are made with — a
   YAML config key by key, `--inventory` before rendering, a two-year cut rendered in
   chunks with `scripts/render_chunked.py`, the metadata plot, and the ten-year recipe

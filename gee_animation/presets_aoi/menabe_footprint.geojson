@@ -1,0 +1,46 @@
+{
+ "type": "FeatureCollection",
+ "name": "menabe",
+ "crs": {
+  "type": "name",
+  "properties": {
+   "name": "urn:ogc:def:crs:OGC:1.3:CRS84"
+  }
+ },
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "NAME": "Menabe Antimena (Kirindy forest and its clearing front)",
+    "SOURCE": "hand-drawn rectangle, 26 x 14 km, 16:9-ish"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       44.55,
+       -20.12
+      ],
+      [
+       44.8,
+       -20.12
+      ],
+      [
+       44.8,
+       -19.99
+      ],
+      [
+       44.55,
+       -19.99
+      ],
+      [
+       44.55,
+       -20.12
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}
