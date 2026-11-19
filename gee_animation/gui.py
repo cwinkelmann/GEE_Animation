@@ -216,6 +216,15 @@ def _run_frames(run_dir: Path, name: str) -> list:
     return sorted(frames)
 
 
+def _run_label(out_dir) -> str:
+    """The run folder as the loader shows it: relative to OUTPUT_DIR when inside it."""
+    p = Path(out_dir)
+    try:
+        return str(p.resolve().relative_to(Path(OUTPUT_DIR).resolve()))
+    except ValueError:
+        return str(p)
+
+
 def list_previous_runs(base_dir=None) -> list:
     """``[(label, media_path)]`` for every rendered animation found under `base_dir`.
 
@@ -234,7 +243,9 @@ def list_previous_runs(base_dir=None) -> list:
     for p in base.rglob("*.mp4"):
         media[(p.parent, p.stem)] = p
     runs = []
-    for (d, name), m in sorted(media.items(), key=lambda kv: str(kv[1])):
+    # Newest first: the run a student just made is the one they are looking for.
+    for (d, name), m in sorted(media.items(), key=lambda kv: kv[1].stat().st_mtime,
+                               reverse=True):
         n = len(_run_frames(d, name))
         rel = (d / name).relative_to(base)
         runs.append((f"{rel}  ({n} frame{'' if n == 1 else 's'})", str(m)))
@@ -364,6 +375,22 @@ def _series_frame(series):
     return pd.DataFrame(rows, columns=["period", "value", "area"])
 
 
+_SLUG_BAD = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def run_slug(text, max_len: int = 60) -> str:
+    """A typed run name as a safe folder-name part, or ``""`` when blank.
+
+    Anything outside ``A-Z a-z 0-9 . _ -`` (spaces, umlauts, slashes, ``..``
+    tricks) collapses to one ``_``; leading/trailing separators go; the result
+    is capped so a pasted sentence does not become the folder name.
+    """
+    if text is None:
+        return ""
+    slug = _SLUG_BAD.sub("_", str(text)).strip("._-")
+    return slug[:max_len].rstrip("._-")
+
+
 def _blank(value) -> bool:
     """True for a Gradio input left empty.
 
@@ -491,7 +518,7 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
              write_metadata=False, sharpen_local=False, region_only=False,
              relative=NONE_CHOICE, pixel_grid=False, upscale=DEFAULT_UPSCALE,
              smooth=NONE_CHOICE, harmonics=2, anomaly_mode=NONE_CHOICE,
-             baseline_start_year=None, baseline_end_year=None, deps):
+             baseline_start_year=None, baseline_end_year=None, run_name=None, deps):
     """Authenticate, resolve the AOIs and build a validated RunConfig.
 
     Returns ``(cfg, frame_geom, region_geom, warnings)``. Shared by
@@ -515,8 +542,12 @@ def _prepare(*, aoi_path, buffer_m, sensor, index, start, end,
     palette = palette or []      # composites (rgb/cir) carry no palette
     # Default to a timestamped folder under OUTPUT_DIR (the mounted volume in the
     # container) so a GUI run survives the process and shows up in "Load a previous
-    # animation"; a temp dir, the old default, vanished with the container.
-    out_dir = out_dir or str(Path(OUTPUT_DIR) / f"{sensor}_{index}_{time.strftime('%Y%m%d-%H%M%S')}")
+    # animation"; a temp dir, the old default, vanished with the container. A run
+    # name typed in the form leads the folder name, so a student finds their own
+    # run in that list; the media inside is still named <sensor>_<index>.
+    if not out_dir:
+        slug = run_slug(run_name) or f"{sensor}_{index}"
+        out_dir = str(Path(OUTPUT_DIR) / f"{slug}_{time.strftime('%Y%m%d-%H%M%S')}")
 
     deps.init(project)
     region_geom = deps.parse(region_aoi)
@@ -608,7 +639,8 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
                   write_metadata=False, sharpen_local=False, region_only=False,
                   relative=NONE_CHOICE, pixel_grid=False, upscale=DEFAULT_UPSCALE,
                   smooth=NONE_CHOICE, harmonics=2, anomaly_mode=NONE_CHOICE,
-                  baseline_start_year=None, baseline_end_year=None, deps=DEFAULT_DEPS):
+                  baseline_start_year=None, baseline_end_year=None, run_name=None,
+                  deps=DEFAULT_DEPS):
     """Write the per-scene usable/rejected inventory CSV. Returns ``(csv_path, status)``.
 
     Mirrors ``cli.run(..., inventory=True)``, including its refusal to combine the
@@ -642,7 +674,7 @@ def run_inventory(*, aoi_path, buffer_m, sensor, index, start, end,
         region_only=region_only, relative=relative, pixel_grid=pixel_grid,
         upscale=upscale, smooth=smooth, harmonics=harmonics, anomaly_mode=anomaly_mode,
         baseline_start_year=baseline_start_year, baseline_end_year=baseline_end_year,
-        deps=deps)
+        run_name=run_name, deps=deps)
     path = deps.inventory(cfg, frame_geom, region_geom)
     status = (f"Wrote the scene inventory for {sensor} {index.upper()} "
               f"({cfg.start} → {cfg.end}, {cfg.cadence}) — one row per candidate scene "
@@ -669,7 +701,8 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
                   write_metadata=False, sharpen_local=False, region_only=False,
                   relative=NONE_CHOICE, pixel_grid=False, upscale=DEFAULT_UPSCALE,
                   smooth=NONE_CHOICE, harmonics=2, anomaly_mode=NONE_CHOICE,
-                  baseline_start_year=None, baseline_end_year=None, deps=DEFAULT_DEPS):
+                  baseline_start_year=None, baseline_end_year=None, run_name=None,
+                  deps=DEFAULT_DEPS):
     """Build one animation from GUI inputs.
 
     Returns ``(mp4_path, gif_path, frame_pngs, frames_zip, status, series)`` where
@@ -698,7 +731,7 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
         region_only=region_only, relative=relative, pixel_grid=pixel_grid,
         upscale=upscale, smooth=smooth, harmonics=harmonics, anomaly_mode=anomaly_mode,
         baseline_start_year=baseline_start_year, baseline_end_year=baseline_end_year,
-        deps=deps)
+        run_name=run_name, deps=deps)
     out_dir = cfg.out_dir
 
     coll = deps.build(cfg, frame_geom, region_geom)
@@ -755,6 +788,7 @@ def run_animation(*, aoi_path, buffer_m, sensor, index, start, end,
                    f"their out-of-bag scores are under {out_dir}/models/{cfg.name}/ and "
                    f"{cfg.name}_models.csv. The inside/outside chart is skipped for "
                    "locally sharpened frames.")
+    status += f"\n\n📂 Saved as **{_run_label(out_dir)}** — reload it any time under *Load a previous animation*."
     return mp4, gif, frame_pngs, frames_zip, _with_warnings(status, warnings), series
 
 
@@ -822,6 +856,12 @@ def build_app(context=None):
                     label="AOI — GeoJSON or zipped shapefile",
                     file_types=[".geojson", ".json", ".zip"], type="filepath",
                     value=DEFAULT_AOI)
+                run_name = gr.Textbox(
+                    label="Run name — so you can find this run again",
+                    placeholder="e.g. anna_grumsin_ndvi (letters, digits, . _ -)",
+                    info="Leads the output folder name; the run then appears under "
+                         "\"Load a previous animation\" as <name>_<date>. Blank = "
+                         "<sensor>_<index>_<date>.")
                 buffer_m = gr.Number(label="Frame buffer around AOI (metres)", value=1000)
                 sensor = gr.Dropdown(sensors, value=default_sensor, label="Sensor")
                 index = gr.Dropdown(indices_for(default_sensor), value=default_index, label="Index")
@@ -1084,7 +1124,8 @@ def build_app(context=None):
                   min_scenes, raw_frames, geotiffs, write_metadata, fit_frame,
                   viz_min, viz_max, missions,
                   sharpen_local, region_only, relative, pixel_grid, upscale,
-                  smooth, harmonics, anomaly_mode, baseline_start, baseline_end]
+                  smooth, harmonics, anomaly_mode, baseline_start, baseline_end,
+                  run_name]
         outputs = [video, gif, gallery, frames_zip, inventory_csv, status, chart]
 
         # Presets: one value per wired input, in `inputs` order. PRESET_PARAMS names
@@ -1109,6 +1150,7 @@ def build_app(context=None):
             ("pixel_grid", False), ("upscale", DEFAULT_UPSCALE), ("smooth", NONE_CHOICE),
             ("harmonics", 2), ("anomaly_mode", NONE_CHOICE),
             ("baseline_start_year", None), ("baseline_end_year", None),
+            ("run_name", ""),
         ]
         assert len(PRESET_PARAMS) == len(inputs)
 
@@ -1122,7 +1164,10 @@ def build_app(context=None):
             out = []
             for (param, default), component in zip(PRESET_PARAMS, inputs):
                 value = values.get(param, default)
-                if component is index and name in presets.PRESETS:
+                if component is run_name:
+                    # The name is the student's, not the preset's: keep what they typed.
+                    out.append(gr.update())
+                elif component is index and name in presets.PRESETS:
                     # the index dropdown's choices follow the sensor; refresh them too
                     out.append(gr.update(choices=indices_for(values.get("sensor", default_sensor)),
                                          value=value))
@@ -1143,7 +1188,7 @@ def build_app(context=None):
                 viz_min, viz_max, missions,
                 sharpen_local, region_only, relative, pixel_grid, upscale,
                 smooth, harmonics, anomaly_mode, baseline_start, baseline_end,
-                progress=gr.Progress(), request: gr.Request = None):
+                run_name, progress=gr.Progress(), request: gr.Request = None):
             try:
                 params = dict(
                     aoi_path=aoi_file, buffer_m=buffer_m, sensor=sensor, index=index,
@@ -1163,7 +1208,8 @@ def build_app(context=None):
                     sharpen_local=sharpen_local, region_only=region_only,
                     relative=relative, pixel_grid=pixel_grid, upscale=upscale,
                     smooth=smooth, harmonics=harmonics, anomaly_mode=anomaly_mode,
-                    baseline_start_year=baseline_start, baseline_end_year=baseline_end)
+                    baseline_start_year=baseline_start, baseline_end_year=baseline_end,
+                    run_name=run_name)
                 if context is not None:
                     # Server mode: never render in the web process (it holds no user's
                     # EE credentials). Caps, queue and per-user out_dir live behind submit.
@@ -1252,7 +1298,7 @@ def build_app(context=None):
                        viz_min, viz_max, missions,
                        sharpen_local, region_only, relative, pixel_grid, upscale,
                        smooth, harmonics, anomaly_mode, baseline_start, baseline_end,
-                       progress=gr.Progress()):
+                       run_name, progress=gr.Progress()):
             try:
                 progress(0.05, desc="Listing candidate scenes…")
                 csv_path, msg = run_inventory(
@@ -1273,7 +1319,8 @@ def build_app(context=None):
                     sharpen_local=sharpen_local, region_only=region_only,
                     relative=relative, pixel_grid=pixel_grid, upscale=upscale,
                     smooth=smooth, harmonics=harmonics, anomaly_mode=anomaly_mode,
-                    baseline_start_year=baseline_start, baseline_end_year=baseline_end)
+                    baseline_start_year=baseline_start, baseline_end_year=baseline_end,
+                    run_name=run_name)
                 progress(1.0, desc="Done")
                 return None, None, None, None, csv_path, msg, None
             except Exception as exc:   # surface a friendly message in the UI
